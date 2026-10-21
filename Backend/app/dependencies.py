@@ -48,7 +48,7 @@ def get_current_user(
 
 
 def get_current_admin(current_user: models.User = Depends(get_current_user)) -> models.User:
-    if not cast(bool, current_user.is_admin) or not is_master_admin_email(current_user.email):
+    if not cast(bool, current_user.is_admin):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
     return current_user
 

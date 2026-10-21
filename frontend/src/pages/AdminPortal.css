@@ -214,7 +214,6 @@
 }
 
 .admin-empty,
-.admin-error,
 .admin-loading {
   color: #9ca8bd;
   font-size: 14px;
@@ -222,6 +221,22 @@
 
 .admin-error {
   color: #ff7189;
+  font-size: 14px;
+  padding: 10px 14px;
+  background: rgba(255, 77, 109, 0.1);
+  border: 1px solid rgba(255, 77, 109, 0.25);
+  border-radius: 10px;
+  margin-bottom: 16px;
+}
+
+.admin-success {
+  color: #34d399;
+  font-size: 14px;
+  padding: 10px 14px;
+  background: rgba(52, 211, 153, 0.1);
+  border: 1px solid rgba(52, 211, 153, 0.25);
+  border-radius: 10px;
+  margin-bottom: 16px;
 }
 
 .admin-denied {

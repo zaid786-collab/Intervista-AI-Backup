@@ -8,6 +8,7 @@ function AdminPortal() {
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(() => Boolean(user?.is_admin));
   const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
   const [busyUserId, setBusyUserId] = useState(null);
   const [selectedUser, setSelectedUser] = useState(null);
   const [detailsLoading, setDetailsLoading] = useState(false);
@@ -35,11 +36,29 @@ function AdminPortal() {
   }, [isAdmin]);
 
   const runAction = async (userId, updates) => {
+    if (busyUserId) return;
     setBusyUserId(userId);
     setError("");
+    setSuccess("");
     try {
       const updated = await adminUpdateUser(userId, updates);
       setUsers((current) => current.map((item) => (item.id === userId ? updated : item)));
+      if (selectedUser?.id === userId) {
+        setSelectedUser((current) => (current ? { ...current, ...updated } : current));
+      }
+      if (updates.is_admin !== undefined) {
+        setSuccess(
+          updates.is_admin
+            ? `Successfully promoted ${updated.name || "user"} to administrator.`
+            : `Successfully revoked admin privileges from ${updated.name || "user"}.`
+        );
+      } else if (updates.is_active !== undefined) {
+        setSuccess(
+          updates.is_active
+            ? `Successfully enabled ${updated.name || "user"}'s account.`
+            : `Successfully disabled ${updated.name || "user"}'s account.`
+        );
+      }
     } catch (err) {
       setError(err.message || "Could not update that user.");
     } finally {
@@ -48,12 +67,18 @@ function AdminPortal() {
   };
 
   const handleDelete = async (userId) => {
+    if (busyUserId) return;
     if (!window.confirm("Delete this user permanently?")) return;
     setBusyUserId(userId);
     setError("");
+    setSuccess("");
     try {
       await adminDeleteUser(userId);
       setUsers((current) => current.filter((item) => item.id !== userId));
+      if (selectedUser?.id === userId) {
+        setSelectedUser(null);
+      }
+      setSuccess("User deleted successfully.");
     } catch (err) {
       setError(err.message || "Could not delete that user.");
     } finally {
@@ -127,7 +152,8 @@ function AdminPortal() {
           <h2>All Users</h2>
 
           {loading && <p className="admin-loading">Loading users...</p>}
-          {error && <p className="admin-error">{error}</p>}
+          {error && <p className="admin-error" role="alert">{error}</p>}
+          {success && <p className="admin-success" role="status">{success}</p>}
 
           {!loading && !error && users.length === 0 && (
             <p className="admin-empty">No users yet.</p>
@@ -150,6 +176,7 @@ function AdminPortal() {
                 {users.map((item) => {
                   const isSelf = item.id === user?.id;
                   const isBusy = busyUserId === item.id;
+                  const isAnyBusy = Boolean(busyUserId);
 
                   return (
                     <tr key={item.id}>
@@ -181,7 +208,7 @@ function AdminPortal() {
                           <button
                             type="button"
                             className="admin-action-btn"
-                            disabled={isBusy}
+                            disabled={isAnyBusy}
                             onClick={() => showUserDetails(item.id)}
                           >
                             View details
@@ -189,26 +216,29 @@ function AdminPortal() {
                           <button
                             type="button"
                             className="admin-action-btn"
-                            disabled={isBusy || isSelf}
+                            disabled={isAnyBusy || isSelf}
                             onClick={() => runAction(item.id, { is_admin: !item.is_admin })}
+                            title={isSelf ? "You cannot modify your own administrator role" : undefined}
                           >
-                            {item.is_admin ? "Revoke admin" : "Make admin"}
+                            {isBusy ? "Updating..." : item.is_admin ? "Revoke admin" : "Make admin"}
                           </button>
 
                           <button
                             type="button"
                             className="admin-action-btn"
-                            disabled={isBusy || isSelf}
+                            disabled={isAnyBusy || isSelf}
                             onClick={() => runAction(item.id, { is_active: !item.is_active })}
+                            title={isSelf ? "You cannot modify your own account status" : undefined}
                           >
-                            {item.is_active ? "Disable" : "Enable"}
+                            {isBusy ? "Updating..." : item.is_active ? "Disable" : "Enable"}
                           </button>
 
                           <button
                             type="button"
                             className="admin-action-btn danger"
-                            disabled={isBusy || isSelf}
+                            disabled={isAnyBusy || isSelf}
                             onClick={() => handleDelete(item.id)}
+                            title={isSelf ? "You cannot delete your own account" : undefined}
                           >
                             Delete
                           </button>
@@ -250,6 +280,8 @@ function AdminPortal() {
                   <div><span>Resources solved</span><strong>{selectedUser.solved_resources}</strong></div>
                   <div><span>Challenges solved</span><strong>{selectedUser.solved_challenges}</strong></div>
                   <div><span>Unread alerts</span><strong>{selectedUser.unread_notifications}</strong></div>
+                  <div><span>Last active</span><strong>{formatDate(selectedUser.last_active_at)}</strong></div>
+                  <div><span>Last login</span><strong>{formatDate(selectedUser.last_login_at)}</strong></div>
                 </div>
 
                 <div className="admin-detail-copy">

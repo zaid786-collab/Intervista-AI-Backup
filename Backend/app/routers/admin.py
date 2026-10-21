@@ -74,16 +74,14 @@ def update_user(
     db: Session = Depends(get_db),
     admin: models.User = Depends(get_current_admin),
 ):
-    """Admin-only: enable/disable an account, or set a user's progress percentage.
-    Admin promotion/demotion is strictly disallowed: only zaidkhan24082006@gmail.com can hold admin rights.
-    """
+    """Admin-only: promote/demote administrators, enable/disable accounts, or update progress."""
     user = db.query(models.User).filter(models.User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
     is_target_master = is_master_admin_email(user.email)
 
-    # Master admin cannot be demoted or disabled
+    # 1. Master administrator account protections
     if is_target_master:
         if payload.is_admin is False:
             raise HTTPException(
@@ -96,22 +94,66 @@ def update_user(
                 detail="The master administrator account cannot be disabled.",
             )
 
-    # Prevent granting admin privileges to any other user
-    if payload.is_admin is True and not is_target_master:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Admin privileges cannot be granted to this account. Only the master admin is permitted.",
-        )
+    # 2. Prevent self-promotion, self-demotion, and self-disabling
+    if user.id == admin.id:
+        if payload.is_admin is not None and payload.is_admin != user.is_admin:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="You cannot modify your own administrator privileges.",
+            )
+        if payload.is_active is False:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="You cannot disable your own account.",
+            )
 
+    # 3. Handle redundant/already-in-state requests gracefully
+    if payload.is_admin is not None:
+        if payload.is_admin is True and user.is_admin is True:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="This user is already an administrator.",
+            )
+        if payload.is_admin is False and not user.is_admin:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="This user is not an administrator.",
+            )
+
+    # 4. Prevent demoting or disabling the last remaining active administrator
+    if payload.is_admin is False and user.is_admin:
+        other_active_admins = db.query(models.User).filter(
+            models.User.id != user.id,
+            models.User.is_admin.is_(True),
+            models.User.is_active.is_(True),
+        ).count()
+        if other_active_admins == 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Cannot demote the last remaining active administrator.",
+            )
+
+    if payload.is_active is False and user.is_admin:
+        other_active_admins = db.query(models.User).filter(
+            models.User.id != user.id,
+            models.User.is_admin.is_(True),
+            models.User.is_active.is_(True),
+        ).count()
+        if other_active_admins == 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Cannot disable the last remaining active administrator.",
+            )
+
+    # 5. Apply permitted updates
     update_data = payload.model_dump(exclude_unset=True)
-    # Strip is_admin from arbitrary payload dict so it cannot be directly elevated
-    update_data.pop("is_admin", None)
-
     for field, value in update_data.items():
         setattr(user, field, value)
 
-    # Invariant: only master admin has is_admin=True
-    user.is_admin = is_target_master
+    # Invariant: Master admin is always active and admin
+    if is_target_master:
+        user.is_admin = True
+        user.is_active = True
 
     db.commit()
     db.refresh(user)
@@ -128,11 +170,29 @@ def delete_user(
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
-    if is_master_admin_email(user.email) or user.id == admin.id:
+    if is_master_admin_email(user.email):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="The master administrator account cannot be deleted.",
         )
+
+    if user.id == admin.id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="You cannot delete your own account.",
+        )
+
+    if user.is_admin:
+        other_active_admins = db.query(models.User).filter(
+            models.User.id != user.id,
+            models.User.is_admin.is_(True),
+            models.User.is_active.is_(True),
+        ).count()
+        if other_active_admins == 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Cannot delete the last remaining active administrator.",
+            )
 
     db.delete(user)
     db.commit()

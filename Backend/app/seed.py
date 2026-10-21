@@ -92,12 +92,6 @@ def seed_db():
             db.commit()
             print("Default users created: admin@intervista.ai / admin123, demo@intervista.ai / demo123")
 
-        # Demote legacy demo admin if it exists
-        legacy_admin = db.query(models.User).filter(models.User.email == "admin@intervista.ai").first()
-        if legacy_admin and legacy_admin.is_admin:
-            legacy_admin.is_admin = False
-            db.commit()
-
         print("Database seed complete!")
 
     except Exception as e:

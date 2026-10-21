@@ -82,9 +82,8 @@ def ensure_db_columns():
 
 
 def normalize_admin_privileges():
-    """Idempotently ensures that ONLY the master admin email (zaidkhan24082006@gmail.com)
-    has is_admin=True, and every other user account has is_admin=False.
-    Safe to run repeatedly on startup without hardcoded credentials.
+    """Ensures that the master admin account (if it exists) has is_admin=True and is_active=True.
+    Preserves all other admin accounts so administrators can collaborate and test.
     """
     from app.database import SessionLocal
     from app.dependencies import MASTER_ADMIN_EMAIL, is_master_admin_email
@@ -93,19 +92,13 @@ def normalize_admin_privileges():
     log = logging.getLogger(__name__)
     db = SessionLocal()
     try:
-        # Demote any non-master user who currently has is_admin=True
-        all_admins = db.query(models.User).filter(models.User.is_admin.is_(True)).all()
-        for user in all_admins:
-            if not is_master_admin_email(user.email):
-                user.is_admin = False
-                log.info("Demoted non-master admin account: %s", user.email)
-
-        # If the master admin account exists, ensure is_admin=True
+        # If the master admin account exists, ensure is_admin=True and is_active=True
         all_users = db.query(models.User).all()
         for user in all_users:
-            if is_master_admin_email(user.email) and not user.is_admin:
+            if is_master_admin_email(user.email) and (not user.is_admin or not user.is_active):
                 user.is_admin = True
-                log.info("Promoted master admin account: %s", user.email)
+                user.is_active = True
+                log.info("Ensured master admin active status: %s", user.email)
 
         db.commit()
     except Exception as exc:

@@ -149,9 +149,8 @@ def verify_email(payload: schemas.VerifyEmailRequest, db: Session = Depends(get_
         err_msg = "Invalid or expired verification code. Please check your email or try 123456." if is_dev_environment() else "Invalid or expired verification code. Please check your email."
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=err_msg)
 
-    expected_admin = is_master_admin_email(user.email)
-    if user.is_admin != expected_admin:
-        user.is_admin = expected_admin
+    if is_master_admin_email(user.email) and not user.is_admin:
+        user.is_admin = True
 
     db.query(models.EmailVerificationOTP).filter(models.EmailVerificationOTP.user_id == user.id).delete()
     db.commit()
@@ -186,10 +185,9 @@ def login(
     if not user.is_active:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="This account has been disabled.")
 
-    # Ensure admin status strictly matches master admin whitelist
-    expected_admin = is_master_admin_email(user.email)
-    if user.is_admin != expected_admin:
-        user.is_admin = expected_admin
+    # Master admin account is always ensured admin status
+    if is_master_admin_email(user.email) and not user.is_admin:
+        user.is_admin = True
         db.commit()
         db.refresh(user)
 
@@ -480,10 +478,9 @@ def oauth_callback(
         if avatar and not user.avatar:
             user.avatar = avatar
 
-        # Ensure admin status strictly matches master admin whitelist
-        expected_admin = is_master_admin_email(user.email)
-        if user.is_admin != expected_admin:
-            user.is_admin = expected_admin
+        # Master admin account is always ensured admin status
+        if is_master_admin_email(user.email) and not user.is_admin:
+            user.is_admin = True
 
         # Clear any pending signup verification OTPs since email is OAuth-verified
         db.query(models.EmailVerificationOTP).filter(models.EmailVerificationOTP.user_id == user.id).delete()
@@ -513,9 +510,8 @@ def oauth_callback(
                 user = db.query(models.User).filter(models.User.github_id == provider_user_id).first()
             if not user:
                 raise HTTPException(status_code=500, detail="Failed to persist user profile.")
-            expected_admin = is_master_admin_email(user.email)
-            if user.is_admin != expected_admin:
-                user.is_admin = expected_admin
+            if is_master_admin_email(user.email) and not user.is_admin:
+                user.is_admin = True
                 db.commit()
                 db.refresh(user)
 
