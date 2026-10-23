@@ -433,6 +433,33 @@ export async function apiSendMessage({ sessionId, content, latencyMs, audioDurat
   };
 }
 
+export async function apiTranscribeAudio({ audioBlob, language = 'en-US', sessionId = null, questionId = null }) {
+  try {
+    const formData = new FormData();
+    formData.append('file', audioBlob, 'candidate_answer.webm');
+    formData.append('language', language);
+    if (sessionId) formData.append('session_id', sessionId);
+    if (questionId) formData.append('question_id', String(questionId));
+
+    const token = getToken();
+    const headers = token ? { Authorization: `Bearer ${token}` } : {};
+
+    const res = await fetch(`${BASE_URL}/api/interviews/transcribe`, {
+      method: 'POST',
+      headers,
+      body: formData,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data?.success && data?.transcript) {
+      return { success: true, transcript: data.transcript, provider: data.provider };
+    }
+    return { success: false, transcript: '', message: data?.message || 'Server transcription unavailable' };
+  } catch (err) {
+    console.warn('[apiTranscribeAudio] Server transcription call failed:', err.message);
+    return { success: false, transcript: '', message: err.message };
+  }
+}
+
 export async function apiRunInterviewCode({ questionId, code, language = 'javascript', testCases = [] }) {
   try {
     const res = await request('POST', `/api/interviews/run-code`, {

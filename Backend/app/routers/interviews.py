@@ -1,8 +1,10 @@
+import os
 import json
 import time
+import tempfile
 from datetime import datetime, timezone
 from typing import List, Optional, Dict
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, File, UploadFile, Form
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
@@ -2063,6 +2065,104 @@ def get_interview_analysis(
         recommended_resources=recommended_resources,
         roadmap=roadmap,
         vision_data=cv_data,
+    )
+
+
+@router.post("/transcribe", response_model=schemas.TranscribeAudioResponse)
+async def transcribe_interview_audio(
+    file: UploadFile = File(...),
+    language: Optional[str] = Form("en-US"),
+    session_id: Optional[str] = Form(None),
+    question_id: Optional[str] = Form(None),
+    current_user: Optional[models.User] = Depends(get_current_user_optional),
+):
+    """
+    Secure server-backed audio speech-to-text endpoint.
+    If GEMINI_API_KEY, GOOGLE_API_KEY or OPENAI_API_KEY is configured in Backend/.env,
+    transcribes candidate audio with high fidelity.
+    Otherwise returns structured fallback status for browser client-side Web Speech recognition.
+    """
+    # 1. Validate file size and mime
+    raw_content = await file.read()
+    if not raw_content or len(raw_content) < 100:
+        return schemas.TranscribeAudioResponse(
+            success=False,
+            transcript="",
+            language=language,
+            provider="none",
+            message="Audio clip is empty or too short to transcribe.",
+        )
+
+    # 2. Try Gemini Speech Transcription if key is configured
+    gemini_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+    if gemini_key:
+        try:
+            import google.generativeai as genai
+            genai.configure(api_key=gemini_key)
+            suffix = ".webm" if "webm" in (file.content_type or "") else ".wav"
+            with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+                tmp.write(raw_content)
+                tmp_path = tmp.name
+
+            try:
+                uploaded_audio = genai.upload_file(path=tmp_path)
+                model = genai.GenerativeModel("gemini-1.5-flash")
+                prompt = (
+                    "Transcribe the spoken words in this technical interview response accurately. "
+                    "Return ONLY the verbatim transcript text without formatting, quotation marks, or explanations. "
+                    f"Locale context: {language}."
+                )
+                res = model.generate_content([prompt, uploaded_audio])
+                transcript_text = (res.text or "").strip()
+                if transcript_text:
+                    return schemas.TranscribeAudioResponse(
+                        success=True,
+                        transcript=transcript_text,
+                        language=language,
+                        provider="gemini",
+                        message="Transcribed successfully via Gemini Audio.",
+                    )
+            finally:
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+        except Exception as e:
+            print(f"[transcribe] Gemini audio error: {e}")
+
+    # 3. Try OpenAI Whisper if key is configured
+    openai_key = os.getenv("OPENAI_API_KEY")
+    if openai_key:
+        try:
+            import requests
+            headers = {"Authorization": f"Bearer {openai_key}"}
+            files_dict = {"file": (file.filename or "recording.webm", raw_content, file.content_type or "audio/webm")}
+            data = {"model": "whisper-1", "language": (language or "en")[:2]}
+            whisper_res = requests.post(
+                "https://api.openai.com/v1/audio/transcriptions",
+                headers=headers,
+                files=files_dict,
+                data=data,
+                timeout=25,
+            )
+            if whisper_res.ok:
+                res_data = whisper_res.json()
+                transcript_text = (res_data.get("text") or "").strip()
+                return schemas.TranscribeAudioResponse(
+                    success=True,
+                    transcript=transcript_text,
+                    language=language,
+                    provider="openai_whisper",
+                    message="Transcribed successfully via OpenAI Whisper.",
+                )
+        except Exception as e:
+            print(f"[transcribe] OpenAI Whisper error: {e}")
+
+    # 4. Graceful fallback when cloud keys are not configured
+    return schemas.TranscribeAudioResponse(
+        success=False,
+        transcript="",
+        language=language,
+        provider="browser_web_speech",
+        message="Backend cloud STT keys not configured. Client-side Web Speech recognition active.",
     )
 
 

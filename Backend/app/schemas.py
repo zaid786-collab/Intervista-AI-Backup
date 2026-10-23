@@ -425,6 +425,15 @@ class InterviewTurnResponse(BaseModel):
     evaluation: Optional[dict] = None
 
 
+class TranscribeAudioResponse(BaseModel):
+    success: bool
+    transcript: str
+    language: Optional[str] = "en"
+    duration_seconds: Optional[float] = None
+    provider: Optional[str] = "browser"
+    message: Optional[str] = None
+
+
 class SubmitInterviewRequest(BaseModel):
     session_id: Optional[str] = None
     company: Optional[str] = "Intervista AI"
