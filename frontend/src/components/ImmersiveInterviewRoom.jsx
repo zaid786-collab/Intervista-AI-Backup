@@ -103,8 +103,8 @@ export default function ImmersiveInterviewRoom({
   });
 
   // ─── Hardware & Device Controls ─────────────────────────────────────────────
-  const [isMicMuted, setIsMicMuted] = useState(!config?.isMicActive);
-  const [isCameraOff, setIsCameraOff] = useState(!config?.isCameraActive);
+  const [isMicMuted, setIsMicMuted] = useState(config?.isMicActive === false);
+  const [isCameraOff, setIsCameraOff] = useState(config?.isCameraActive === false);
   const [isScreenSharing, setIsScreenSharing] = useState(!!config?.isScreenShareActive);
   const [micVolume, setMicVolume] = useState(0);
 
@@ -114,11 +114,58 @@ export default function ImmersiveInterviewRoom({
   const [transcriptDrawerOpen, setTranscriptDrawerOpen] = useState(false);
   const [confirmEndModalOpen, setConfirmEndModalOpen] = useState(false);
   const [pipMinimized, setPipMinimized] = useState(false);
+  const [pipSize, setPipSize] = useState('normal'); // 'compact' | 'normal' | 'expanded'
+  const [showPipTelemetry, setShowPipTelemetry] = useState(false);
+  const [pipPosition, setPipPosition] = useState({ x: null, y: null });
+  const [isDraggingPip, setIsDraggingPip] = useState(false);
+  const dragOffsetRef = useRef({ x: 0, y: 0 });
+  const pipContainerRef = useRef(null);
   const [showDeskResume, setShowDeskResume] = useState(false);
   const [laptopExpanded, setLaptopExpanded] = useState(false);
   const user = getCurrentUser();
   const [isSpeechRecognitionSupported, setIsSpeechRecognitionSupported] = useState(true);
   const [isQuestionCollapsed, setIsQuestionCollapsed] = useState(false);
+
+  // ─── Dragging handler for Candidate Video PIP ───────────────────────────────
+  const handlePipMouseDown = (e) => {
+    if (e.target.closest('button')) return;
+    setIsDraggingPip(true);
+    const rect = pipContainerRef.current?.getBoundingClientRect();
+    if (rect) {
+      dragOffsetRef.current = {
+        x: e.clientX - rect.left,
+        y: e.clientY - rect.top,
+      };
+    }
+  };
+
+  useEffect(() => {
+    if (!isDraggingPip) return;
+    const handleMouseMove = (e) => {
+      const newX = Math.max(12, Math.min(window.innerWidth - 220, e.clientX - dragOffsetRef.current.x));
+      const newY = Math.max(64, Math.min(window.innerHeight - 140, e.clientY - dragOffsetRef.current.y));
+      setPipPosition({ x: newX, y: newY });
+    };
+    const handleMouseUp = () => {
+      setIsDraggingPip(false);
+    };
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [isDraggingPip]);
+
+  // Keep candidate video element synced with camera stream
+  useEffect(() => {
+    if (!isCameraOff && cameraStreamRef.current && candidateVideoRef.current) {
+      if (candidateVideoRef.current.srcObject !== cameraStreamRef.current) {
+        candidateVideoRef.current.srcObject = cameraStreamRef.current;
+      }
+      candidateVideoRef.current.play().catch(() => {});
+    }
+  }, [isCameraOff, pipMinimized]);
 
   // ─── Timer State ────────────────────────────────────────────────────────────
   const [secondsElapsed, setSecondsElapsed] = useState(0);
@@ -505,17 +552,42 @@ export default function ImmersiveInterviewRoom({
     const newOff = !isCameraOff;
     setIsCameraOff(newOff);
 
-    if (cameraStreamRef.current) {
-      cameraStreamRef.current.getVideoTracks().forEach(t => {
-        t.enabled = !newOff;
-      });
-    }
-
     if (newOff) {
+      if (cameraStreamRef.current) {
+        cameraStreamRef.current.getVideoTracks().forEach(t => {
+          t.enabled = false;
+        });
+      }
       trackerRef.current?.stopVision();
     } else {
-      if (candidateVideoRef.current) {
-        trackerRef.current?.startVision(candidateVideoRef.current);
+      let stream = cameraStreamRef.current;
+      const hasLiveTracks = stream && stream.getVideoTracks().some(t => t.readyState === 'live');
+
+      if (!hasLiveTracks) {
+        try {
+          const videoConstraints = config?.selectedCameraId
+            ? { video: { deviceId: { exact: config.selectedCameraId } } }
+            : { video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' } };
+          stream = await navigator.mediaDevices.getUserMedia(videoConstraints);
+          cameraStreamRef.current = stream;
+        } catch (err) {
+          console.warn('Failed to start camera on toggle:', err);
+          setIsCameraOff(true);
+          return;
+        }
+      } else {
+        stream.getVideoTracks().forEach(t => {
+          t.enabled = true;
+        });
+      }
+
+      if (candidateVideoRef.current && stream) {
+        candidateVideoRef.current.srcObject = stream;
+        candidateVideoRef.current.play().catch(() => {});
+      }
+
+      if (candidateVideoRef.current && trackerRef.current) {
+        trackerRef.current.startVision(candidateVideoRef.current);
       }
     }
   };
@@ -1850,201 +1922,369 @@ export default function ImmersiveInterviewRoom({
       />
 
       {/* =========================================================================
-          LAYER 5: CANDIDATE PIP WEBCAM FEED (TOP-RIGHT FLOATING)
+          LAYER 5: CANDIDATE PIP WEBCAM FEED (FLOATING & DRAGGABLE)
           ========================================================================= */}
       <div
+        ref={pipContainerRef}
+        id="candidate-pip-window"
         style={{
           position: 'absolute',
-          top: 'clamp(4.8rem, 10vh, 6.2rem)',
-          right: 'clamp(1.5rem, 4vw, 4rem)',
-          zIndex: 22,
-          width: pipMinimized ? '135px' : '205px',
-          aspectRatio: '16/9',
+          ...(pipPosition.x !== null ? {
+            left: `${pipPosition.x}px`,
+            top: `${pipPosition.y}px`,
+          } : {
+            top: 'clamp(4.8rem, 10vh, 6.2rem)',
+            right: 'clamp(1.5rem, 4vw, 4rem)',
+          }),
+          zIndex: 25,
+          width: pipMinimized
+            ? '175px'
+            : pipSize === 'compact'
+              ? '230px'
+              : pipSize === 'expanded'
+                ? '370px'
+                : '295px',
           backgroundColor: '#090C12',
-          borderRadius: '14px',
-          border: '1px solid rgba(255, 255, 255, 0.16)',
+          borderRadius: '16px',
+          border: isCandidateSpeaking
+            ? '2px solid rgba(34, 197, 94, 0.85)'
+            : '1px solid rgba(255, 255, 255, 0.16)',
           overflow: 'hidden',
-          boxShadow: '0 16px 36px rgba(0, 0, 0, 0.7)',
-          transition: 'all 0.3s cubic-bezier(0.16, 1, 0.3, 1)',
+          boxShadow: isCandidateSpeaking
+            ? '0 0 24px rgba(34, 197, 94, 0.35), 0 16px 40px rgba(0, 0, 0, 0.75)'
+            : '0 16px 40px rgba(0, 0, 0, 0.75)',
+          transition: isDraggingPip ? 'none' : 'width 0.25s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.2s ease, border 0.2s ease',
+          userSelect: 'none',
         }}
       >
-        {/* Candidate Video Feed */}
-        <video
-          ref={candidateVideoRef}
-          autoPlay
-          playsInline
-          muted
-          style={{
-            width: '100%',
-            height: '100%',
-            objectFit: 'cover',
-            transform: 'scaleX(-1)', // Mirror camera
-            display: isCameraOff ? 'none' : 'block',
-          }}
-        />
-
-        {/* Video Off Placeholder */}
-        {isCameraOff && (
-          <div
-            style={{
-              width: '100%',
-              height: '100%',
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: '0.4rem',
-              color: 'var(--text-tertiary)',
-            }}
-          >
-            <CameraOff size={20} />
-            <span style={{ fontSize: '0.68rem' }}>Camera Off</span>
-          </div>
-        )}
-
-        {/* PIP Top Bar Overlay: Status dot & minimize button */}
+        {/* PIP Header Bar (Drag Handle & Quick Controls) */}
         <div
+          onMouseDown={handlePipMouseDown}
           style={{
-            position: 'absolute',
-            top: '6px',
-            left: '6px',
-            right: '6px',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
-            pointerEvents: 'none',
+            padding: '7px 10px',
+            backgroundColor: 'rgba(7, 10, 16, 0.94)',
+            backdropFilter: 'blur(10px)',
+            borderBottom: '1px solid rgba(255, 255, 255, 0.08)',
+            cursor: isDraggingPip ? 'grabbing' : 'grab',
           }}
         >
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '4px',
-              backgroundColor: 'rgba(0, 0, 0, 0.65)',
-              backdropFilter: 'blur(8px)',
-              padding: '2px 6px',
-              borderRadius: '9999px',
-              fontSize: '0.62rem',
-              fontWeight: 600,
-              color: '#FFFFFF',
-            }}
-          >
+          {/* Status Dot, Label & Badge */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
             <div
               style={{
-                width: '6px',
-                height: '6px',
+                width: '7px',
+                height: '7px',
                 borderRadius: '50%',
-                backgroundColor: isMicMuted ? '#EF4444' : '#22C55E',
+                backgroundColor: isCameraOff ? '#EF4444' : '#22C55E',
+                boxShadow: isCameraOff ? '0 0 6px rgba(239, 68, 68, 0.6)' : '0 0 8px #22C55E',
               }}
             />
-            <span>{isMicMuted ? 'Muted' : 'You (Candidate)'}</span>
+            <span style={{ fontSize: '0.72rem', fontWeight: 700, color: '#FFFFFF', letterSpacing: '0.02em' }}>
+              {user?.name ? `${user.name.split(' ')[0]} (You)` : 'You (Candidate)'}
+            </span>
+            <span
+              style={{
+                fontSize: '0.58rem',
+                fontWeight: 800,
+                padding: '1px 5px',
+                borderRadius: '4px',
+                backgroundColor: isCameraOff ? 'rgba(239, 68, 68, 0.15)' : 'rgba(34, 197, 94, 0.15)',
+                color: isCameraOff ? '#F87171' : '#4ADE80',
+                border: `1px solid ${isCameraOff ? 'rgba(239, 68, 68, 0.3)' : 'rgba(34, 197, 94, 0.3)'}`,
+              }}
+            >
+              {isCameraOff ? 'CAM OFF' : 'LIVE'}
+            </span>
           </div>
 
-          <button
-            type="button"
-            onClick={() => setPipMinimized(!pipMinimized)}
-            style={{
-              pointerEvents: 'auto',
-              background: 'rgba(0, 0, 0, 0.65)',
-              border: 'none',
-              borderRadius: '50%',
-              color: '#FFFFFF',
-              width: '18px',
-              height: '18px',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              cursor: 'pointer',
-            }}
-          >
-            {pipMinimized ? <Maximize2 size={9} /> : <Minimize2 size={9} />}
-          </button>
+          {/* Quick Action Icons */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+            {/* Camera Quick Toggle */}
+            <button
+              type="button"
+              onClick={toggleCamera}
+              title={isCameraOff ? 'Turn on camera' : 'Turn off camera'}
+              style={{
+                background: isCameraOff ? 'rgba(239, 68, 68, 0.25)' : 'rgba(255, 255, 255, 0.08)',
+                border: `1px solid ${isCameraOff ? 'rgba(239, 68, 68, 0.45)' : 'rgba(255, 255, 255, 0.12)'}`,
+                borderRadius: '5px',
+                color: isCameraOff ? '#EF4444' : '#E2E8F0',
+                width: '22px',
+                height: '22px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                cursor: 'pointer',
+              }}
+            >
+              {isCameraOff ? <CameraOff size={11} /> : <Camera size={11} />}
+            </button>
+
+            {/* Mic Quick Toggle */}
+            <button
+              type="button"
+              onClick={toggleMicrophone}
+              title={isMicMuted ? 'Unmute microphone' : 'Mute microphone'}
+              style={{
+                background: isMicMuted ? 'rgba(239, 68, 68, 0.25)' : 'rgba(255, 255, 255, 0.08)',
+                border: `1px solid ${isMicMuted ? 'rgba(239, 68, 68, 0.45)' : 'rgba(255, 255, 255, 0.12)'}`,
+                borderRadius: '5px',
+                color: isMicMuted ? '#EF4444' : '#E2E8F0',
+                width: '22px',
+                height: '22px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                cursor: 'pointer',
+              }}
+            >
+              {isMicMuted ? <MicOff size={11} /> : <Mic size={11} />}
+            </button>
+
+            {/* Size Toggle (S / M / L) */}
+            {!pipMinimized && (
+              <button
+                type="button"
+                onClick={() => {
+                  setPipSize(curr => curr === 'compact' ? 'normal' : curr === 'normal' ? 'expanded' : 'compact');
+                }}
+                title={`Window size: ${pipSize}. Click to resize`}
+                style={{
+                  background: 'rgba(255, 255, 255, 0.08)',
+                  border: '1px solid rgba(255, 255, 255, 0.12)',
+                  borderRadius: '5px',
+                  color: 'var(--accent-gold)',
+                  width: '22px',
+                  height: '22px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  cursor: 'pointer',
+                  fontSize: '0.62rem',
+                  fontWeight: 700,
+                }}
+              >
+                {pipSize === 'compact' ? 'S' : pipSize === 'normal' ? 'M' : 'L'}
+              </button>
+            )}
+
+            {/* Minimize / Expand Toggle */}
+            <button
+              type="button"
+              onClick={() => setPipMinimized(!pipMinimized)}
+              title={pipMinimized ? 'Restore window' : 'Minimize window'}
+              style={{
+                background: 'rgba(255, 255, 255, 0.08)',
+                border: '1px solid rgba(255, 255, 255, 0.12)',
+                borderRadius: '5px',
+                color: '#E2E8F0',
+                width: '22px',
+                height: '22px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                cursor: 'pointer',
+              }}
+            >
+              {pipMinimized ? <Maximize2 size={11} /> : <Minimize2 size={11} />}
+            </button>
+          </div>
         </div>
 
-        {/* PIP Multimodal Telemetry Badges */}
+        {/* Video Viewport */}
         {!pipMinimized && (
           <div
             style={{
-              position: 'absolute',
-              bottom: '14px',
-              left: '8px',
-              right: '8px',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '3px',
-              pointerEvents: 'none',
+              position: 'relative',
+              width: '100%',
+              aspectRatio: '16/9',
+              backgroundColor: '#04060A',
+              overflow: 'hidden',
             }}
           >
-            <div
+            {/* Live Mirrored Webcam Video Feed */}
+            <video
+              ref={candidateVideoRef}
+              autoPlay
+              playsInline
+              muted
               style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                backgroundColor: 'rgba(5, 7, 10, 0.78)',
-                backdropFilter: 'blur(8px)',
-                padding: '3px 6px',
-                borderRadius: '6px',
-                fontSize: '0.62rem',
-                color: '#E5E7EB',
-                border: '1px solid rgba(255, 255, 255, 0.08)',
+                width: '100%',
+                height: '100%',
+                objectFit: 'cover',
+                transform: 'scaleX(-1)', // Mirrored view like standard video calls
+                display: isCameraOff ? 'none' : 'block',
               }}
-            >
-              <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                <div style={{ width: '5px', height: '5px', borderRadius: '50%', backgroundColor: isCameraOff ? '#9CA3AF' : '#22C55E' }} />
-                <span>{isCameraOff ? 'Vision: Paused' : (telemetryHud.posture || 'Upright & Centered')}</span>
-              </div>
-              <span style={{ color: 'var(--accent-champagne)', fontSize: '0.6rem' }}>
-                {isCameraOff ? 'Cam Off' : (telemetryHud.gaze || 'Direct Lens Focus')}
-              </span>
-            </div>
+            />
 
+            {/* Camera Off Placeholder Screen */}
+            {isCameraOff && (
+              <div
+                style={{
+                  width: '100%',
+                  height: '100%',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '0.45rem',
+                  padding: '1rem',
+                  background: 'linear-gradient(135deg, rgba(15, 23, 42, 0.96), rgba(8, 11, 19, 0.98))',
+                  color: 'var(--text-secondary)',
+                }}
+              >
+                <div
+                  style={{
+                    width: '38px',
+                    height: '38px',
+                    borderRadius: '50%',
+                    backgroundColor: 'rgba(239, 68, 68, 0.12)',
+                    border: '1px solid rgba(239, 68, 68, 0.3)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    color: '#EF4444',
+                  }}
+                >
+                  <CameraOff size={18} />
+                </div>
+                <div style={{ textAlign: 'center' }}>
+                  <div style={{ fontSize: '0.78rem', fontWeight: 700, color: '#FFFFFF' }}>
+                    Camera is Paused
+                  </div>
+                  <div style={{ fontSize: '0.64rem', color: '#94A3B8', marginTop: '1px' }}>
+                    Click below to start video stream
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={toggleCamera}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '5px',
+                    padding: '4px 12px',
+                    borderRadius: '7px',
+                    backgroundColor: 'var(--accent-gold)',
+                    border: 'none',
+                    color: '#080808',
+                    fontSize: '0.72rem',
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                    boxShadow: '0 4px 12px rgba(217, 183, 122, 0.35)',
+                    marginTop: '2px',
+                  }}
+                >
+                  <Camera size={12} />
+                  <span>Turn On Camera</span>
+                </button>
+              </div>
+            )}
+
+            {/* Audio Volume Bar at Bottom of Video */}
             <div
               style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                backgroundColor: 'rgba(5, 7, 10, 0.78)',
-                backdropFilter: 'blur(8px)',
-                padding: '3px 6px',
-                borderRadius: '6px',
-                fontSize: '0.62rem',
-                color: '#E5E7EB',
-                border: '1px solid rgba(255, 255, 255, 0.08)',
+                position: 'absolute',
+                bottom: 0,
+                left: 0,
+                right: 0,
+                height: '3px',
+                backgroundColor: 'rgba(255, 255, 255, 0.08)',
               }}
             >
-              <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                <div style={{ width: '5px', height: '5px', borderRadius: '50%', backgroundColor: isMicMuted ? '#EF4444' : '#22C55E' }} />
-                <span>{isMicMuted ? 'Voice: Muted' : `Cadence: ${telemetryHud.wpm || 138} WPM`}</span>
-              </div>
-              <span style={{ color: '#4ADE80', fontSize: '0.6rem' }}>
-                {isMicMuted ? 'Muted' : `${telemetryHud.fillerCount || 0} fillers`}
-              </span>
+              <div
+                style={{
+                  height: '100%',
+                  width: `${isMicMuted ? 0 : micVolume}%`,
+                  backgroundColor: micVolume > 50 ? '#22C55E' : 'var(--accent-gold)',
+                  boxShadow: micVolume > 20 ? '0 0 6px rgba(34, 197, 94, 0.8)' : 'none',
+                  transition: 'width 0.08s ease',
+                }}
+              />
             </div>
           </div>
         )}
 
-        {/* PIP Bottom Audio Bar */}
-        <div
-          style={{
-            position: 'absolute',
-            bottom: '4px',
-            left: '6px',
-            right: '6px',
-            height: '2px',
-            backgroundColor: 'rgba(255, 255, 255, 0.1)',
-            borderRadius: '2px',
-            overflow: 'hidden',
-          }}
-        >
+        {/* Telemetry Bar (Collapsible, placed neatly below video so face is never blocked) */}
+        {!pipMinimized && (
           <div
             style={{
-              height: '100%',
-              width: `${isMicMuted ? 0 : micVolume}%`,
-              backgroundColor: micVolume > 50 ? '#22C55E' : 'var(--accent-gold)',
-              transition: 'width 0.08s ease',
+              padding: '6px 10px',
+              backgroundColor: 'rgba(6, 8, 14, 0.96)',
+              borderTop: '1px solid rgba(255, 255, 255, 0.08)',
             }}
-          />
-        </div>
+          >
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '0.64rem', color: '#E2E8F0' }}>
+                <div
+                  style={{
+                    width: '5px',
+                    height: '5px',
+                    borderRadius: '50%',
+                    backgroundColor: isCameraOff ? '#9CA3AF' : '#22C55E',
+                  }}
+                />
+                <span style={{ fontWeight: 600 }}>
+                  {isCameraOff ? 'Vision: Paused' : (telemetryHud.posture || 'Upright & Centered')}
+                </span>
+                <span style={{ color: 'rgba(255,255,255,0.2)' }}>•</span>
+                <span style={{ color: isMicMuted ? '#EF4444' : '#4ADE80' }}>
+                  {isMicMuted ? 'Muted' : `${telemetryHud.wpm || 138} WPM`}
+                </span>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setShowPipTelemetry(!showPipTelemetry)}
+                title={showPipTelemetry ? 'Hide detailed metrics' : 'Show detailed metrics'}
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  color: 'var(--text-tertiary)',
+                  fontSize: '0.62rem',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '2px',
+                  cursor: 'pointer',
+                  padding: '2px 4px',
+                }}
+              >
+                <span>{showPipTelemetry ? 'Less' : 'Stats'}</span>
+                {showPipTelemetry ? <ChevronUp size={10} /> : <ChevronDown size={10} />}
+              </button>
+            </div>
+
+            {showPipTelemetry && (
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: '1fr 1fr',
+                  gap: '4px',
+                  marginTop: '5px',
+                  paddingTop: '5px',
+                  borderTop: '1px solid rgba(255, 255, 255, 0.06)',
+                  fontSize: '0.6rem',
+                }}
+              >
+                <div style={{ color: '#94A3B8' }}>
+                  Gaze: <span style={{ color: 'var(--accent-champagne)', fontWeight: 600 }}>{isCameraOff ? 'Cam Off' : (telemetryHud.gaze || 'Direct Lens')}</span>
+                </div>
+                <div style={{ color: '#94A3B8', textAlign: 'right' }}>
+                  Fillers: <span style={{ color: '#4ADE80', fontWeight: 600 }}>{telemetryHud.fillerCount || 0}</span>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* =========================================================================

@@ -71,6 +71,8 @@ function AppContent() {
     interviewType: 'Technical Interview',
     duration: '30 min',
     interviewerPersona: 'chen',
+    isCameraActive: true,
+    isMicActive: true,
   });
 
   const isInterviewRoom = path === '/interview';
@@ -92,6 +94,8 @@ function AppContent() {
           ...prev,
           company: roleOrCompany,
           role: 'Software Engineer',
+          isCameraActive: true,
+          isMicActive: true,
         }));
         setSelectedRoleForSetup('Software Engineer');
       } else {
@@ -99,6 +103,8 @@ function AppContent() {
         setInterviewConfig((prev) => ({
           ...prev,
           role: roleOrCompany,
+          isCameraActive: true,
+          isMicActive: true,
         }));
       }
     }
@@ -106,12 +112,15 @@ function AppContent() {
   };
 
   const handleLaunchSession = (config) => {
-    setInterviewConfig(config);
+    setInterviewConfig((prev) => ({ ...prev, ...config, isCameraActive: true, isMicActive: true }));
     setSetupModalOpen(false);
     setDeviceSetupOpen(true);
   };
 
-  const handleEnterInterviewRoom = () => {
+  const handleEnterInterviewRoom = (deviceSettings) => {
+    if (deviceSettings && typeof deviceSettings === 'object') {
+      setInterviewConfig((prev) => ({ ...prev, ...deviceSettings }));
+    }
     setDeviceSetupOpen(false);
     navigate('/interview');
   };
