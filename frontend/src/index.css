@@ -223,6 +223,7 @@ body {
   cursor: pointer;
   transition: all var(--transition-base);
   text-decoration: none;
+  white-space: nowrap;
 }
 
 .btn-ghost-outline:hover {

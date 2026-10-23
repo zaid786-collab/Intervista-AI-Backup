@@ -330,11 +330,16 @@ export default function Navbar({
       }}
     >
       <div
-        className="container"
+        className="navbar-container"
         style={{
+          width: '100%',
+          maxWidth: '1440px',
+          margin: '0 auto',
+          padding: '0 2.5rem',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
+          gap: '2.5rem',
           height: 'var(--nav-height)',
         }}
       >
@@ -350,34 +355,36 @@ export default function Navbar({
             else window.scrollTo({ top: 0, behavior: 'smooth' });
           }}
           className="brand-logo-link"
+          aria-label="Intervista"
           style={{
-            display: 'flex',
+            display: 'inline-flex',
             alignItems: 'center',
-            gap: '0.55rem',
             textDecoration: 'none',
             color: 'var(--text-primary)',
             cursor: 'pointer',
             flexShrink: 0,
+            userSelect: 'none',
           }}
         >
-          {/* Official Intervista Emblem */}
+          {/* Logo Emblem functioning seamlessly as initial letter 'I' of INTERVISTA */}
           <div
             className="brand-emblem-wrap"
             style={{
               position: 'relative',
               height: '32px',
-              display: 'flex',
+              display: 'inline-flex',
               alignItems: 'center',
               justifyContent: 'center',
               flexShrink: 0,
+              marginRight: '3px',
             }}
           >
             <img
               ref={logoImgRef}
               src="/logo-emblem.png"
-              alt="Intervista Emblem"
+              alt="I"
               style={{
-                height: '32px',
+                height: '28px',
                 width: 'auto',
                 objectFit: 'contain',
                 display: 'block',
@@ -387,43 +394,24 @@ export default function Navbar({
               }}
             />
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-            <span
-              className="brand-logo-text"
-              style={{
-                fontFamily: "'Cinzel', 'Playfair Display', serif",
-                fontSize: '1.25rem',
-                fontWeight: 700,
-                letterSpacing: '0.12em',
-                textTransform: 'uppercase',
-                background: 'linear-gradient(180deg, #FFFFFF 0%, #F6ECD8 22%, #DDB86C 60%, #9B7023 100%)',
-                WebkitBackgroundClip: 'text',
-                WebkitTextFillColor: 'transparent',
-                filter: 'drop-shadow(0 0 12px rgba(217, 183, 122, 0.35))',
-                display: 'inline-block',
-                lineHeight: 1,
-              }}
-            >
-              INTERVISTA
-            </span>
-            <span
-              className="brand-logo-badge"
-              style={{
-                fontSize: '0.62rem',
-                fontWeight: 800,
-                letterSpacing: '0.08em',
-                padding: '0.15rem 0.4rem',
-                borderRadius: '6px',
-                background: 'rgba(217, 183, 122, 0.14)',
-                border: '1px solid rgba(217, 183, 122, 0.32)',
-                color: 'var(--accent-gold)',
-                lineHeight: 1,
-                display: 'inline-block',
-              }}
-            >
-              AI
-            </span>
-          </div>
+          <span
+            className="brand-logo-text"
+            style={{
+              fontFamily: "'Cinzel', 'Playfair Display', serif",
+              fontSize: '1.25rem',
+              fontWeight: 700,
+              letterSpacing: '0.12em',
+              textTransform: 'uppercase',
+              background: 'linear-gradient(180deg, #FFFFFF 0%, #F6ECD8 22%, #DDB86C 60%, #9B7023 100%)',
+              WebkitBackgroundClip: 'text',
+              WebkitTextFillColor: 'transparent',
+              filter: 'drop-shadow(0 0 12px rgba(217, 183, 122, 0.35))',
+              display: 'inline-block',
+              lineHeight: 1,
+            }}
+          >
+            NTERVISTA
+          </span>
         </a>
 
         {/* Desktop GSAP PillNav Container */}
@@ -437,10 +425,11 @@ export default function Navbar({
             backgroundColor: 'rgba(17, 17, 17, 0.85)',
             border: '1px solid rgba(255, 255, 255, 0.09)',
             borderRadius: '9999px',
-            padding: '0 5px',
+            padding: '0 6px',
             backdropFilter: 'blur(16px)',
             WebkitBackdropFilter: 'blur(16px)',
             boxShadow: '0 8px 24px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.06)',
+            flexShrink: 0,
           }}
         >
           <ul
@@ -449,7 +438,7 @@ export default function Navbar({
               listStyle: 'none',
               display: 'flex',
               alignItems: 'center',
-              gap: '4px',
+              gap: '6px',
               margin: 0,
               padding: 0,
               height: '100%',
@@ -589,7 +578,8 @@ export default function Navbar({
           style={{
             display: 'flex',
             alignItems: 'center',
-            gap: '0.85rem',
+            gap: '1.25rem',
+            flexShrink: 0,
           }}
         >
           {currentUser ? (
@@ -779,14 +769,19 @@ export default function Navbar({
               )}
             </div>
           ) : (
-            <>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.85rem', flexShrink: 0 }}>
               <button
                 onClick={onOpenLogin}
                 className="btn-ghost-outline"
                 style={{
-                  padding: '0.52rem 1.15rem',
+                  padding: '0.5rem 1.25rem',
                   fontSize: '0.86rem',
                   color: 'var(--text-primary)',
+                  whiteSpace: 'nowrap',
+                  flexShrink: 0,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
                 }}
               >
                 Log In
@@ -795,23 +790,33 @@ export default function Navbar({
                 onClick={onOpenSignup || onOpenLogin}
                 className="btn-ghost-outline"
                 style={{
-                  padding: '0.52rem 1.15rem',
+                  padding: '0.5rem 1.25rem',
                   fontSize: '0.86rem',
                   borderColor: 'var(--accent-gold)',
                   color: 'var(--accent-gold)',
+                  whiteSpace: 'nowrap',
+                  flexShrink: 0,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
                 }}
               >
                 Sign Up
               </button>
-            </>
+            </div>
           )}
           <button
             onClick={() => onStartInterview()}
             className="btn-primary"
             style={{
-              padding: '0.55rem 1.25rem',
+              padding: '0.55rem 1.35rem',
               fontSize: '0.86rem',
               fontWeight: 600,
+              whiteSpace: 'nowrap',
+              flexShrink: 0,
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '0.5rem',
             }}
           >
             Start Interview
@@ -1030,8 +1035,12 @@ export default function Navbar({
       </div>
 
       <style>{`
-        /* Compact PillNav for medium screens between 1025px and 1220px */
-        @media (max-width: 1220px) and (min-width: 1025px) {
+        /* Compact PillNav for medium screens between 1025px and 1280px */
+        @media (max-width: 1280px) and (min-width: 1025px) {
+          .navbar-container {
+            padding: 0 1.25rem !important;
+            gap: 1.25rem !important;
+          }
           .desktop-pill-nav {
             height: 40px !important;
             padding: 0 4px !important;
@@ -1046,17 +1055,24 @@ export default function Navbar({
             letter-spacing: 0.05em !important;
           }
           .desktop-actions {
-            gap: 0.5rem !important;
+            gap: 0.75rem !important;
+            flex-shrink: 0 !important;
           }
           .desktop-actions .btn-ghost-outline,
           .desktop-actions .btn-primary {
-            padding: 0.46rem 0.95rem !important;
+            padding: 0.44rem 0.9rem !important;
             font-size: 0.82rem !important;
+            white-space: nowrap !important;
+            flex-shrink: 0 !important;
           }
         }
 
         /* Mobile & Tablet Breakpoint */
         @media (max-width: 1024px) {
+          .navbar-container {
+            padding: 0 1.5rem !important;
+            gap: 1rem !important;
+          }
           .desktop-pill-nav, .desktop-actions {
             display: none !important;
           }
@@ -1067,26 +1083,25 @@ export default function Navbar({
           }
         }
 
+        @media (max-width: 768px) {
+          .navbar-container {
+            padding: 0 1.25rem !important;
+          }
+        }
+
         @media (max-width: 520px) {
           .brand-logo-text {
             font-size: 1.1rem !important;
             letter-spacing: 0.08em !important;
           }
-          .brand-logo-badge {
-            font-size: 0.55rem !important;
-            padding: 0.12rem 0.3rem !important;
-          }
           .brand-emblem-wrap img {
-            height: 26px !important;
+            height: 24px !important;
           }
         }
 
         @media (max-width: 360px) {
           .brand-logo-text {
             font-size: 0.96rem !important;
-          }
-          .brand-logo-badge {
-            display: none !important;
           }
         }
       `}</style>
