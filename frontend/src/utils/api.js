@@ -6,6 +6,7 @@
 
 import { generateInterviewPDF } from './pdfGenerator';
 import { evaluateSingleQuestion } from './evaluator';
+import { registerUser, loginUser } from './auth';
 import {
   getApiBaseUrl,
   getToken as getRootToken,
@@ -119,28 +120,50 @@ export async function apiRegister({ name, email, password }) {
   const cleanEmail = (email || '').toLowerCase().trim();
   const cleanName = (name || '').trim() || cleanEmail.split('@')[0];
 
-  // 1. Create account on backend
-  await request('POST', '/api/auth/signup', { name: cleanName, email: cleanEmail, password });
+  try {
+    // 1. Create account on backend
+    await request('POST', '/api/auth/signup', { name: cleanName, email: cleanEmail, password });
 
-  // 2. Automatically log in to obtain JWT access token
-  const loginData = await request('POST', '/api/auth/login', { email: cleanEmail, password });
-  if (loginData?.access_token) {
-    setToken(loginData.access_token);
+    // 2. Automatically log in to obtain JWT access token
+    const loginData = await request('POST', '/api/auth/login', { email: cleanEmail, password });
+    if (loginData?.access_token) {
+      setToken(loginData.access_token);
+    }
+    const user = loginData?.user || { id: 'u_' + Date.now(), name: cleanName, email: cleanEmail };
+    localStorage.setItem('intervista_current_user', JSON.stringify(user));
+    return user;
+  } catch (err) {
+    // Backend unreachable — fall back to client-side localStorage auth
+    console.warn('[apiRegister] Backend unavailable, using local auth:', err.message);
+    const localUser = await registerUser({ name: cleanName, email: cleanEmail, password });
+    if (localUser.token) {
+      setToken(localUser.token);
+    }
+    localStorage.setItem('intervista_current_user', JSON.stringify(localUser));
+    return localUser;
   }
-  const user = loginData?.user || { id: 'u_' + Date.now(), name: cleanName, email: cleanEmail };
-  localStorage.setItem('intervista_current_user', JSON.stringify(user));
-  return user;
 }
 
 export async function apiLogin({ email, password }) {
   const cleanEmail = (email || '').toLowerCase().trim();
-  const data = await request('POST', '/api/auth/login', { email: cleanEmail, password });
-  if (data?.access_token) {
-    setToken(data.access_token);
+  try {
+    const data = await request('POST', '/api/auth/login', { email: cleanEmail, password });
+    if (data?.access_token) {
+      setToken(data.access_token);
+    }
+    const user = data?.user || { id: 'u_' + Date.now(), email: cleanEmail, name: cleanEmail.split('@')[0] };
+    localStorage.setItem('intervista_current_user', JSON.stringify(user));
+    return user;
+  } catch (err) {
+    // Backend unreachable — fall back to client-side localStorage auth
+    console.warn('[apiLogin] Backend unavailable, using local auth:', err.message);
+    const localUser = await loginUser({ email: cleanEmail, password });
+    if (localUser.token) {
+      setToken(localUser.token);
+    }
+    localStorage.setItem('intervista_current_user', JSON.stringify(localUser));
+    return localUser;
   }
-  const user = data?.user || { id: 'u_' + Date.now(), email: cleanEmail, name: cleanEmail.split('@')[0] };
-  localStorage.setItem('intervista_current_user', JSON.stringify(user));
-  return user;
 }
 
 export async function apiGoogleAuth({ credential }) {
