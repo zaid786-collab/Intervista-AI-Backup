@@ -42,13 +42,24 @@ export function getRegisteredUsers() {
   }
 }
 
+export const DEFAULT_DEMO_USER = {
+  id: 2,
+  name: 'Demo User',
+  email: 'demo@intervista.ai',
+  is_admin: false,
+  is_active: true,
+  target_role: 'Software Engineer',
+  xp: 1250,
+  skills: 'React, Node.js, Python, System Design, SQL',
+};
+
 // Get active session
 export function getCurrentUser() {
   try {
     const data = localStorage.getItem(SESSION_KEY);
-    return data ? JSON.parse(data) : null;
+    return data ? JSON.parse(data) : DEFAULT_DEMO_USER;
   } catch {
-    return null;
+    return DEFAULT_DEMO_USER;
   }
 }
 
