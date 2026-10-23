@@ -98,48 +98,12 @@ export default function ImmersiveInterviewRoom({
   const [evaluatedAnswers, setEvaluatedAnswers] = useState([]);
   const [lastEvaluatedTurn, setLastEvaluatedTurn] = useState(null);
 
-  // ─── Production-Grade Speech Recognition & Microphone Hook ─────────────────
-  const speech = useSpeechRecognition({
-    initialLanguage: selectedSpeechLang,
-    selectedMicId: config?.selectedMicId,
-    sessionId: sessionId,
-    questionId: questionIndex + 1,
-    onAudioData: (analyser) => {
-      trackerRef.current?.startAudio(analyser);
-    },
-  });
-
-  // Live synchronization of candidate answer with real-time speech recognition
-  useEffect(() => {
-    if (speech.transcript !== undefined) {
-      setCandidateAnswer(speech.transcript);
-    }
-  }, [speech.transcript]);
-
-  // Sync micVolume & candidate speaking reactivity
-  useEffect(() => {
-    setMicVolume(speech.volume);
-    setIsCandidateSpeaking(speech.isCandidateSpeaking || speech.volume > 15);
-  }, [speech.volume, speech.isCandidateSpeaking]);
-
-  // Keep isMicMuted and isMicMutedRef synchronized with speech.isListening
-  useEffect(() => {
-    setIsMicMuted(!speech.isListening);
-    isMicMutedRef.current = !speech.isListening;
-  }, [speech.isListening]);
-
-  // Auto-scroll textarea as transcript grows
-  useEffect(() => {
-    if (textareaRef.current) {
-      textareaRef.current.scrollTop = textareaRef.current.scrollHeight;
-    }
-  }, [candidateAnswer, speech.interimTranscript]);
-
-  // Domain Questions & Proctoring State
+  // ─── Domain Questions & Proctoring State ────────────────────────────────────
   const [interviewQuestions, setInterviewQuestions] = useState([]);
   const [currentQuestionObj, setCurrentQuestionObj] = useState(null);
   const [warningCount, setWarningCount] = useState(0);
   const [activeWarning, setActiveWarning] = useState(null);
+
   // Adaptive Difficulty Engine Live HUD State
   const [adaptiveState, setAdaptiveState] = useState({
     level: 2,
@@ -167,13 +131,66 @@ export default function ImmersiveInterviewRoom({
   const [showPipTelemetry, setShowPipTelemetry] = useState(false);
   const [pipPosition, setPipPosition] = useState({ x: null, y: null });
   const [isDraggingPip, setIsDraggingPip] = useState(false);
-  const dragOffsetRef = useRef({ x: 0, y: 0 });
-  const pipContainerRef = useRef(null);
   const [showDeskResume, setShowDeskResume] = useState(false);
   const [laptopExpanded, setLaptopExpanded] = useState(false);
   const user = getCurrentUser();
   const [isSpeechRecognitionSupported, setIsSpeechRecognitionSupported] = useState(true);
   const [isQuestionCollapsed, setIsQuestionCollapsed] = useState(false);
+  const [secondsElapsed, setSecondsElapsed] = useState(0);
+
+  const [telemetryHud, setTelemetryHud] = useState({
+    posture: 'Upright & Centered',
+    gaze: 'Direct Lens Focus',
+    gazeDirection: 'center',
+    eyeContactPct: 86,
+    lookingDownPct: 8,
+    lookingAwayPct: 6,
+    anxietyState: 'Calm & Composed',
+    anxietyScore: 88,
+    fidgetLevel: 'Low (Steady)',
+    expression: 'Engaged & Attentive',
+    headStability: 'Steady & Poised',
+    wpm: 138,
+    fillerCount: 0,
+    pausesOver3s: 0,
+    speakingSeconds: 0,
+  });
+
+  // ─── Media Stream & Audio Refs ──────────────────────────────────────────────
+  const candidateVideoRef = useRef(null);
+  const cameraStreamRef = useRef(null);
+  const micStreamRef = useRef(null);
+  const screenStreamRef = useRef(null);
+  const audioContextRef = useRef(null);
+  const analyserRef = useRef(null);
+  const animFrameRef = useRef(null);
+  const transcriptScrollRef = useRef(null);
+  const interviewerFinishedSpeakingAtRef = useRef(Date.now());
+  const isMicMutedRef = useRef(false);
+  const sessionPhaseRef = useRef(sessionPhase);
+  const textareaRef = useRef(null);
+  const dragOffsetRef = useRef({ x: 0, y: 0 });
+  const pipContainerRef = useRef(null);
+  const trackerRef = useRef(null);
+  const proctorRef = useRef(null);
+
+  // ─── Production-Grade Speech Recognition & Microphone Hook ─────────────────
+  const speech = useSpeechRecognition({
+    initialLanguage: selectedSpeechLang,
+    selectedMicId: config?.selectedMicId,
+    sessionId: sessionId,
+    questionId: questionIndex + 1,
+    onAudioData: (analyser) => {
+      trackerRef.current?.startAudio(analyser);
+    },
+  });
+
+  // Real-time Computer Vision analysis hook
+  const visionCV = useComputerVision({
+    isInterviewActive: sessionPhase === 'active',
+    isCameraActive: !isCameraOff,
+    videoRef: candidateVideoRef,
+  });
 
   // ─── Dragging handler for Candidate Video PIP ───────────────────────────────
   const handlePipMouseDown = (e) => {
@@ -187,6 +204,41 @@ export default function ImmersiveInterviewRoom({
       };
     }
   };
+
+  // ─── Effects in strict fixed order ──────────────────────────────────────────
+  useEffect(() => {
+    isMicMutedRef.current = isMicMuted;
+  }, [isMicMuted]);
+
+  useEffect(() => {
+    sessionPhaseRef.current = sessionPhase;
+  }, [sessionPhase]);
+
+  // Live synchronization of candidate answer with real-time speech recognition
+  useEffect(() => {
+    if (speech.transcript !== undefined) {
+      setCandidateAnswer(speech.transcript);
+    }
+  }, [speech.transcript]);
+
+  // Sync micVolume & candidate speaking reactivity
+  useEffect(() => {
+    setMicVolume(speech.volume);
+    setIsCandidateSpeaking(speech.isCandidateSpeaking || speech.volume > 15);
+  }, [speech.volume, speech.isCandidateSpeaking]);
+
+  // Keep isMicMuted and isMicMutedRef synchronized with speech.isListening
+  useEffect(() => {
+    setIsMicMuted(!speech.isListening);
+    isMicMutedRef.current = !speech.isListening;
+  }, [speech.isListening]);
+
+  // Auto-scroll textarea as transcript grows
+  useEffect(() => {
+    if (textareaRef.current) {
+      textareaRef.current.scrollTop = textareaRef.current.scrollHeight;
+    }
+  }, [candidateAnswer, speech.interimTranscript]);
 
   useEffect(() => {
     if (!isDraggingPip) return;
@@ -216,37 +268,6 @@ export default function ImmersiveInterviewRoom({
     }
   }, [isCameraOff, pipMinimized]);
 
-  // ─── Timer State ────────────────────────────────────────────────────────────
-  const [secondsElapsed, setSecondsElapsed] = useState(0);
-
-  // ─── Media Stream & Audio Refs ──────────────────────────────────────────────
-  const candidateVideoRef = useRef(null);
-  const cameraStreamRef = useRef(null);
-  const micStreamRef = useRef(null);
-  const screenStreamRef = useRef(null);
-  const audioContextRef = useRef(null);
-  const analyserRef = useRef(null);
-  const animFrameRef = useRef(null);
-  const recognitionRef = useRef(null);
-  const finalTranscriptRef = useRef('');
-  const isRecognitionActiveRef = useRef(false);
-  const restartTimeoutRef = useRef(null);
-  const transcriptScrollRef = useRef(null);
-  const interviewerFinishedSpeakingAtRef = useRef(Date.now());
-  const isMicMutedRef = useRef(false);
-  const currentRecognitionFinalRef = useRef('');
-  const lastSpeechErrorRef = useRef(null);
-  const sessionPhaseRef = useRef(sessionPhase);
-  const textareaRef = useRef(null);
-
-  useEffect(() => {
-    isMicMutedRef.current = isMicMuted;
-  }, [isMicMuted]);
-
-  useEffect(() => {
-    sessionPhaseRef.current = sessionPhase;
-  }, [sessionPhase]);
-
   // Auto-resume AudioContext on first user interaction if browser suspended it
   useEffect(() => {
     const resumeAudioCtx = () => {
@@ -263,34 +284,6 @@ export default function ImmersiveInterviewRoom({
       window.removeEventListener('touchstart', resumeAudioCtx);
     };
   }, []);
-
-  const trackerRef = useRef(null);
-  const proctorRef = useRef(null);
-
-  // Real-time Computer Vision analysis hook
-  const visionCV = useComputerVision({
-    isInterviewActive: sessionPhase === 'active',
-    isCameraActive: !isCameraOff,
-    videoRef: candidateVideoRef,
-  });
-
-  const [telemetryHud, setTelemetryHud] = useState({
-    posture: 'Upright & Centered',
-    gaze: 'Direct Lens Focus',
-    gazeDirection: 'center',
-    eyeContactPct: 86,
-    lookingDownPct: 8,
-    lookingAwayPct: 6,
-    anxietyState: 'Calm & Composed',
-    anxietyScore: 88,
-    fidgetLevel: 'Low (Steady)',
-    expression: 'Engaged & Attentive',
-    headStability: 'Steady & Poised',
-    wpm: 138,
-    fillerCount: 0,
-    pausesOver3s: 0,
-    speakingSeconds: 0,
-  });
 
   // Format Elapsed Time MM:SS
   const formatTimer = (totalSec) => {
