@@ -2,9 +2,6 @@ import React, { useState, useMemo, useEffect } from 'react';
 import MockInterviewSetupPage from './MockInterviewSetupPage';
 import CareerPrepDSAPage from './CareerPrepDSAPage';
 import HistoryPage from './HistoryPage';
-import InterviewDNAView from './InterviewDNAView';
-import ResumeRealityCheckView from './ResumeRealityCheckView';
-import CareerReadinessMapView from './CareerReadinessMapView';
 import ProfilePage from './ProfilePage';
 import { useAuth } from '../context/useAuth';
 import { apiGetSessions, apiGetReport } from '../utils/api';
@@ -16,8 +13,6 @@ import {
   Calendar,
   Briefcase,
   Settings,
-  Dna,
-  Compass,
 
   ChevronLeft,
   ChevronRight,
@@ -166,9 +161,6 @@ export default function Dashboard({
     if (typeof window !== 'undefined') {
       const h = window.location.hash.toLowerCase();
       if (h.includes('profile')) return 'My Profile';
-      if (h.includes('dna')) return 'Interview DNA';
-      if (h.includes('reality') || h.includes('check')) return 'Resume Reality Check';
-      if (h.includes('readiness') || h.includes('map')) return 'Career Readiness Map';
       if (h.includes('history')) return 'History';
       if (h.includes('mock')) return 'Mock Interview';
       if (h.includes('prep') || h.includes('career')) return 'Career Prep';
@@ -222,12 +214,6 @@ export default function Dashboard({
       const h = window.location.hash.toLowerCase();
       if (h.includes('profile')) {
         setActiveNav('My Profile');
-      } else if (h.includes('dna')) {
-        setActiveNav('Interview DNA');
-      } else if (h.includes('reality') || h.includes('check')) {
-        setActiveNav('Resume Reality Check');
-      } else if (h.includes('readiness') || h.includes('map')) {
-        setActiveNav('Career Readiness Map');
       } else if (h.includes('history')) {
         setActiveNav('History');
       } else if (h.includes('mock')) {
@@ -468,36 +454,6 @@ export default function Dashboard({
       action: () => {
         setActiveNav('Overview');
         window.location.hash = '#dashboard';
-        window.scrollTo({ top: 0, behavior: 'smooth' });
-      },
-    },
-    {
-      label: 'Interview DNA',
-      icon: Dna,
-      id: 'interview-dna',
-      action: () => {
-        setActiveNav('Interview DNA');
-        window.location.hash = '#dashboard/dna';
-        window.scrollTo({ top: 0, behavior: 'smooth' });
-      },
-    },
-    {
-      label: 'Resume Reality Check',
-      icon: FileText,
-      id: 'resume-reality-check',
-      action: () => {
-        setActiveNav('Resume Reality Check');
-        window.location.hash = '#dashboard/reality-check';
-        window.scrollTo({ top: 0, behavior: 'smooth' });
-      },
-    },
-    {
-      label: 'Career Readiness Map',
-      icon: Compass,
-      id: 'career-readiness-map',
-      action: () => {
-        setActiveNav('Career Readiness Map');
-        window.location.hash = '#dashboard/readiness-map';
         window.scrollTo({ top: 0, behavior: 'smooth' });
       },
     },
@@ -778,54 +734,6 @@ export default function Dashboard({
               onStartInterview={onStartInterview}
               onViewReport={onViewReport}
               onNavigateToCompanies={onNavigateToCompanies}
-            />
-          ) : activeNav === 'Interview DNA' ? (
-            <InterviewDNAView
-              onStartInterview={(role) => {
-                if (onLaunchSession) {
-                  onLaunchSession({
-                    role: role || 'Software Engineer',
-                    company: 'Google',
-                    level: 'Mid Level',
-                    interviewType: 'Interview DNA Diagnostic',
-                    duration: '30 min',
-                  });
-                } else if (onStartInterview) {
-                  onStartInterview(role || 'Software Engineer');
-                }
-              }}
-            />
-          ) : activeNav === 'Resume Reality Check' ? (
-            <ResumeRealityCheckView
-              onStartInterview={(role) => {
-                if (onLaunchSession) {
-                  onLaunchSession({
-                    role: role || 'Software Engineer',
-                    company: 'Tech Company',
-                    level: 'Mid Level',
-                    interviewType: 'Resume-to-Interview Reality Check',
-                    duration: '30 min',
-                  });
-                } else if (onStartInterview) {
-                  onStartInterview(role || 'Software Engineer');
-                }
-              }}
-            />
-          ) : activeNav === 'Career Readiness Map' ? (
-            <CareerReadinessMapView
-              onStartInterview={(role) => {
-                if (onLaunchSession) {
-                  onLaunchSession({
-                    role: role || 'Software Development Engineer',
-                    company: 'Target Company',
-                    level: 'Mid Level',
-                    interviewType: 'Career Readiness Verification',
-                    duration: '30 min',
-                  });
-                } else if (onStartInterview) {
-                  onStartInterview(role || 'Software Development Engineer');
-                }
-              }}
             />
           ) : activeNav === 'Mock Interview' ? (
             <MockInterviewSetupPage
