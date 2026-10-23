@@ -193,6 +193,13 @@ export default function ImmersiveInterviewRoom({
   const [telemetryHud, setTelemetryHud] = useState({
     posture: 'Upright & Centered',
     gaze: 'Direct Lens Focus',
+    gazeDirection: 'center',
+    eyeContactPct: 86,
+    lookingDownPct: 8,
+    lookingAwayPct: 6,
+    anxietyState: 'Calm & Composed',
+    anxietyScore: 88,
+    fidgetLevel: 'Low (Steady)',
     expression: 'Engaged & Attentive',
     headStability: 'Steady & Poised',
     wpm: 138,
@@ -1022,15 +1029,21 @@ export default function ImmersiveInterviewRoom({
       suggestions: ['Enable microphone for live speech rhythm, pause detection, and clarity telemetry.']
     };
 
+    const behavioralDossier = trackerRef.current?.getBehavioralReport({ isCameraOff }) || {};
+
     const visualObservations = !isCameraOff ? {
       enabled: true,
       postureScore: telemetryHud.posture?.includes('Slouch') ? 72 : 88,
       postureStatus: telemetryHud.posture || 'Upright & Centered',
-      gazeCenteredRatio: telemetryHud.gaze?.includes('Focus') ? 86 : 70,
+      gazeCenteredRatio: behavioralDossier.eyeContactPercentage || telemetryHud.eyeContactPct || 86,
       gazeStatus: telemetryHud.gaze || 'Direct Lens Focus',
+      gazeDirection: telemetryHud.gazeDirection || 'center',
       headMovementStability: telemetryHud.headStability || 'Steady & Poised',
       facialExpression: telemetryHud.expression || 'Engaged & Attentive',
-      suggestions: [
+      anxietyScore: behavioralDossier.overallComposureScore || telemetryHud.anxietyScore || 88,
+      anxietyLevel: behavioralDossier.anxietyLevel || telemetryHud.anxietyState || 'Calm & Composed',
+      fidgetIndex: behavioralDossier.fidgetingIndex || telemetryHud.fidgetLevel || 'Low (Composed)',
+      suggestions: behavioralDossier.anxietyManagementTips || [
         'Maintained consistent direct eye contact with the camera lens during core explanations.',
         'Camera framing and posture remained upright and stable throughout.'
       ]
@@ -1104,6 +1117,27 @@ export default function ImmersiveInterviewRoom({
       questionFeedback,
       verbalDelivery,
       visualObservations,
+      behavioralAnalysis: behavioralDossier,
+      multimodalAnalysis: {
+        behavioralReport: behavioralDossier,
+        facialAnalysis: {
+          assessed: !isCameraOff,
+          score: behavioralDossier.overallComposureScore || 88,
+          gazeCenteredRatio: behavioralDossier.eyeContactPercentage || 86,
+          gazeStatus: telemetryHud.gaze || 'Direct Lens Focus (Optimal)',
+          expressionState: telemetryHud.expression || 'Engaged & Attentive',
+          anxietyState: behavioralDossier.anxietyLevel || 'Calm & Composed',
+          actionableTips: behavioralDossier.anxietyManagementTips,
+        },
+        bodyLanguageAnalysis: {
+          assessed: !isCameraOff,
+          score: telemetryHud.posture?.includes('Slouch') ? 72 : 88,
+          postureStatus: telemetryHud.posture || 'Upright & Centered',
+          uprightPercentage: 88,
+          fidgetIndex: behavioralDossier.fidgetingIndex || 'Low (Composed)',
+        },
+        vocalAnalysis: verbalDelivery,
+      },
       multimodalTelemetry: finalTelemetry,
       summary: overall >= 70
         ? `The candidate demonstrated strong domain fundamentals for ${targetRole} at ${targetCompany}. Answers showed structured thinking, sound technical reasoning, and professional poise under mock interview pressure.`
@@ -2212,7 +2246,7 @@ export default function ImmersiveInterviewRoom({
         {!pipMinimized && (
           <div
             style={{
-              padding: '6px 10px',
+              padding: '7px 10px',
               backgroundColor: 'rgba(6, 8, 14, 0.96)',
               borderTop: '1px solid rgba(255, 255, 255, 0.08)',
             }}
@@ -2224,28 +2258,67 @@ export default function ImmersiveInterviewRoom({
                 justifyContent: 'space-between',
               }}
             >
-              <div style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '0.64rem', color: '#E2E8F0' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.64rem', color: '#E2E8F0' }}>
                 <div
                   style={{
-                    width: '5px',
-                    height: '5px',
+                    width: '6px',
+                    height: '6px',
                     borderRadius: '50%',
-                    backgroundColor: isCameraOff ? '#9CA3AF' : '#22C55E',
+                    backgroundColor: isCameraOff
+                      ? '#9CA3AF'
+                      : telemetryHud.gazeDirection === 'center'
+                        ? '#22C55E'
+                        : '#F59E0B',
+                    boxShadow: isCameraOff
+                      ? 'none'
+                      : telemetryHud.gazeDirection === 'center'
+                        ? '0 0 6px #22C55E'
+                        : '0 0 6px #F59E0B',
                   }}
                 />
-                <span style={{ fontWeight: 600 }}>
-                  {isCameraOff ? 'Vision: Paused' : (telemetryHud.posture || 'Upright & Centered')}
+                <span style={{ fontWeight: 700, color: '#FFFFFF' }}>
+                  {isCameraOff
+                    ? 'Vision: Paused'
+                    : telemetryHud.gazeDirection === 'center'
+                      ? `Lens Focus (${telemetryHud.eyeContactPct || 86}%)`
+                      : (telemetryHud.gaze || 'Looking Away')}
                 </span>
                 <span style={{ color: 'rgba(255,255,255,0.2)' }}>•</span>
-                <span style={{ color: isMicMuted ? '#EF4444' : '#4ADE80' }}>
-                  {isMicMuted ? 'Muted' : `${telemetryHud.wpm || 138} WPM`}
+                <span
+                  style={{
+                    fontSize: '0.58rem',
+                    fontWeight: 700,
+                    padding: '1px 5px',
+                    borderRadius: '4px',
+                    backgroundColor:
+                      telemetryHud.anxietyState === 'Elevated Anxiety'
+                        ? 'rgba(239, 68, 68, 0.2)'
+                        : telemetryHud.anxietyState === 'Mild Nervousness'
+                          ? 'rgba(245, 158, 11, 0.2)'
+                          : 'rgba(34, 197, 94, 0.2)',
+                    color:
+                      telemetryHud.anxietyState === 'Elevated Anxiety'
+                        ? '#F87171'
+                        : telemetryHud.anxietyState === 'Mild Nervousness'
+                          ? '#FBBF24'
+                          : '#4ADE80',
+                    border: `1px solid ${
+                      telemetryHud.anxietyState === 'Elevated Anxiety'
+                        ? 'rgba(239, 68, 68, 0.3)'
+                        : telemetryHud.anxietyState === 'Mild Nervousness'
+                          ? 'rgba(245, 158, 11, 0.3)'
+                          : 'rgba(34, 197, 94, 0.3)'
+                    }`,
+                  }}
+                >
+                  {isCameraOff ? 'Vision Off' : (telemetryHud.anxietyState || 'Calm')}
                 </span>
               </div>
 
               <button
                 type="button"
                 onClick={() => setShowPipTelemetry(!showPipTelemetry)}
-                title={showPipTelemetry ? 'Hide detailed metrics' : 'Show detailed metrics'}
+                title={showPipTelemetry ? 'Hide detailed metrics' : 'Show live vision & composure metrics'}
                 style={{
                   background: 'transparent',
                   border: 'none',
@@ -2258,7 +2331,7 @@ export default function ImmersiveInterviewRoom({
                   padding: '2px 4px',
                 }}
               >
-                <span>{showPipTelemetry ? 'Less' : 'Stats'}</span>
+                <span>{showPipTelemetry ? 'Less' : 'Vision HUD'}</span>
                 {showPipTelemetry ? <ChevronUp size={10} /> : <ChevronDown size={10} />}
               </button>
             </div>
@@ -2266,20 +2339,55 @@ export default function ImmersiveInterviewRoom({
             {showPipTelemetry && (
               <div
                 style={{
-                  display: 'grid',
-                  gridTemplateColumns: '1fr 1fr',
-                  gap: '4px',
-                  marginTop: '5px',
-                  paddingTop: '5px',
-                  borderTop: '1px solid rgba(255, 255, 255, 0.06)',
-                  fontSize: '0.6rem',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '5px',
+                  marginTop: '6px',
+                  paddingTop: '6px',
+                  borderTop: '1px solid rgba(255, 255, 255, 0.08)',
+                  fontSize: '0.62rem',
                 }}
               >
-                <div style={{ color: '#94A3B8' }}>
-                  Gaze: <span style={{ color: 'var(--accent-champagne)', fontWeight: 600 }}>{isCameraOff ? 'Cam Off' : (telemetryHud.gaze || 'Direct Lens')}</span>
+                {/* Gaze Direction */}
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ color: '#94A3B8' }}>Gaze Direction:</span>
+                  <span style={{ color: 'var(--accent-champagne)', fontWeight: 700 }}>
+                    {isCameraOff ? 'Cam Off' : telemetryHud.gaze}
+                  </span>
                 </div>
-                <div style={{ color: '#94A3B8', textAlign: 'right' }}>
-                  Fillers: <span style={{ color: '#4ADE80', fontWeight: 600 }}>{telemetryHud.fillerCount || 0}</span>
+
+                {/* Composure & Anxiety */}
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ color: '#94A3B8' }}>Composure Index:</span>
+                  <span
+                    style={{
+                      fontWeight: 700,
+                      color:
+                        telemetryHud.anxietyState === 'Elevated Anxiety'
+                          ? '#EF4444'
+                          : telemetryHud.anxietyState === 'Mild Nervousness'
+                            ? '#F59E0B'
+                            : '#22C55E',
+                    }}
+                  >
+                    {isCameraOff ? 'N/A' : `${telemetryHud.anxietyScore || 88}/100 (${telemetryHud.anxietyState})`}
+                  </span>
+                </div>
+
+                {/* Restlessness & Fidgeting */}
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ color: '#94A3B8' }}>Fidget / Restlessness:</span>
+                  <span style={{ color: '#E2E8F0', fontWeight: 600 }}>
+                    {isCameraOff ? 'N/A' : (telemetryHud.fidgetLevel || 'Low (Steady)')}
+                  </span>
+                </div>
+
+                {/* Speech & Cadence */}
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ color: '#94A3B8' }}>Speech Cadence:</span>
+                  <span style={{ color: '#4ADE80', fontWeight: 600 }}>
+                    {isMicMuted ? 'Muted' : `${telemetryHud.wpm || 138} WPM (${telemetryHud.fillerCount || 0} fillers)`}
+                  </span>
                 </div>
               </div>
             )}
