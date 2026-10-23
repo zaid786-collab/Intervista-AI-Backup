@@ -154,6 +154,8 @@ export default function ImmersiveInterviewRoom({
   const [isCameraOff, setIsCameraOff] = useState(config?.isCameraActive === false);
   const [isScreenSharing, setIsScreenSharing] = useState(!!config?.isScreenShareActive);
   const [micVolume, setMicVolume] = useState(0);
+  const [isVoiceListening, setIsVoiceListening] = useState(false);
+  const [interimTranscript, setInterimTranscript] = useState('');
 
   // ─── UI Drawers & Overlays ──────────────────────────────────────────────────
   const [notesDrawerOpen, setNotesDrawerOpen] = useState(false);
