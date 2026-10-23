@@ -40,6 +40,10 @@ export function useSpeechRecognition({
   const currentSessionFinalRef = useRef('');
   const lastErrorRef = useRef(null);
   const isIntentionalRecordingRef = useRef(false);
+  const consecutiveNetworkErrorsRef = useRef(0);
+  const isChunkedModeRef = useRef(false);
+  const activeLangRef = useRef(initialLanguage || 'en-US');
+  const [isNetworkRestricted, setIsNetworkRestricted] = useState(false);
 
   // Synchronize base transcript ref when transcript is set manually
   useEffect(() => {
@@ -208,6 +212,11 @@ export function useSpeechRecognition({
       return false;
     }
 
+    // Stop if excessive network errors occur to prevent infinite console spam
+    if (consecutiveNetworkErrorsRef.current >= 3) {
+      return false;
+    }
+
     if (recognitionRef.current) {
       try {
         recognitionRef.current.onend = null;
@@ -218,19 +227,21 @@ export function useSpeechRecognition({
 
     try {
       const recognition = new SpeechRecognition();
-      recognition.continuous = true;
+      // If network errors occurred, switch from continuous to chunked/discrete mode
+      recognition.continuous = !isChunkedModeRef.current;
       recognition.interimResults = true;
-      recognition.lang = selectedLanguage || 'en-IN';
+      recognition.lang = activeLangRef.current || selectedLanguage || 'en-US';
 
       recognition.onstart = () => {
         setIsListening(true);
         setMicState('listening');
         setError(null);
         lastErrorRef.current = null;
+        consecutiveNetworkErrorsRef.current = 0;
       };
 
       recognition.onresult = (event) => {
-        lastErrorRef.current = null;
+        consecutiveNetworkErrorsRef.current = 0;
         let currentFinal = '';
         let currentInterim = '';
 
@@ -259,18 +270,30 @@ export function useSpeechRecognition({
 
       recognition.onerror = (err) => {
         lastErrorRef.current = err.error;
-        if (err.error !== 'no-speech' && err.error !== 'aborted') {
-          console.warn('[useSpeechRecognition] status:', err.error);
-        }
 
         if (err.error === 'not-allowed' || err.error === 'service-not-allowed') {
           setError('Microphone access blocked. Please enable microphone permissions in your browser.');
           setMicState('error');
         } else if (err.error === 'language-not-supported' && selectedLanguage !== 'en-US') {
+          activeLangRef.current = 'en-US';
           setSelectedLanguage('en-US');
         } else if (err.error === 'network') {
-          // Keep transcript intact on network hiccup
-          console.info('[useSpeechRecognition] Network latency encountered; maintaining transcript state.');
+          consecutiveNetworkErrorsRef.current += 1;
+          const count = consecutiveNetworkErrorsRef.current;
+
+          if (count === 1) {
+            // First drop: switch to chunked mode (avoids Google WebSocket continuous drops)
+            isChunkedModeRef.current = true;
+            if (activeLangRef.current === 'en-IN') {
+              activeLangRef.current = 'en-US';
+            }
+          } else if (count >= 3) {
+            // Do not loop endlessly
+            setIsNetworkRestricted(true);
+            console.info('[useSpeechRecognition] Browser speech recognition service unavailable (network). Audio stream is active.');
+          }
+        } else if (err.error !== 'no-speech' && err.error !== 'aborted') {
+          console.warn('[useSpeechRecognition] status:', err.error);
         }
       };
 
@@ -280,15 +303,15 @@ export function useSpeechRecognition({
           baseTranscriptRef.current = currentSessionFinalRef.current;
         }
 
-        // Restart recognition automatically while candidate intentionally has mic active
-        if (isIntentionalRecordingRef.current) {
-          const backoff = lastErrorRef.current === 'network' ? 2500 : 200;
+        // Restart recognition automatically while candidate intentionally has mic active (max 3 retries on network error)
+        if (isIntentionalRecordingRef.current && consecutiveNetworkErrorsRef.current < 3) {
+          const backoff = lastErrorRef.current === 'network' ? 1200 : 160;
           restartTimeoutRef.current = setTimeout(() => {
-            if (isIntentionalRecordingRef.current) {
+            if (isIntentionalRecordingRef.current && consecutiveNetworkErrorsRef.current < 3) {
               startSpeechEngine();
             }
           }, backoff);
-        } else {
+        } else if (!isIntentionalRecordingRef.current) {
           setIsListening(false);
           setMicState('transcript_ready');
         }
@@ -310,6 +333,9 @@ export function useSpeechRecognition({
     setError(null);
     setMicState('requesting_permission');
     isIntentionalRecordingRef.current = true;
+    consecutiveNetworkErrorsRef.current = 0;
+    isChunkedModeRef.current = false;
+    activeLangRef.current = selectedLanguage || 'en-US';
 
     try {
       // 1. Acquire Media Stream
@@ -350,7 +376,7 @@ export function useSpeechRecognition({
         setError('Could not initialize microphone. Please check your system audio settings.');
       }
     }
-  }, [acquireAudioStream, setupAudioAnalyser, setupMediaRecorder, startSpeechEngine]);
+  }, [acquireAudioStream, setupAudioAnalyser, setupMediaRecorder, startSpeechEngine, selectedLanguage]);
 
   // ─── Stop Recording (Action) ───────────────────────────────────────────────
   const stopRecording = useCallback(async () => {
@@ -377,7 +403,7 @@ export function useSpeechRecognition({
       recognitionRef.current = null;
     }
 
-    // Finalize MediaRecorder & check if server fallback transcription is needed
+    // Finalize MediaRecorder & collect audio chunks
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
       try {
         mediaRecorderRef.current.stop();
@@ -396,11 +422,35 @@ export function useSpeechRecognition({
       setTranscript(currentSessionFinalRef.current);
       baseTranscriptRef.current = currentSessionFinalRef.current;
     }
+
+    // If Web Speech produced no text, attempt server-backed audio transcription fallback
+    if (!currentSessionFinalRef.current.trim() && audioChunksRef.current.length > 0) {
+      try {
+        const mime = mediaRecorderRef.current?.mimeType || 'audio/webm';
+        const audioBlob = new Blob(audioChunksRef.current, { type: mime });
+        if (audioBlob.size > 2000) {
+          const sttRes = await apiTranscribeAudio({
+            audioBlob,
+            language: selectedLanguage,
+            sessionId,
+            questionId,
+          });
+          if (sttRes?.success && sttRes.transcript) {
+            setTranscript(sttRes.transcript);
+            baseTranscriptRef.current = sttRes.transcript;
+            currentSessionFinalRef.current = sttRes.transcript;
+          }
+        }
+      } catch (err) {
+        console.warn('[useSpeechRecognition] Server transcription fallback error:', err);
+      }
+    }
+
     setInterimTranscript('');
     setIsListening(false);
     setIsCandidateSpeaking(false);
     setMicState('transcript_ready');
-  }, []);
+  }, [selectedLanguage, sessionId, questionId]);
 
   // ─── Toggle Recording ──────────────────────────────────────────────────────
   const toggleRecording = useCallback(() => {
@@ -503,6 +553,7 @@ export function useSpeechRecognition({
     error,
     isCandidateSpeaking,
     isSupported,
+    isNetworkRestricted,
     startRecording,
     stopRecording,
     toggleRecording,

@@ -320,96 +320,13 @@ export default function ImmersiveInterviewRoom({
           }
         }
 
-        // Start Audio Stream & Analyzer with multi-tiered fallback
-        let audStream = null;
-        if (config?.selectedMicId) {
-          try {
-            audStream = await navigator.mediaDevices.getUserMedia({
-              audio: {
-                deviceId: { exact: config.selectedMicId },
-                echoCancellation: true,
-                noiseSuppression: true,
-                autoGainControl: true,
-              },
-            });
-          } catch (e) {
-            console.warn('Exact mic deviceId failed, attempting fallback audio constraints:', e);
-          }
-        }
-
-        if (!audStream) {
-          try {
-            audStream = await navigator.mediaDevices.getUserMedia({
-              audio: {
-                echoCancellation: true,
-                noiseSuppression: true,
-                autoGainControl: true,
-              },
-            });
-          } catch (e) {
-            console.warn('Advanced audio constraints failed, trying basic audio: true:', e);
-            try {
-              audStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            } catch (err2) {
-              console.error('All microphone getUserMedia attempts failed:', err2);
-              setMicPermissionError('Microphone permission blocked or device not found. Please click "Allow Mic Access" below.');
-            }
-          }
-        }
-
-        if (audStream) {
-          micStreamRef.current = audStream;
-          setMicPermissionError(null);
-
-          const AudioCtx = window.AudioContext || window.webkitAudioContext;
-          if (AudioCtx) {
-            const ctx = audioContextRef.current || new AudioCtx();
-            audioContextRef.current = ctx;
-            if (ctx.state === 'suspended') {
-              ctx.resume().catch(() => {});
-            }
-            const analyser = ctx.createAnalyser();
-            analyser.fftSize = 256;
-            analyser.smoothingTimeConstant = 0.8;
-            analyserRef.current = analyser;
-
-            const source = ctx.createMediaStreamSource(audStream);
-            source.connect(analyser);
-
-            if (trackerRef.current) {
-              trackerRef.current.startAudio(analyser);
-            }
-
-            const bufferLength = analyser.frequencyBinCount;
-            const dataArray = new Uint8Array(bufferLength);
-
-            const trackVolume = () => {
-              if (!analyserRef.current) return;
-              analyserRef.current.getByteFrequencyData(dataArray);
-
-              let sum = 0;
-              for (let i = 0; i < bufferLength; i++) {
-                sum += dataArray[i];
-              }
-              const avg = sum / bufferLength;
-              const vol = Math.min(100, Math.round((avg / 128) * 100));
-              setMicVolume(vol);
-
-              // Update candidate speaking state if sound is detected and mic isn't muted
-              if (vol > 15 && !isMicMutedRef.current) {
-                setIsCandidateSpeaking(true);
-              } else {
-                setIsCandidateSpeaking(false);
-              }
-
-              animFrameRef.current = requestAnimationFrame(trackVolume);
-            };
-            trackVolume();
-          }
+        // Audio stream is cleanly managed by useSpeechRecognition hook to prevent hardware device contention
+        if (!isMicMutedRef.current) {
+          speech.startRecording().catch(() => {});
         }
       }
     } catch (err) {
-      console.warn('Failed to start camera or microphone streams:', err);
+      console.warn('Failed to start camera or media hardware:', err);
     }
   };
 
@@ -2986,6 +2903,25 @@ export default function ImmersiveInterviewRoom({
               >
                 Allow Mic Access
               </button>
+            </div>
+          )}
+
+          {/* Speech Service Latency / Network Fallback Notice */}
+          {speech.isNetworkRestricted && !candidateAnswer && (
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                backgroundColor: 'rgba(234, 179, 8, 0.12)',
+                border: '1px solid rgba(234, 179, 8, 0.35)',
+                borderRadius: '8px',
+                padding: '0.3rem 0.65rem',
+                fontSize: '0.72rem',
+                color: '#FDE047',
+              }}
+            >
+              <span>🎙️ Browser cloud speech service latency detected. Audio is recorded directly; you can also type your answer anytime.</span>
             </div>
           )}
 
