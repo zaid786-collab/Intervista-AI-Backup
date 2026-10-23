@@ -36,6 +36,21 @@ class ResendOTPRequest(BaseModel):
     email: EmailStr
 
 
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+
+class ResetPasswordRequest(BaseModel):
+    email: EmailStr
+    code: str = Field(min_length=6, max_length=6)
+    new_password: str = Field(min_length=6, max_length=128)
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str = Field(min_length=6, max_length=128)
+
+
 # ---------- Users ----------
 
 class UserOut(BaseModel):
@@ -196,7 +211,8 @@ class TopicOut(BaseModel):
 
 
 class ToggleSolvedRequest(BaseModel):
-    title: str
+    title: Optional[str] = None
+    resource_id: Optional[Union[int, str]] = None
 
 
 class ToggleSolvedResponse(BaseModel):

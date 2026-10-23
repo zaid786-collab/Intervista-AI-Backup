@@ -7,14 +7,21 @@ from app import models
 from app.auth import decode_access_token
 from app.database import get_db
 
-MASTER_ADMIN_EMAIL = "zaidkhan24082006@gmail.com"
+import os
+
+MASTER_ADMIN_EMAILS = [
+    e.lower().strip()
+    for e in os.getenv("MASTER_ADMIN_EMAILS", "zaidkhan24082006@gmail.com,admin@intervista.ai").split(",")
+    if e.strip()
+]
+MASTER_ADMIN_EMAIL = MASTER_ADMIN_EMAILS[0]
 
 
 def is_master_admin_email(email: Optional[str]) -> bool:
-    """Case-insensitive, stripped check against the sole master admin email."""
+    """Case-insensitive, stripped check against designated master admin emails."""
     if not email:
         return False
-    return email.lower().strip() == MASTER_ADMIN_EMAIL.lower()
+    return email.lower().strip() in MASTER_ADMIN_EMAILS
 
 
 bearer_scheme = HTTPBearer(auto_error=False)

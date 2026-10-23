@@ -292,11 +292,12 @@ def toggle_solved_resource(
     db: Session = Depends(get_db),
 ):
     """Toggle a resource/problem as solved or unsolved for current user."""
+    resolved_title = body.title or (f"Resource #{body.resource_id}" if body.resource_id is not None else "Untitled")
     existing = (
         db.query(models.UserSolvedResource)
         .filter(
             models.UserSolvedResource.user_id == current_user.id,
-            models.UserSolvedResource.resource_title == body.title,
+            models.UserSolvedResource.resource_title == resolved_title,
         )
         .first()
     )
@@ -308,7 +309,7 @@ def toggle_solved_resource(
     else:
         new_solved = models.UserSolvedResource(
             user_id=current_user.id,
-            resource_title=body.title,
+            resource_title=resolved_title,
         )
         db.add(new_solved)
         db.commit()
@@ -322,7 +323,7 @@ def toggle_solved_resource(
     solved_titles = [s[0] for s in all_solved]
 
     return {
-        "title": body.title,
+        "title": resolved_title,
         "is_solved": is_solved,
         "solved_titles": solved_titles,
     }

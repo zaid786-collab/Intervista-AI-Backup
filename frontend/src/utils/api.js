@@ -35,6 +35,13 @@ import {
   adminGetUser,
   adminUpdateUser,
   adminDeleteUser,
+  adminGetMetrics,
+  adminListInterviews,
+  changePassword,
+  deleteMyAccount,
+  forgotPassword,
+  resetPassword,
+  fetchInterviewById,
 } from '../api';
 
 // Export everything from root api.js for complete backwards compatibility
@@ -63,6 +70,13 @@ export {
   adminGetUser,
   adminUpdateUser,
   adminDeleteUser,
+  adminGetMetrics,
+  adminListInterviews,
+  changePassword,
+  deleteMyAccount,
+  forgotPassword,
+  resetPassword,
+  fetchInterviewById,
 };
 
 const BASE_URL = getApiBaseUrl();
@@ -109,7 +123,12 @@ async function request(method, path, body = null) {
   const data = await res.json().catch(() => ({}));
 
   if (!res.ok) {
-    throw new Error(data.detail || data.error || `Request failed (${res.status})`);
+    const errorMsg = data.detail || data.error || `Request failed (${res.status})`;
+    const err = new Error(errorMsg);
+    err.status = res.status;
+    err.isHttpError = true;
+    err.data = data;
+    throw err;
   }
   return data;
 }
@@ -133,8 +152,12 @@ export async function apiRegister({ name, email, password }) {
     localStorage.setItem('intervista_current_user', JSON.stringify(user));
     return user;
   } catch (err) {
-    // Backend unreachable — fall back to client-side localStorage auth
-    console.warn('[apiRegister] Backend unavailable, using local auth:', err.message);
+    if (err.isHttpError) {
+      // Intentional backend HTTP validation/rejection - propagate directly to UI
+      throw err;
+    }
+    // Network/backend unreachable — fall back to client-side localStorage auth
+    console.warn('[apiRegister] Backend offline, using local auth:', err.message);
     const localUser = await registerUser({ name: cleanName, email: cleanEmail, password });
     if (localUser.token) {
       setToken(localUser.token);
@@ -155,8 +178,12 @@ export async function apiLogin({ email, password }) {
     localStorage.setItem('intervista_current_user', JSON.stringify(user));
     return user;
   } catch (err) {
-    // Backend unreachable — fall back to client-side localStorage auth
-    console.warn('[apiLogin] Backend unavailable, using local auth:', err.message);
+    if (err.isHttpError) {
+      // Intentional backend HTTP rejection (401 invalid creds, 403 disabled) - propagate directly
+      throw err;
+    }
+    // Network/backend unreachable — fall back to client-side localStorage auth
+    console.warn('[apiLogin] Backend offline, using local auth:', err.message);
     const localUser = await loginUser({ email: cleanEmail, password });
     if (localUser.token) {
       setToken(localUser.token);
@@ -712,6 +739,52 @@ export async function apiSaveReport(reportPayload) {
 }
 
 export async function apiGetReports() {
+  try {
+    const res = await request('GET', '/api/interviews/history');
+    if (res?.interviews && Array.isArray(res.interviews) && res.interviews.length > 0) {
+      return res.interviews.map((item) => {
+        const raw = item.raw_report || {};
+        const det = item.details || {};
+        const scoreVal = item.score ?? raw.overallScore ?? 80;
+        const scores = det.scores || raw.scores || {
+          communication: item.communication_score || scoreVal,
+          technicalDepth: item.technical_score || scoreVal,
+          problemSolving: item.problem_solving_score || scoreVal,
+          confidence: Math.max(50, scoreVal - 4),
+        };
+        return {
+          id: item.id,
+          sessionId: raw.id || item.id,
+          role: item.role,
+          company: item.company,
+          overallScore: scoreVal,
+          score: scoreVal,
+          scores,
+          criterionScores: raw.criterionScores || {
+            technicalKnowledge: scores.technicalDepth || scoreVal,
+            problemSolving: scores.problemSolving || scoreVal,
+            communication: scores.communication || scoreVal,
+            confidence: scores.confidence || 75,
+          },
+          criterionWeights: raw.criterionWeights,
+          strengths: det.strengths || raw.strengths || [],
+          improvements: det.improvements || raw.improvements || [],
+          questionFeedback: raw.questionFeedback || [],
+          missing_concepts: det.missing_concepts || raw.missing_concepts || [],
+          summary: raw.summary || det.efficiencyNotes || 'Interview completed.',
+          verbalDelivery: raw.verbalDelivery,
+          visualObservations: raw.visualObservations,
+          vision_data: raw.vision_data,
+          createdAt: item.date || item.created_at || new Date().toISOString(),
+          status: item.status || 'Completed',
+          raw_report: raw,
+        };
+      });
+    }
+  } catch (err) {
+    console.warn('[apiGetReports] Backend lookup failed, falling back to local cache:', err.message);
+  }
+
   const local = getLocalReports();
   const dashData = getLocalDashboardData();
   const recent = dashData?.recent_interviews || [];
@@ -761,10 +834,32 @@ export async function apiGetInterviewHistory() {
   }
 }
 
-
 export async function apiGetReport(reportId) {
+  // 1. First attempt to fetch the specific interview directly from the backend database
+  try {
+    const rawId = String(reportId).replace(/^(mock-|int_|rep_)/, '');
+    const data = await request('GET', `/api/interviews/${rawId}`);
+    if (data?.raw_report) return data.raw_report;
+    if (data?.details) {
+      return {
+        id: data.id,
+        role: data.role,
+        company: data.company,
+        overallScore: data.score,
+        score: data.score,
+        scores: data.details.scores,
+        strengths: data.details.strengths,
+        improvements: data.details.improvements,
+        questionFeedback: data.raw_report?.questionFeedback || [],
+        summary: data.details.efficiencyNotes || 'Evaluation completed.',
+      };
+    }
+  } catch (_) {
+    // If specific endpoint lookup fails, fallback to reports list
+  }
+
   const reports = await apiGetReports();
-  const found = reports.find((r) => String(r.id) === String(reportId));
+  const found = reports.find((r) => String(r.id) === String(reportId) || String(r.sessionId) === String(reportId));
   if (found) return found;
 
   // Fallback sample report
@@ -799,14 +894,20 @@ export async function apiGetSessions() {
   const reports = await apiGetReports();
   return {
     sessions: reports.map((r) => ({
-      sessionId: r.id,
+      sessionId: r.sessionId || r.id,
       id: r.id,
       role: r.role,
       company: r.company,
       score: r.overallScore ?? r.score ?? 85,
-      date: r.createdAt ? new Date(r.createdAt).toLocaleDateString() : 'Recent',
-      duration: '30 min',
-      status: 'Completed',
+      date: r.createdAt ? (typeof r.createdAt === 'string' && r.createdAt.includes('T') ? new Date(r.createdAt).toLocaleDateString() : r.createdAt) : 'Recent',
+      duration: r.duration || '30 min',
+      status: r.status || 'Completed',
+      details: {
+        scores: r.scores,
+        strengths: r.strengths,
+        improvements: r.improvements,
+        questionFeedback: r.questionFeedback,
+      },
     })),
   };
 }

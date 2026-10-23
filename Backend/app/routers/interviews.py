@@ -1583,6 +1583,152 @@ def get_interview_history(
         resources=resources_items,
         faqs=[],
     )
+@router.get("/{interview_id}", response_model=schemas.InterviewHistoryItem)
+def get_interview_by_id(
+    interview_id: str,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Retrieve an individual interview session and full evaluation report by ID.
+    Enforces user data isolation (only owner or admin can access).
+    """
+    raw_id = interview_id
+    for prefix in ["mock-", "int_", "rep_"]:
+        if raw_id.startswith(prefix):
+            raw_id = raw_id[len(prefix):]
+            break
+    try:
+        int_id = int(raw_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid interview ID format.")
+
+    interview = db.query(models.Interview).filter(models.Interview.id == int_id).first()
+    if not interview:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Interview not found.")
+
+    if interview.user_id != current_user.id and not current_user.is_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to view this interview report.",
+        )
+
+    # Parse report_data
+    rep_data = {}
+    if interview.report_data:
+        try:
+            rep_data = json.loads(interview.report_data)
+        except Exception:
+            rep_data = {}
+
+    score_num = (
+        interview.score_num
+        if interview.score_num is not None
+        else int(str(interview.score or "0").replace("%", "").strip() or 0)
+    )
+
+    tech_score = interview.technical_score if interview.technical_score is not None else score_num
+    comm_score = interview.communication_score if interview.communication_score is not None else score_num
+    prob_score = interview.problem_solving_score if interview.problem_solving_score is not None else score_num
+    conf_score = max(50, min(100, comm_score - 4))
+
+    eff_val = min(100, max(50, round((tech_score * 0.4) + (prob_score * 0.4) + (comm_score * 0.2))))
+    if eff_val >= 90:
+        eff_grade = "Exceptional Execution"
+    elif eff_val >= 85:
+        eff_grade = "High Speed & Precision"
+    elif eff_val >= 75:
+        eff_grade = "Strong Delivery"
+    elif eff_val >= 60:
+        eff_grade = "Pragmatic & Structured"
+    else:
+        eff_grade = "Needs Focused Practice"
+
+    detailed_feedback = rep_data.get("detailed_feedback") or []
+    strengths = rep_data.get("strengths") or (
+        ["Demonstrated solid core technical understanding and clear articulation."]
+        if score_num >= 60
+        else ["Attempted interview prompts with foundational engineering awareness."]
+    )
+    improvements = rep_data.get("improvements") or [
+        "Proactively state Big-O runtime and space complexity before writing pseudocode.",
+        "Discuss production error handling and automated rollback strategies.",
+    ]
+    missing_concepts = rep_data.get("missing_concepts") or []
+
+    dur_mins = interview.duration_minutes or 45
+    track_domain = rep_data.get("domain") or rep_data.get("interview_type") or interview.role or "Software Engineering"
+
+    raw_report = {
+        "id": f"int_{interview.id}",
+        "interview_id": interview.id,
+        "role": interview.role,
+        "company": interview.company,
+        "level": rep_data.get("difficulty") or "Medium",
+        "overallScore": score_num,
+        "score": score_num,
+        "scores": {
+            "communication": comm_score,
+            "technicalDepth": tech_score,
+            "problemSolving": prob_score,
+            "confidence": conf_score,
+        },
+        "criterionScores": {
+            "technicalKnowledge": tech_score,
+            "problemSolving": prob_score,
+            "communication": comm_score,
+            "confidence": conf_score,
+        },
+        "strengths": strengths,
+        "improvements": improvements,
+        "missing_concepts": missing_concepts,
+        "questionFeedback": [
+            {
+                "question": qf.get("question", "Interview Question"),
+                "candidateAnswer": qf.get("candidate_answer", ""),
+                "feedback": qf.get("feedback", ""),
+                "score": qf.get("score", 0),
+                "status": qf.get("status", "CORRECT"),
+                "suggested_answer_points": qf.get("suggested_answer_points", []),
+                "missing_concepts": qf.get("missing_concepts", []),
+                "identified_keywords": qf.get("identified_keywords", []),
+            }
+            for qf in detailed_feedback
+        ],
+        "vision_data": rep_data.get("vision_data") or (json.loads(interview.vision_data) if getattr(interview, "vision_data", None) else None),
+        "visualObservations": rep_data.get("vision_data") or (json.loads(interview.vision_data) if getattr(interview, "vision_data", None) else None),
+        "verbalDelivery": rep_data.get("audioTelemetry"),
+        "summary": interview.feedback or "Mock interview evaluation completed.",
+    }
+
+    return schemas.InterviewHistoryItem(
+        id=f"mock-{interview.id}",
+        type="mock",
+        company=interview.company,
+        role=interview.role,
+        track=track_domain,
+        date=interview.date or (interview.created_at.strftime("%d %b %Y") if interview.created_at else datetime.now().strftime("%d %b %Y")),
+        duration=f"{dur_mins} mins",
+        score=score_num,
+        efficiency=eff_val,
+        efficiencyGrade=eff_grade,
+        status=interview.status or "Completed",
+        details=schemas.HistoryItemDetails(
+            scores=schemas.HistoryItemScores(
+                communication=comm_score,
+                technicalDepth=tech_score,
+                problemSolving=prob_score,
+                confidence=conf_score,
+            ),
+            strengths=strengths,
+            improvements=improvements,
+            efficiencyNotes=f"Evaluated {len(detailed_feedback)} prompts in ~{dur_mins}m. Score: {score_num}%.",
+            detailed_feedback=detailed_feedback,
+            missing_concepts=missing_concepts,
+        ),
+        created_at=interview.created_at.isoformat() if interview.created_at else None,
+        raw_report=raw_report,
+    )
 
 
 @router.get("/{interview_id}/pdf")

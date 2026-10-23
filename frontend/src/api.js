@@ -179,6 +179,47 @@ export function adminDeleteUser(userId) {
   return request(`/api/admin/users/${userId}`, { method: "DELETE", auth: true });
 }
 
+export function adminGetMetrics() {
+  return request("/api/admin/metrics", { auth: true });
+}
+
+export function adminListInterviews(params = {}) {
+  const query = new URLSearchParams();
+  if (params.status) query.set("status", params.status);
+  if (params.limit) query.set("limit", String(params.limit));
+  if (params.offset) query.set("offset", String(params.offset));
+  const qStr = query.toString();
+  return request(`/api/admin/interviews${qStr ? `?${qStr}` : ""}`, { auth: true });
+}
+
+export function changePassword({ currentPassword, newPassword }) {
+  return request("/api/users/change-password", {
+    method: "POST",
+    auth: true,
+    body: { current_password: currentPassword, new_password: newPassword },
+  });
+}
+
+export function deleteMyAccount() {
+  return request("/api/users/me", { method: "DELETE", auth: true });
+}
+
+export function forgotPassword(email) {
+  return request("/api/auth/forgot-password", { method: "POST", body: { email } });
+}
+
+export function resetPassword({ email, code, newPassword }) {
+  return request("/api/auth/reset-password", {
+    method: "POST",
+    body: { email, code, new_password: newPassword },
+  });
+}
+
+export function fetchInterviewById(interviewId) {
+  const cleanId = String(interviewId).replace(/^(mock-|int_|rep_)/, "");
+  return request(`/api/interviews/${cleanId}`, { auth: true });
+}
+
 // ---------- Dashboard & Offline Sync ----------
 
 const DASHBOARD_STORAGE_KEY = "intervista_local_dashboard_v2";

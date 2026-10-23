@@ -35,6 +35,7 @@ import {
   LEETCODE_DSA_QUESTIONS,
 } from '../data/dsaQuestions';
 import { apiAnalyzeResume, apiGetSampleResumeAnalysis } from '../utils/api';
+import { fetchSolvedResources, toggleSolvedResource } from '../api';
 
 const STORAGE_KEY = 'intervista_dsa_solved_v1';
 
@@ -230,7 +231,7 @@ export default function CareerPrepDSAPage({ onStartInterview, onBackToOverview }
     }
   };
 
-  // Load solved progress from localStorage
+  // Load solved progress from localStorage and database
   useEffect(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY);
@@ -238,18 +239,47 @@ export default function CareerPrepDSAPage({ onStartInterview, onBackToOverview }
         setSolvedMap(JSON.parse(saved));
       }
     } catch (e) {
-      console.warn('Could not load DSA progress:', e);
+      console.warn('Could not load local DSA progress:', e);
     }
+
+    // Sync with database if user is authenticated
+    fetchSolvedResources()
+      .then((res) => {
+        const list = Array.isArray(res) ? res : (res && Array.isArray(res.solved_resource_ids) ? res.solved_resource_ids : []);
+        if (list.length > 0) {
+          const map = {};
+          list.forEach((item) => {
+            map[item] = true;
+          });
+          // Also link title to ID and vice versa
+          LEETCODE_DSA_QUESTIONS.forEach((q) => {
+            if (map[q.title] || map[q.id]) {
+              map[q.id] = true;
+              map[q.title] = true;
+            }
+          });
+          setSolvedMap((prev) => ({ ...prev, ...map }));
+        }
+      })
+      .catch(() => {});
   }, []);
 
-  // Toggle solved status
-  const toggleSolved = (id) => {
+  // Toggle solved status locally and sync to database
+  const toggleSolved = (q) => {
+    const id = typeof q === 'object' && q !== null ? q.id : q;
+    const title = typeof q === 'object' && q !== null ? q.title : q;
     setSolvedMap((prev) => {
-      const updated = { ...prev, [id]: !prev[id] };
+      const isCurrentlySolved = !!(prev[id] || prev[title]);
+      const nextState = !isCurrentlySolved;
+      const updated = { ...prev, [id]: nextState, [title]: nextState };
       try {
         localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
       } catch (e) {}
       return updated;
+    });
+
+    toggleSolvedResource(title).catch((err) => {
+      console.warn('Failed to sync solved status to database:', err.message);
     });
   };
 

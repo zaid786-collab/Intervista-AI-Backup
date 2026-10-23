@@ -171,6 +171,54 @@ def resend_otp(payload: schemas.ResendOTPRequest, db: Session = Depends(get_db))
     return schemas.SignupResponse(message=msg, email=user.email)
 
 
+@router.post("/forgot-password", response_model=schemas.SignupResponse)
+def forgot_password(payload: schemas.ForgotPasswordRequest, db: Session = Depends(get_db)):
+    email = payload.email.lower().strip()
+    user = db.query(models.User).filter(models.User.email == email).first()
+    if not user:
+        # Prevent user enumeration by returning consistent success response
+        return schemas.SignupResponse(
+            message=f"If an account with {email} exists, a password reset code has been sent.",
+            email=email,
+        )
+
+    sent = issue_otp(user, db)
+    dev_hint = " (or 123456 in dev mode)" if is_dev_environment() else ""
+    msg = f"Password reset code sent to {user.email}." if sent else f"Reset code ready. Enter your code{dev_hint}."
+    return schemas.SignupResponse(message=msg, email=user.email)
+
+
+@router.post("/reset-password", response_model=schemas.TokenResponse)
+def reset_password(payload: schemas.ResetPasswordRequest, db: Session = Depends(get_db)):
+    email = payload.email.lower().strip()
+    user = db.query(models.User).filter(models.User.email == email).first()
+    if not user:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid reset code or email.")
+
+    otp = db.query(models.EmailVerificationOTP).filter(
+        models.EmailVerificationOTP.user_id == user.id
+    ).order_by(models.EmailVerificationOTP.created_at.desc()).first()
+
+    code_str = payload.code.strip()
+    is_valid_otp = otp and not otp_is_expired(otp) and otp.code_hash == hashlib.sha256(code_str.encode()).hexdigest()
+    is_dev_code = is_dev_environment() and (code_str in ["123456", "000000", "999999", "111111"])
+
+    if not is_valid_otp and not is_dev_code:
+        err_msg = "Invalid or expired reset code. Please check your email or try 123456." if is_dev_environment() else "Invalid or expired reset code."
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=err_msg)
+
+    # Securely hash and update the password
+    user.hashed_password = hash_password(payload.new_password)
+    user.is_active = True
+    db.query(models.EmailVerificationOTP).filter(models.EmailVerificationOTP.user_id == user.id).delete()
+    db.commit()
+    db.refresh(user)
+
+    token = create_access_token(subject=str(user.id))
+    return schemas.TokenResponse(access_token=token, user=user)
+
+
+
 @router.post("/login", response_model=schemas.TokenResponse)
 def login(
     payload: schemas.LoginRequest,

@@ -23,7 +23,7 @@ import {
   Zap,
 } from 'lucide-react';
 import { getCurrentUser } from '../utils/auth';
-import { apiGetMe, apiUpdateProfile } from '../utils/api';
+import { apiGetMe, apiUpdateProfile, fetchDashboardData, apiGetReports } from '../utils/api';
 
 export default function ProfilePage({
   currentUser,
@@ -35,6 +35,7 @@ export default function ProfilePage({
 }) {
   const [profileUser, setProfileUser] = useState(currentUser || getCurrentUser() || null);
   const [loadingProfile, setLoadingProfile] = useState(false);
+  const [dbReports, setDbReports] = useState([]);
 
   const user = profileUser || currentUser || getCurrentUser() || {
     name: 'Interview Candidate',
@@ -74,14 +75,31 @@ export default function ProfilePage({
   const [editedName, setEditedName] = useState(name);
   const [nameSaveNotice, setNameSaveNotice] = useState('');
 
-  // Fetch real profile from backend on mount
+  // Performance metrics dynamically populated from real database records
+  const [stats, setStats] = useState({
+    totalInterviews: 0,
+    avgScore: '0%',
+    bestScore: '0%',
+    practiceTime: '0 mins',
+    readiness: 75,
+  });
+
+  // Fetch real profile and dashboard metrics from backend on mount
   useEffect(() => {
     let active = true;
     async function loadLatestProfile() {
       try {
         setLoadingProfile(true);
-        const me = await apiGetMe();
-        if (active && me) {
+        const [meResult, dashResult, reportsResult] = await Promise.allSettled([
+          apiGetMe(),
+          fetchDashboardData(),
+          apiGetReports(),
+        ]);
+
+        if (!active) return;
+
+        if (meResult.status === 'fulfilled' && meResult.value) {
+          const me = meResult.value;
           setProfileUser(me);
           if (me.name) setEditedName(me.name);
           if (me.skills) {
@@ -95,8 +113,24 @@ export default function ProfilePage({
             }
           }
         }
+
+        if (dashResult.status === 'fulfilled' && dashResult.value?.metrics) {
+          const m = dashResult.value.metrics;
+          const avgNum = parseInt(m.avg_score, 10) || 0;
+          setStats({
+            totalInterviews: m.total_interviews ?? 0,
+            avgScore: m.avg_score || '0%',
+            bestScore: m.best_score || '0%',
+            practiceTime: m.practice_time || '0 mins',
+            readiness: avgNum > 0 ? Math.min(100, Math.round(avgNum * 0.95)) : 75,
+          });
+        }
+
+        if (reportsResult.status === 'fulfilled' && Array.isArray(reportsResult.value)) {
+          setDbReports(reportsResult.value);
+        }
       } catch (err) {
-        // Maintain local user data if offline
+        console.warn('Profile load exception:', err);
       } finally {
         if (active) setLoadingProfile(false);
       }
@@ -107,60 +141,22 @@ export default function ProfilePage({
     };
   }, []);
 
-  // Performance metrics (persisted in localStorage or default)
-  const [stats, setStats] = useState(() => {
-    try {
-      const saved = localStorage.getItem('intervista_profile_stats');
-      return saved
-        ? JSON.parse(saved)
-        : {
-            totalInterviews: 12,
-            avgScore: '86%',
-            bestScore: '94%',
-            practiceTime: '4.8 hrs',
-            readiness: 84,
-          };
-    } catch {
-      return {
-        totalInterviews: 12,
-        avgScore: '86%',
-        bestScore: '94%',
-        practiceTime: '4.8 hrs',
-        readiness: 84,
-      };
+  // Recent Mock Sessions bound to actual database reports
+  const recentSessions = useMemo(() => {
+    if (dbReports && dbReports.length > 0) {
+      return dbReports.slice(0, 5).map((r) => ({
+        id: r.id,
+        company: r.company || 'Intervista AI',
+        role: r.role || 'Software Engineer',
+        date: r.createdAt ? (typeof r.createdAt === 'string' && r.createdAt.includes('T') ? new Date(r.createdAt).toLocaleDateString() : r.createdAt) : 'Recently',
+        score: r.overallScore ?? r.score ?? 80,
+        level: r.level || 'Mid Level',
+        status: (r.overallScore ?? r.score ?? 80) >= 80 ? 'Outstanding' : 'Evaluated',
+        rawReport: r,
+      }));
     }
-  });
-
-  // Recent Mock Sessions
-  const recentSessions = [
-    {
-      id: 'sess-1',
-      company: 'Google',
-      role: 'Senior Software Engineer',
-      date: 'Yesterday, 4:20 PM',
-      score: 94,
-      level: 'Advanced',
-      status: 'Outstanding',
-    },
-    {
-      id: 'sess-2',
-      company: 'Microsoft',
-      role: 'Full Stack Engineer',
-      date: '18 Oct 2026',
-      score: 88,
-      level: 'Mid-Senior',
-      status: 'Passed',
-    },
-    {
-      id: 'sess-3',
-      company: 'Amazon',
-      role: 'System Architect',
-      date: '12 Oct 2026',
-      score: 82,
-      level: 'Advanced',
-      status: 'Needs Polish',
-    },
-  ];
+    return [];
+  }, [dbReports]);
 
   // Save skills to MongoDB & local state
   const handleAddSkill = async (e) => {
@@ -1159,56 +1155,85 @@ export default function ProfilePage({
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
-            {recentSessions.map((session) => (
+            {recentSessions.length === 0 ? (
               <div
-                key={session.id}
                 style={{
+                  textAlign: 'center',
+                  padding: '2.5rem 1.5rem',
                   backgroundColor: 'rgba(255, 255, 255, 0.02)',
-                  border: '1px solid var(--border-card)',
                   borderRadius: '14px',
-                  padding: '1.15rem 1.35rem',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  gap: '1rem',
-                  flexWrap: 'wrap',
+                  border: '1px dashed var(--border-card)',
                 }}
               >
-                <div style={{ minWidth: 0, flex: '1 1 200px' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.25rem', flexWrap: 'wrap' }}>
-                    <strong style={{ fontSize: '1.02rem', color: 'var(--text-primary)' }}>{session.company}</strong>
-                    <span style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)' }}>•</span>
-                    <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', overflowWrap: 'anywhere' }}>{session.role}</span>
-                  </div>
-                  <span style={{ fontSize: '0.78rem', color: 'var(--text-tertiary)' }}>{session.date}</span>
-                </div>
-
-                <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexShrink: 0 }}>
-                  <div style={{ textAlign: 'right' }}>
-                    <strong style={{ fontSize: '1.25rem', color: session.score >= 90 ? '#4ADE80' : 'var(--accent-gold)', display: 'block', lineHeight: 1.2 }}>
-                      {session.score}%
-                    </strong>
-                    <span style={{ fontSize: '0.72rem', color: 'var(--text-tertiary)' }}>{session.status}</span>
-                  </div>
-
-                  <button
-                    onClick={() => {
-                      if (onViewReport) {
-                        onViewReport({
-                          role: session.role,
-                          level: session.level,
-                          overallScore: session.score,
-                        });
-                      }
-                    }}
-                    className="btn-ghost-outline"
-                    style={{ padding: '0.45rem 0.85rem', fontSize: '0.78rem' }}
-                  >
-                    View Report
-                  </button>
-                </div>
+                <Sparkles size={24} color="var(--accent-gold)" style={{ marginBottom: '0.5rem' }} />
+                <h4 style={{ margin: '0 0 0.35rem', color: 'var(--text-primary)', fontSize: '1rem' }}>No Mock Interviews Yet</h4>
+                <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', margin: '0 0 1rem', maxWidth: '380px', marginInline: 'auto' }}>
+                  Take your first AI mock interview to generate personalized scorecards, delivery insights, and study roadmaps.
+                </p>
+                <button
+                  onClick={() => onStartInterview && onStartInterview()}
+                  className="btn-primary"
+                  style={{ padding: '0.5rem 1.25rem', fontSize: '0.85rem' }}
+                >
+                  Start Mock Interview
+                </button>
               </div>
-            ))}
+            ) : (
+              recentSessions.map((session) => (
+                <div
+                  key={session.id}
+                  style={{
+                    backgroundColor: 'rgba(255, 255, 255, 0.02)',
+                    border: '1px solid var(--border-card)',
+                    borderRadius: '14px',
+                    padding: '1.15rem 1.35rem',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: '1rem',
+                    flexWrap: 'wrap',
+                  }}
+                >
+                  <div style={{ minWidth: 0, flex: '1 1 200px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.25rem', flexWrap: 'wrap' }}>
+                      <strong style={{ fontSize: '1.02rem', color: 'var(--text-primary)' }}>{session.company}</strong>
+                      <span style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)' }}>•</span>
+                      <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', overflowWrap: 'anywhere' }}>{session.role}</span>
+                    </div>
+                    <span style={{ fontSize: '0.78rem', color: 'var(--text-tertiary)' }}>{session.date}</span>
+                  </div>
+
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexShrink: 0 }}>
+                    <div style={{ textAlign: 'right' }}>
+                      <strong style={{ fontSize: '1.25rem', color: session.score >= 90 ? '#4ADE80' : 'var(--accent-gold)', display: 'block', lineHeight: 1.2 }}>
+                        {session.score}%
+                      </strong>
+                      <span style={{ fontSize: '0.72rem', color: 'var(--text-tertiary)' }}>{session.status}</span>
+                    </div>
+
+                    <button
+                      onClick={() => {
+                        if (onViewReport) {
+                          onViewReport(
+                            session.rawReport || {
+                              id: session.id,
+                              role: session.role,
+                              company: session.company,
+                              level: session.level,
+                              overallScore: session.score,
+                            }
+                          );
+                        }
+                      }}
+                      className="btn-ghost-outline"
+                      style={{ padding: '0.45rem 0.85rem', fontSize: '0.78rem' }}
+                    >
+                      View Report
+                    </button>
+                  </div>
+                </div>
+              ))
+            )}
           </div>
         </section>
 

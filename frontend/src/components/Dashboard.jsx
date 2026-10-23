@@ -278,6 +278,54 @@ export default function Dashboard({
     loadReports();
   }, []);
 
+  const topicsToWorkOn = useMemo(() => {
+    if (!reports || reports.length === 0) return TOPICS_TO_WORK_ON;
+
+    let totalTech = 0, totalProb = 0, totalComm = 0, count = 0;
+    reports.forEach((r) => {
+      const s = r.scores || {};
+      const tech = s.technicalDepth || s.technicalKnowledge;
+      const prob = s.problemSolving;
+      const comm = s.communication;
+      if (tech || prob || comm) {
+        totalTech += (tech || r.overallScore || r.score || 75);
+        totalProb += (prob || r.overallScore || r.score || 75);
+        totalComm += (comm || r.overallScore || r.score || 75);
+        count++;
+      }
+    });
+
+    if (count === 0) return TOPICS_TO_WORK_ON;
+
+    const avgTech = Math.round(totalTech / count);
+    const avgProb = Math.round(totalProb / count);
+    const avgComm = Math.round(totalComm / count);
+
+    return [
+      {
+        id: 'tech-depth',
+        title: 'Technical depth',
+        percentage: avgTech,
+        description: avgTech < 70 ? 'Focus on system design and in-depth concepts.' : 'Solid mastery; continue exploring edge cases.',
+        icon: Code2,
+      },
+      {
+        id: 'prob-solving',
+        title: 'Problem solving',
+        percentage: avgProb,
+        description: avgProb < 70 ? 'Practice structured problem solving approaches.' : 'Strong algorithmic analysis demonstrated.',
+        icon: Lightbulb,
+      },
+      {
+        id: 'communication',
+        title: 'Communication',
+        percentage: avgComm,
+        description: avgComm < 70 ? 'Work on clarity, confidence and structured answers.' : 'Excellent articulation and structured delivery.',
+        icon: MessageSquare,
+      },
+    ];
+  }, [reports]);
+
   const handleDirectPdfDownload = async (e, report) => {
     e.stopPropagation();
     if (!report.id) return;
@@ -1626,7 +1674,7 @@ export default function Dashboard({
 
               {/* 3 Skill Cards */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', flex: 1, justifyContent: 'space-between' }}>
-                {TOPICS_TO_WORK_ON.map((topic) => {
+                {topicsToWorkOn.map((topic) => {
                   const Icon = topic.icon;
                   return (
                     <div

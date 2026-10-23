@@ -1,25 +1,47 @@
 import React, { useState } from 'react';
-import { X, Mail, Send, Check, MessageSquare } from 'lucide-react';
+import { X, Mail, Send, Check, MessageSquare, Loader2 } from 'lucide-react';
+import { submitFeedback } from '../api';
 
 export default function ContactModal({ isOpen, onClose }) {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [message, setMessage] = useState('');
   const [sent, setSent] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
 
   if (!isOpen) return null;
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!name || !email || !message) return;
-    setSent(true);
-    setTimeout(() => {
-      setSent(false);
-      setName('');
-      setEmail('');
-      setMessage('');
-      onClose();
-    }, 1500);
+    if (!name.trim() || !email.trim() || !message.trim()) {
+      setError('Please fill in all required fields.');
+      return;
+    }
+    setLoading(true);
+    setError('');
+    try {
+      await submitFeedback({
+        name: name.trim(),
+        email: email.trim(),
+        message: message.trim(),
+        feedback_type: 'General Contact / Inquiry',
+        rating: 5,
+        page_context: 'Contact Us Modal',
+      });
+      setSent(true);
+      setTimeout(() => {
+        setSent(false);
+        setName('');
+        setEmail('');
+        setMessage('');
+        onClose();
+      }, 1500);
+    } catch (err) {
+      setError(err.message || 'Failed to deliver your message. Please try again.');
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -155,22 +177,31 @@ export default function ContactModal({ isOpen, onClose }) {
               />
             </div>
 
+            {error && (
+              <div style={{ color: '#EF4444', fontSize: '0.85rem', backgroundColor: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.25)', padding: '0.5rem 0.75rem', borderRadius: '8px' }}>
+                {error}
+              </div>
+            )}
+
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem', marginTop: '0.5rem' }}>
               <button
                 type="button"
                 onClick={onClose}
                 className="btn-secondary"
+                disabled={loading}
                 style={{ padding: '0.65rem 1.25rem', fontSize: '0.85rem' }}
               >
                 Cancel
               </button>
               <button
                 type="submit"
+                disabled={loading}
                 className="btn-primary"
-                style={{ padding: '0.65rem 1.45rem', fontSize: '0.85rem' }}
+                style={{ padding: '0.65rem 1.45rem', fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '6px' }}
               >
-                <span>Send Message</span>
-                <Send size={14} />
+                {loading ? <Loader2 size={14} className="spin" /> : null}
+                <span>{loading ? 'Sending...' : 'Send Message'}</span>
+                {!loading && <Send size={14} />}
               </button>
             </div>
           </form>
