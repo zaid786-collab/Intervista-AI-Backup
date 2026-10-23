@@ -1,6 +1,8 @@
 // Central place for all calls to the Intervista AI backend.
 // Supports automatic fallback across 127.0.0.1, localhost, and Vite proxy.
 
+import { registerUser, loginUser } from './utils/auth';
+
 export const PRODUCTION_API_URL = "https://intervista-ai.onrender.com";
 export const LOCAL_API_URL = "http://127.0.0.1:8001";
 
@@ -96,12 +98,26 @@ async function request(path, { method = "GET", body, auth = false } = {}) {
 
 // ---------- Auth ----------
 
-export function signup({ name, email, password }) {
-  return request("/api/auth/signup", { method: "POST", body: { name, email, password } });
+export async function signup({ name, email, password }) {
+  try {
+    return await request("/api/auth/signup", { method: "POST", body: { name, email, password } });
+  } catch (err) {
+    // Backend unreachable — fall back to client-side localStorage auth
+    console.warn('[signup] Backend unavailable, using local auth:', err.message);
+    const localUser = await registerUser({ name, email, password });
+    return { user: localUser, access_token: localUser.token };
+  }
 }
 
-export function login({ email, password }) {
-  return request("/api/auth/login", { method: "POST", body: { email, password } });
+export async function login({ email, password }) {
+  try {
+    return await request("/api/auth/login", { method: "POST", body: { email, password } });
+  } catch (err) {
+    // Backend unreachable — fall back to client-side localStorage auth
+    console.warn('[login] Backend unavailable, using local auth:', err.message);
+    const localUser = await loginUser({ email, password });
+    return { user: localUser, access_token: localUser.token };
+  }
 }
 
 export function verifyEmail({ email, code }) {
@@ -124,8 +140,19 @@ export function callbackOAuth(provider, payload) {
   });
 }
 
-export function fetchCurrentUser() {
-  return request("/api/auth/me", { auth: true });
+export async function fetchCurrentUser() {
+  try {
+    return await request("/api/auth/me", { auth: true });
+  } catch (err) {
+    // Backend unreachable — return locally stored user if available
+    console.warn('[fetchCurrentUser] Backend unavailable, using local data:', err.message);
+    const raw = typeof localStorage !== "undefined" ? localStorage.getItem("intervista_current_user") : null;
+    if (raw) {
+      const localUser = JSON.parse(raw);
+      return { user: localUser };
+    }
+    throw err;
+  }
 }
 
 // ---------- Self-service user actions ----------

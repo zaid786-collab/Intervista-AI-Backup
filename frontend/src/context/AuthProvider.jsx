@@ -15,8 +15,12 @@ export function AuthProvider({ children }) {
     let isMounted = true;
 
     fetchCurrentUser()
-      .then((currentUser) => {
-        if (isMounted) setUser(currentUser);
+      .then((response) => {
+        if (isMounted) {
+          // Handle both { user: {...} } and direct user object shapes
+          const resolvedUser = response?.user || response;
+          setUser(resolvedUser);
+        }
       })
       .catch(() => {
         clearToken();

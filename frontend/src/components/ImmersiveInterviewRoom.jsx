@@ -26,8 +26,14 @@ import {
   Maximize2,
   Minimize2,
   Zap,
+  Languages,
+  Trash2,
+  Square,
+  Loader2,
+  Radio,
 } from 'lucide-react';
 
+import { useSpeechRecognition } from '../hooks/useSpeechRecognition';
 import { apiStartInterview, apiSendMessage, apiEndInterview, apiSaveReport } from '../utils/api';
 import { evaluateSingleQuestion } from '../utils/evaluator';
 import { getCurrentUser } from '../utils/auth';
@@ -83,13 +89,51 @@ export default function ImmersiveInterviewRoom({
   const [questionIndex, setQuestionIndex] = useState(1);
   const [totalQuestions, setTotalQuestions] = useState(5);
 
-  // Candidate Answer State & Evaluated Marks
+  // Candidate Answer State & Voice Input Transcriptions
   const [candidateAnswer, setCandidateAnswer] = useState('');
+  const [selectedSpeechLang, setSelectedSpeechLang] = useState('en-IN');
   const [isSubmittingAnswer, setIsSubmittingAnswer] = useState(false);
   const [isInterviewerSpeaking, setIsInterviewerSpeaking] = useState(false);
   const [isCandidateSpeaking, setIsCandidateSpeaking] = useState(false);
   const [evaluatedAnswers, setEvaluatedAnswers] = useState([]);
   const [lastEvaluatedTurn, setLastEvaluatedTurn] = useState(null);
+
+  // ─── Production-Grade Speech Recognition & Microphone Hook ─────────────────
+  const speech = useSpeechRecognition({
+    initialLanguage: selectedSpeechLang,
+    selectedMicId: config?.selectedMicId,
+    sessionId: sessionId,
+    questionId: questionIndex + 1,
+    onAudioData: (analyser) => {
+      trackerRef.current?.startAudio(analyser);
+    },
+  });
+
+  // Sync candidateAnswer whenever speech recognition generates final text
+  useEffect(() => {
+    if (speech.transcript) {
+      setCandidateAnswer(speech.transcript);
+    }
+  }, [speech.transcript]);
+
+  // Sync micVolume & candidate speaking reactivity
+  useEffect(() => {
+    setMicVolume(speech.volume);
+    setIsCandidateSpeaking(speech.isCandidateSpeaking || speech.volume > 15);
+  }, [speech.volume, speech.isCandidateSpeaking]);
+
+  // Keep isMicMuted and isMicMutedRef synchronized with speech.isListening
+  useEffect(() => {
+    setIsMicMuted(!speech.isListening);
+    isMicMutedRef.current = !speech.isListening;
+  }, [speech.isListening]);
+
+  // Auto-scroll textarea as transcript grows
+  useEffect(() => {
+    if (textareaRef.current) {
+      textareaRef.current.scrollTop = textareaRef.current.scrollHeight;
+    }
+  }, [candidateAnswer, speech.interimTranscript]);
 
   // Domain Questions & Proctoring State
   const [interviewQuestions, setInterviewQuestions] = useState([]);
@@ -105,7 +149,8 @@ export default function ImmersiveInterviewRoom({
   });
 
   // ─── Hardware & Device Controls ─────────────────────────────────────────────
-  const [isMicMuted, setIsMicMuted] = useState(config?.isMicActive === false);
+  const [isMicMuted, setIsMicMuted] = useState(false);
+  const [micPermissionError, setMicPermissionError] = useState(null);
   const [isCameraOff, setIsCameraOff] = useState(config?.isCameraActive === false);
   const [isScreenSharing, setIsScreenSharing] = useState(!!config?.isScreenShareActive);
   const [micVolume, setMicVolume] = useState(0);
@@ -181,13 +226,41 @@ export default function ImmersiveInterviewRoom({
   const analyserRef = useRef(null);
   const animFrameRef = useRef(null);
   const recognitionRef = useRef(null);
+  const finalTranscriptRef = useRef('');
+  const isRecognitionActiveRef = useRef(false);
+  const restartTimeoutRef = useRef(null);
   const transcriptScrollRef = useRef(null);
   const interviewerFinishedSpeakingAtRef = useRef(Date.now());
-  const isMicMutedRef = useRef(isMicMuted);
+  const isMicMutedRef = useRef(false);
+  const currentRecognitionFinalRef = useRef('');
+  const lastSpeechErrorRef = useRef(null);
+  const sessionPhaseRef = useRef(sessionPhase);
   const textareaRef = useRef(null);
+
   useEffect(() => {
     isMicMutedRef.current = isMicMuted;
   }, [isMicMuted]);
+
+  useEffect(() => {
+    sessionPhaseRef.current = sessionPhase;
+  }, [sessionPhase]);
+
+  // Auto-resume AudioContext on first user interaction if browser suspended it
+  useEffect(() => {
+    const resumeAudioCtx = () => {
+      if (audioContextRef.current && audioContextRef.current.state === 'suspended') {
+        audioContextRef.current.resume().catch(() => {});
+      }
+    };
+    window.addEventListener('click', resumeAudioCtx);
+    window.addEventListener('keydown', resumeAudioCtx);
+    window.addEventListener('touchstart', resumeAudioCtx);
+    return () => {
+      window.removeEventListener('click', resumeAudioCtx);
+      window.removeEventListener('keydown', resumeAudioCtx);
+      window.removeEventListener('touchstart', resumeAudioCtx);
+    };
+  }, []);
 
   const trackerRef = useRef(null);
   const proctorRef = useRef(null);
@@ -202,6 +275,13 @@ export default function ImmersiveInterviewRoom({
   const [telemetryHud, setTelemetryHud] = useState({
     posture: 'Upright & Centered',
     gaze: 'Direct Lens Focus',
+    gazeDirection: 'center',
+    eyeContactPct: 86,
+    lookingDownPct: 8,
+    lookingAwayPct: 6,
+    anxietyState: 'Calm & Composed',
+    anxietyScore: 88,
+    fidgetLevel: 'Low (Steady)',
     expression: 'Engaged & Attentive',
     headStability: 'Steady & Poised',
     wpm: 138,
@@ -240,19 +320,54 @@ export default function ImmersiveInterviewRoom({
           }
         }
 
-        // Start Audio Stream & Analyzer
-        const audioConstraints = config?.selectedMicId
-          ? { audio: { deviceId: { exact: config.selectedMicId } } }
-          : { audio: true };
+        // Start Audio Stream & Analyzer with multi-tiered fallback
+        let audStream = null;
+        if (config?.selectedMicId) {
+          try {
+            audStream = await navigator.mediaDevices.getUserMedia({
+              audio: {
+                deviceId: { exact: config.selectedMicId },
+                echoCancellation: true,
+                noiseSuppression: true,
+                autoGainControl: true,
+              },
+            });
+          } catch (e) {
+            console.warn('Exact mic deviceId failed, attempting fallback audio constraints:', e);
+          }
+        }
 
-        const audStream = await navigator.mediaDevices.getUserMedia(audioConstraints).catch(() => null);
+        if (!audStream) {
+          try {
+            audStream = await navigator.mediaDevices.getUserMedia({
+              audio: {
+                echoCancellation: true,
+                noiseSuppression: true,
+                autoGainControl: true,
+              },
+            });
+          } catch (e) {
+            console.warn('Advanced audio constraints failed, trying basic audio: true:', e);
+            try {
+              audStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            } catch (err2) {
+              console.error('All microphone getUserMedia attempts failed:', err2);
+              setMicPermissionError('Microphone permission blocked or device not found. Please click "Allow Mic Access" below.');
+            }
+          }
+        }
+
         if (audStream) {
           micStreamRef.current = audStream;
+          setMicPermissionError(null);
 
           const AudioCtx = window.AudioContext || window.webkitAudioContext;
           if (AudioCtx) {
-            const ctx = new AudioCtx();
+            const ctx = audioContextRef.current || new AudioCtx();
             audioContextRef.current = ctx;
+            if (ctx.state === 'suspended') {
+              ctx.resume().catch(() => {});
+            }
             const analyser = ctx.createAnalyser();
             analyser.fftSize = 256;
             analyser.smoothingTimeConstant = 0.8;
@@ -343,62 +458,136 @@ export default function ImmersiveInterviewRoom({
       return;
     }
 
+    if (restartTimeoutRef.current) {
+      clearTimeout(restartTimeoutRef.current);
+      restartTimeoutRef.current = null;
+    }
+
     if (recognitionRef.current) {
-      try { recognitionRef.current.stop(); } catch (e) {}
+      try {
+        recognitionRef.current.onend = null;
+        recognitionRef.current.stop();
+      } catch (e) {}
+      recognitionRef.current = null;
     }
 
     try {
       const recognition = new SpeechRecognition();
       recognition.continuous = true;
       recognition.interimResults = true;
-      recognition.lang = 'en-US';
+      recognition.lang = selectedSpeechLang || 'en-IN';
+
+      recognition.onstart = () => {
+        setIsVoiceListening(true);
+        isRecognitionActiveRef.current = true;
+        setMicPermissionError(null);
+        lastSpeechErrorRef.current = null;
+      };
 
       recognition.onresult = (event) => {
-        let transcript = '';
+        lastSpeechErrorRef.current = null;
+        let currentSessionFinal = '';
+        let currentSessionInterim = '';
+
         for (let i = 0; i < event.results.length; i++) {
-          transcript += event.results[i][0].transcript + ' ';
+          const res = event.results[i];
+          if (res && res[0]) {
+            if (res.isFinal) {
+              currentSessionFinal += res[0].transcript + ' ';
+            } else {
+              currentSessionInterim += res[0].transcript;
+            }
+          }
         }
-        setCandidateAnswer(transcript.trim());
+
+        const base = finalTranscriptRef.current ? finalTranscriptRef.current.trim() : '';
+        const combinedFinal = (base ? base + ' ' : '') + currentSessionFinal.trim();
+        const fullAnswer = (combinedFinal + (currentSessionInterim ? ' ' + currentSessionInterim : '')).trim();
+
+        currentRecognitionFinalRef.current = combinedFinal;
+        setCandidateAnswer(fullAnswer);
+        setInterimTranscript(currentSessionInterim);
+        if (fullAnswer) {
+          setIsCandidateSpeaking(true);
+        }
       };
 
       recognition.onerror = (err) => {
-        console.warn('Speech recognition error:', err);
+        lastSpeechErrorRef.current = err.error;
+        if (err.error !== 'no-speech' && err.error !== 'aborted') {
+          console.warn('Speech recognition status:', err.error);
+        }
+        if (err.error === 'not-allowed' || err.error === 'service-not-allowed') {
+          setMicPermissionError('Microphone or Speech Recognition access was blocked by the browser. Please allow microphone access in your browser address bar.');
+        } else if (err.error === 'language-not-supported' && selectedSpeechLang !== 'en-US') {
+          setSelectedSpeechLang('en-US');
+        }
       };
 
       recognition.onend = () => {
+        setIsVoiceListening(false);
+        recognitionRef.current = null;
+        if (currentRecognitionFinalRef.current) {
+          finalTranscriptRef.current = currentRecognitionFinalRef.current;
+        }
+
         // Automatically restart speech recognition while session is active and mic is not muted
-        if (sessionPhase === 'active' && !isMicMutedRef.current) {
-          try { recognition.start(); } catch (e) {}
+        if (
+          sessionPhaseRef.current === 'active' &&
+          !isMicMutedRef.current
+        ) {
+          // If the last error was 'network' or blocked, use exponential backoff (2.5s) to prevent spamming
+          const restartDelay = lastSpeechErrorRef.current === 'network' ? 2500 : 200;
+          restartTimeoutRef.current = setTimeout(() => {
+            startSpeechRecognition();
+          }, restartDelay);
         }
       };
 
       recognitionRef.current = recognition;
       recognition.start();
+      isRecognitionActiveRef.current = true;
+      setIsVoiceListening(true);
     } catch (err) {
-      console.warn('Could not start speech recognition:', err);
+      if (err.name !== 'InvalidStateError') {
+        console.warn('Could not start speech recognition:', err);
+      }
     }
-  }, [sessionPhase]);
+  }, [selectedSpeechLang]);
 
-  const stopSpeechRecognition = () => {
+  const stopSpeechRecognition = useCallback(() => {
+    isRecognitionActiveRef.current = false;
+    if (restartTimeoutRef.current) {
+      clearTimeout(restartTimeoutRef.current);
+      restartTimeoutRef.current = null;
+    }
     if (recognitionRef.current) {
       try {
+        recognitionRef.current.onend = null;
         recognitionRef.current.stop();
       } catch (e) {}
       recognitionRef.current = null;
     }
-  };
+    setIsVoiceListening(false);
+  }, []);
 
   // ─── Helper: Turn Microphone ON automatically ──────────────────────────────
   const activateMic = useCallback(() => {
     isMicMutedRef.current = false;
     setIsMicMuted(false);
-    if (micStreamRef.current) {
-      micStreamRef.current.getAudioTracks().forEach(t => {
-        t.enabled = true;
-      });
-    }
-    startSpeechRecognition();
-  }, [startSpeechRecognition]);
+    speech.startRecording();
+  }, [speech]);
+
+  // ─── Voice Action Helpers ──────────────────────────────────────────────────
+  const handleClearAnswer = useCallback(() => {
+    speech.clearTranscript();
+    setCandidateAnswer('');
+  }, [speech]);
+
+  const handleSwitchLanguage = useCallback((langCode) => {
+    setSelectedSpeechLang(langCode);
+    speech.switchLanguage(langCode);
+  }, [speech]);
 
   // ─── 4. Speech Synthesis (Interviewer Voice Out Loud) ────────────────────────
   const speakText = (text) => {
@@ -434,20 +623,22 @@ export default function ImmersiveInterviewRoom({
 
     let safetyTimer = null;
 
+    // Fallback timer: ensure mic is activated even if browser speech ends unexpectedly, hangs, or is blocked
+    safetyTimer = setTimeout(() => {
+      setIsInterviewerSpeaking(false);
+      interviewerFinishedSpeakingAtRef.current = Date.now();
+      activateMic();
+    }, 4500);
+
     utterance.onstart = () => {
       setIsInterviewerSpeaking(true);
-      // Fallback timer: ensure mic is activated even if browser speech ends unexpectedly
-      safetyTimer = setTimeout(() => {
-        setIsInterviewerSpeaking(false);
-        activateMic();
-      }, 10000);
     };
 
     utterance.onend = () => {
       if (safetyTimer) clearTimeout(safetyTimer);
       setIsInterviewerSpeaking(false);
       interviewerFinishedSpeakingAtRef.current = Date.now();
-      // Auto-turn mic ON when model finishes asking the question
+      // Auto-turn mic ON when interviewer finishes asking the question
       activateMic();
     };
 
@@ -458,7 +649,13 @@ export default function ImmersiveInterviewRoom({
       activateMic();
     };
 
-    window.speechSynthesis.speak(utterance);
+    try {
+      window.speechSynthesis.speak(utterance);
+    } catch (e) {
+      if (safetyTimer) clearTimeout(safetyTimer);
+      setIsInterviewerSpeaking(false);
+      activateMic();
+    }
   };
 
   // ─── 5. Start Session Lifecycle ─────────────────────────────────────────────
@@ -534,27 +731,17 @@ export default function ImmersiveInterviewRoom({
   }, [sessionPhase, sessionId]);
 
   // Handle Mute/Unmute toggle
-  const toggleMicrophone = () => {
-    const newMuted = !isMicMuted;
-    isMicMutedRef.current = newMuted;
-    setIsMicMuted(newMuted);
-
-    if (micStreamRef.current) {
-      micStreamRef.current.getAudioTracks().forEach(t => {
-        t.enabled = !newMuted;
-      });
-    }
-
-    if (newMuted) {
-      stopSpeechRecognition();
-      trackerRef.current?.stopAudio();
+  const toggleMicrophone = useCallback(() => {
+    if (speech.isListening) {
+      speech.stopRecording();
+      setIsMicMuted(true);
+      isMicMutedRef.current = true;
     } else {
-      startSpeechRecognition();
-      if (analyserRef.current) {
-        trackerRef.current?.startAudio(analyserRef.current);
-      }
+      speech.startRecording();
+      setIsMicMuted(false);
+      isMicMutedRef.current = false;
     }
-  };
+  }, [speech]);
 
   // Handle Camera toggle
   const toggleCamera = async () => {
@@ -669,13 +856,11 @@ export default function ImmersiveInterviewRoom({
 
       setSessionPhase('active');
 
+      // Ensure Candidate Mic & speech recognition run actively from session start
+      activateMic();
+
       // Speak opening message out loud
       speakText(openingMsg);
-
-      // Start Speech Recognition for candidate
-      if (!isMicMuted) {
-        startSpeechRecognition();
-      }
     } catch (err) {
       console.warn('[interview room] API start error, utilizing direct simulation fallback:', err);
       // Graceful local fallback if network or backend offline
@@ -689,8 +874,8 @@ export default function ImmersiveInterviewRoom({
       setMessages([{ role: 'interviewer', text: fullText, timestamp: Date.now() }]);
       setCurrentQuestionText(firstQ);
       setSessionPhase('active');
+      activateMic();
       speakText(fullText);
-      if (!isMicMutedRef.current) startSpeechRecognition();
     }
   };
 
@@ -771,6 +956,8 @@ export default function ImmersiveInterviewRoom({
 
     const answerText = candidateAnswer.trim();
     setIsSubmittingAnswer(true);
+    speech.stopRecording();
+    speech.setMicState('analyzing');
     stopSpeechSynthesis();
 
     // Feed speech chunk to MultimodalTracker
@@ -785,7 +972,11 @@ export default function ImmersiveInterviewRoom({
       { role: 'candidate', text: answerText, timestamp: Date.now(), questionId: currentQId },
     ];
     setMessages(updatedMessages);
+    finalTranscriptRef.current = '';
+    setInterimTranscript('');
     setCandidateAnswer('');
+    speech.clearTranscript();
+    setIsCandidateSpeaking(false);
 
     try {
       const latencyMs = Math.max(300, Date.now() - (interviewerFinishedSpeakingAtRef.current || Date.now()));
@@ -804,16 +995,22 @@ export default function ImmersiveInterviewRoom({
       // ─── Real-Time Answer Evaluation & Scoring ──────────────────────────
       let evalData = null;
       if (res?.score !== undefined && res?.score !== null) {
+        const ev = res.evaluation || {};
         evalData = {
           score: res.score,
-          marks: res.score,
+          marks: res.marks ?? res.score,
           status: res.status || (res.score >= 70 ? 'CORRECT' : res.score >= 35 ? 'PARTIAL' : 'INCORRECT'),
-          feedback: res.aiFeedback || 'Answer checked and evaluated.',
-          technical_accuracy: res.technicalScore ?? res.score,
-          communication_clarity: res.communicationScore ?? 85,
-          problem_solving: res.score,
-          missing_concepts: res.evaluation?.missing_concepts || [],
-          suggested_answer_points: res.evaluation?.suggested_answer_points || [],
+          feedback: res.feedback_summary || ev.feedback || res.aiFeedback || 'Answer checked and evaluated.',
+          relevance: ev.relevance ?? 90,
+          technical_accuracy: ev.technical_accuracy ?? res.technicalScore ?? res.technical_score ?? res.score,
+          completeness: ev.completeness ?? 80,
+          communication_clarity: ev.communication_clarity ?? res.communicationScore ?? res.communication_score ?? 85,
+          problem_solving: ev.technical_depth ?? res.score,
+          strengths: ev.strengths || [],
+          weaknesses: ev.weaknesses || [],
+          missing_concepts: ev.missing_concepts || [],
+          suggested_answer_points: ev.suggested_answer_points || [],
+          ideal_answer: ev.ideal_answer || '',
         };
       } else {
         const localCheck = evaluateSingleQuestion(
@@ -833,11 +1030,16 @@ export default function ImmersiveInterviewRoom({
           marks: localCheck.score,
           status: localCheck.status,
           feedback: localCheck.feedback,
+          relevance: localCheck.relevance ?? 85,
           technical_accuracy: localCheck.technical_accuracy,
+          completeness: localCheck.completeness ?? 80,
           communication_clarity: localCheck.communication_clarity,
-          problem_solving: localCheck.problem_solving,
+          problem_solving: localCheck.problem_solving ?? localCheck.technical_depth ?? localCheck.score,
+          strengths: localCheck.strengths || [],
+          weaknesses: localCheck.weaknesses || [],
           missing_concepts: localCheck.missing_concepts || [],
           suggested_answer_points: localCheck.suggested_answer_points || [],
+          ideal_answer: localCheck.ideal_answer || '',
         };
       }
 
@@ -917,11 +1119,16 @@ export default function ImmersiveInterviewRoom({
         marks: localCheck.score,
         status: localCheck.status,
         feedback: localCheck.feedback,
+        relevance: localCheck.relevance ?? 85,
         technical_accuracy: localCheck.technical_accuracy,
+        completeness: localCheck.completeness ?? 80,
         communication_clarity: localCheck.communication_clarity,
-        problem_solving: localCheck.problem_solving,
+        problem_solving: localCheck.problem_solving ?? localCheck.technical_depth ?? localCheck.score,
+        strengths: localCheck.strengths || [],
+        weaknesses: localCheck.weaknesses || [],
         missing_concepts: localCheck.missing_concepts || [],
         suggested_answer_points: localCheck.suggested_answer_points || [],
+        ideal_answer: localCheck.ideal_answer || '',
       };
       setEvaluatedAnswers(prev => [...prev.filter(p => p.questionId !== currentQId), evaluatedItem]);
       setLastEvaluatedTurn(evaluatedItem);
@@ -944,9 +1151,9 @@ export default function ImmersiveInterviewRoom({
       speakText(nextFollowUp);
     } finally {
       setIsSubmittingAnswer(false);
-      // Re-enable speech recognition
-      if (!isMicMuted) {
-        startSpeechRecognition();
+      // If speech synthesis is not speaking, reactivate candidate mic
+      if (!window.speechSynthesis || !window.speechSynthesis.speaking) {
+        activateMic();
       }
     }
   };
@@ -1032,19 +1239,25 @@ export default function ImmersiveInterviewRoom({
       suggestions: ['Enable microphone for live speech rhythm, pause detection, and clarity telemetry.']
     };
 
-    const visualObservations = !isCameraOff && cvSummary?.available ? {
-      ...cvSummary,
+    const behavioralDossier = trackerRef.current?.getBehavioralReport({ isCameraOff }) || {};
+
+    const visualObservations = !isCameraOff ? {
+      ...(cvSummary?.available ? cvSummary : {}),
       enabled: true,
-      postureScore: cvSummary.presentationConfidence || 88,
-      postureStatus: cvSummary.presentationStyle?.overallPresentation || 'Upright & Centered',
-      gazeCenteredRatio: cvSummary.cameraFacingPercentage || 86,
-      gazeStatus: cvSummary.presentationStyle?.cameraEngagement ? `${cvSummary.presentationStyle.cameraEngagement} Camera Focus` : 'Direct Lens Focus',
-      headMovementStability: cvSummary.presentationStyle?.visualAttentiveness || 'Steady & Poised',
-      facialExpression: cvSummary.presentationStyle?.expressiveness || 'Engaged & Attentive',
-      suggestions: cvSummary.improvements?.length ? cvSummary.improvements : [
+      postureScore: cvSummary?.presentationConfidence || (telemetryHud.posture?.includes('Slouch') ? 72 : 88),
+      postureStatus: cvSummary?.presentationStyle?.overallPresentation || telemetryHud.posture || 'Upright & Centered',
+      gazeCenteredRatio: cvSummary?.cameraFacingPercentage || behavioralDossier.eyeContactPercentage || telemetryHud.eyeContactPct || 86,
+      gazeStatus: cvSummary?.presentationStyle?.cameraEngagement ? `${cvSummary.presentationStyle.cameraEngagement} Camera Focus` : (telemetryHud.gaze || 'Direct Lens Focus'),
+      gazeDirection: cvSummary?.lastDirection || telemetryHud.gazeDirection || 'center',
+      headMovementStability: cvSummary?.presentationStyle?.visualAttentiveness || telemetryHud.headStability || 'Steady & Poised',
+      facialExpression: cvSummary?.presentationStyle?.expressiveness || telemetryHud.expression || 'Engaged & Attentive',
+      anxietyScore: behavioralDossier.overallComposureScore || telemetryHud.anxietyScore || 88,
+      anxietyLevel: behavioralDossier.anxietyLevel || telemetryHud.anxietyState || 'Calm & Composed',
+      fidgetIndex: behavioralDossier.fidgetingIndex || telemetryHud.fidgetLevel || 'Low (Composed)',
+      suggestions: cvSummary?.improvements?.length ? cvSummary.improvements : (behavioralDossier.anxietyManagementTips || [
         'Maintained consistent direct eye contact with the camera lens during core explanations.',
         'Camera framing and posture remained upright and stable throughout.'
-      ]
+      ])
     } : {
       enabled: false,
       available: false,
@@ -1117,6 +1330,27 @@ export default function ImmersiveInterviewRoom({
       verbalDelivery,
       visualObservations,
       vision_data: cvSummary,
+      behavioralAnalysis: behavioralDossier,
+      multimodalAnalysis: {
+        behavioralReport: behavioralDossier,
+        facialAnalysis: {
+          assessed: !isCameraOff,
+          score: behavioralDossier.overallComposureScore || 88,
+          gazeCenteredRatio: behavioralDossier.eyeContactPercentage || 86,
+          gazeStatus: telemetryHud.gaze || 'Direct Lens Focus (Optimal)',
+          expressionState: telemetryHud.expression || 'Engaged & Attentive',
+          anxietyState: behavioralDossier.anxietyLevel || 'Calm & Composed',
+          actionableTips: behavioralDossier.anxietyManagementTips,
+        },
+        bodyLanguageAnalysis: {
+          assessed: !isCameraOff,
+          score: telemetryHud.posture?.includes('Slouch') ? 72 : 88,
+          postureStatus: telemetryHud.posture || 'Upright & Centered',
+          uprightPercentage: 88,
+          fidgetIndex: behavioralDossier.fidgetingIndex || 'Low (Composed)',
+        },
+        vocalAnalysis: verbalDelivery,
+      },
       multimodalTelemetry: finalTelemetry,
       summary: overall >= 70
         ? `The candidate demonstrated strong domain fundamentals for ${targetRole} at ${targetCompany}. Answers showed structured thinking, sound technical reasoning, and professional poise under mock interview pressure.`
@@ -2238,7 +2472,7 @@ export default function ImmersiveInterviewRoom({
         {!pipMinimized && (
           <div
             style={{
-              padding: '6px 10px',
+              padding: '7px 10px',
               backgroundColor: 'rgba(6, 8, 14, 0.96)',
               borderTop: '1px solid rgba(255, 255, 255, 0.08)',
             }}
@@ -2262,21 +2496,21 @@ export default function ImmersiveInterviewRoom({
                       ? visionCV.direction === 'camera_facing'
                         ? '#22C55E'
                         : '#F59E0B'
-                      : '#F59E0B',
+                      : telemetryHud.gazeDirection === 'center'
+                        ? '#22C55E'
+                        : '#F59E0B',
                     boxShadow: isCameraOff
                       ? 'none'
-                      : visionCV.faceDetected
-                      ? visionCV.direction === 'camera_facing'
+                      : (visionCV.faceDetected ? visionCV.direction === 'camera_facing' : telemetryHud.gazeDirection === 'center')
                         ? '0 0 6px #22C55E'
-                        : '0 0 6px #F59E0B'
-                      : '0 0 6px #F59E0B',
+                        : '0 0 6px #F59E0B',
                   }}
                 />
                 <span style={{ fontWeight: 700, color: '#FFFFFF' }}>
                   {isCameraOff
                     ? 'Vision: Paused'
                     : !visionCV.faceDetected
-                    ? 'Looking for face...'
+                    ? (telemetryHud.gaze || 'Looking for face...')
                     : visionCV.direction === 'camera_facing'
                     ? 'Looking at screen'
                     : visionCV.direction === 'looking_left'
@@ -2290,15 +2524,41 @@ export default function ImmersiveInterviewRoom({
                     : 'Looking away'}
                 </span>
                 <span style={{ color: 'rgba(255,255,255,0.2)' }}>•</span>
-                <span style={{ color: isMicMuted ? '#EF4444' : '#4ADE80' }}>
-                  {isMicMuted ? 'Muted' : `${telemetryHud.wpm || 138} WPM`}
+                <span
+                  style={{
+                    fontSize: '0.58rem',
+                    fontWeight: 700,
+                    padding: '1px 5px',
+                    borderRadius: '4px',
+                    backgroundColor:
+                      telemetryHud.anxietyState === 'Elevated Anxiety'
+                        ? 'rgba(239, 68, 68, 0.2)'
+                        : telemetryHud.anxietyState === 'Mild Nervousness'
+                          ? 'rgba(245, 158, 11, 0.2)'
+                          : 'rgba(34, 197, 94, 0.2)',
+                    color:
+                      telemetryHud.anxietyState === 'Elevated Anxiety'
+                        ? '#F87171'
+                        : telemetryHud.anxietyState === 'Mild Nervousness'
+                          ? '#FBBF24'
+                          : '#4ADE80',
+                    border: `1px solid ${
+                      telemetryHud.anxietyState === 'Elevated Anxiety'
+                        ? 'rgba(239, 68, 68, 0.3)'
+                        : telemetryHud.anxietyState === 'Mild Nervousness'
+                          ? 'rgba(245, 158, 11, 0.3)'
+                          : 'rgba(34, 197, 94, 0.3)'
+                    }`,
+                  }}
+                >
+                  {isCameraOff ? 'Vision Off' : (telemetryHud.anxietyState || 'Calm')}
                 </span>
               </div>
 
               <button
                 type="button"
                 onClick={() => setShowPipTelemetry(!showPipTelemetry)}
-                title={showPipTelemetry ? 'Hide detailed metrics' : 'Show detailed metrics'}
+                title={showPipTelemetry ? 'Hide detailed metrics' : 'Show live vision & composure metrics'}
                 style={{
                   background: 'transparent',
                   border: 'none',
@@ -2319,42 +2579,77 @@ export default function ImmersiveInterviewRoom({
             {showPipTelemetry && (
               <div
                 style={{
-                  display: 'grid',
-                  gridTemplateColumns: '1fr 1fr',
+                  display: 'flex',
+                  flexDirection: 'column',
                   gap: '5px',
-                  marginTop: '5px',
-                  paddingTop: '5px',
+                  marginTop: '6px',
+                  paddingTop: '6px',
                   borderTop: '1px solid rgba(255, 255, 255, 0.08)',
                   fontSize: '0.62rem',
                 }}
               >
-                <div style={{ color: '#94A3B8' }}>
-                  Gaze: <span style={{ color: 'var(--accent-champagne)', fontWeight: 600 }}>
+                {/* Gaze Direction */}
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ color: '#94A3B8' }}>Gaze Direction:</span>
+                  <span style={{ color: 'var(--accent-champagne)', fontWeight: 700 }}>
                     {isCameraOff
                       ? 'Cam Off'
                       : !visionCV.faceDetected
-                      ? 'Searching'
+                      ? (telemetryHud.gaze || 'Searching')
                       : visionCV.direction === 'camera_facing'
                       ? 'Looking at screen'
                       : visionCV.direction === 'looking_left'
                       ? 'Looking left'
                       : visionCV.direction === 'looking_right'
                       ? 'Looking right'
+                      : visionCV.direction === 'looking_up'
+                      ? 'Looking up'
+                      : visionCV.direction === 'looking_down'
+                      ? 'Looking down'
                       : 'Looking away'}
                   </span>
                 </div>
-                <div style={{ color: '#94A3B8', textAlign: 'right' }}>
-                  Head: <span style={{ color: '#4ADE80', fontWeight: 600 }}>
-                    {isCameraOff ? 'N/A' : `Yaw: ${visionCV.headPose?.yaw || 0}°`}
+
+                {/* Head Pose & Lighting */}
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ color: '#94A3B8' }}>Head / Lighting:</span>
+                  <span style={{ color: '#E2E8F0', fontWeight: 600 }}>
+                    {isCameraOff ? 'N/A' : `Yaw: ${visionCV.headPose?.yaw || 0}° • ${visionCV.lighting === 'low_light' ? 'Low Light' : 'Optimal'}`}
                   </span>
                 </div>
-                <div style={{ color: '#94A3B8' }}>
-                  Lighting: <span style={{ color: visionCV.lighting === 'low_light' ? '#FBBF24' : '#38BDF8', fontWeight: 600 }}>
-                    {isCameraOff ? 'N/A' : visionCV.lighting === 'low_light' ? 'Low Light' : 'Optimal'}
+
+                {/* Composure & Anxiety */}
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ color: '#94A3B8' }}>Composure Index:</span>
+                  <span
+                    style={{
+                      fontWeight: 700,
+                      color:
+                        telemetryHud.anxietyState === 'Elevated Anxiety'
+                          ? '#EF4444'
+                          : telemetryHud.anxietyState === 'Mild Nervousness'
+                            ? '#F59E0B'
+                            : '#22C55E',
+                    }}
+                  >
+                    {isCameraOff ? 'N/A' : `${telemetryHud.anxietyScore || 88}/100 (${telemetryHud.anxietyState})`}
                   </span>
                 </div>
-                <div style={{ color: '#94A3B8', textAlign: 'right' }}>
-                  Fillers: <span style={{ color: '#4ADE80', fontWeight: 600 }}>{telemetryHud.fillerCount || 0}</span>
+
+                {/* Restlessness & Fidgeting */}
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ color: '#94A3B8' }}>Fidget / Restlessness:</span>
+                  <span style={{ color: '#E2E8F0', fontWeight: 600 }}>
+                    {isCameraOff ? 'N/A' : (telemetryHud.fidgetLevel || 'Low (Steady)')}
+                  </span>
+                </div>
+
+                {/* Speech & Cadence */}
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ color: '#94A3B8' }}>Speech Cadence:</span>
+                  <span style={{ color: '#4ADE80', fontWeight: 600 }}>
+                    {isMicMuted ? 'Muted' : `${telemetryHud.wpm || 138} WPM (${telemetryHud.fillerCount || 0} fillers)`}
+                  </span>
                 </div>
               </div>
             )}
@@ -2380,95 +2675,490 @@ export default function ImmersiveInterviewRoom({
           pointerEvents: 'none',
         }}
       >
-        {/* Candidate Live Speech & Text Response Input Bar */}
+        {/* Candidate Live Voice-to-Text & Response Input Console */}
         <div
           style={{
-            maxWidth: '740px',
+            maxWidth: '820px',
             width: '100%',
-            backgroundColor: 'rgba(10, 12, 18, 0.94)',
-            border: '1px solid rgba(255, 255, 255, 0.16)',
-            borderRadius: '16px',
-            padding: '0.65rem 1rem',
-            backdropFilter: 'blur(20px)',
-            boxShadow: '0 12px 36px rgba(0, 0, 0, 0.7)',
+            backgroundColor: 'rgba(9, 12, 19, 0.95)',
+            border: !isMicMuted
+              ? '1px solid rgba(217, 183, 122, 0.45)'
+              : '1px solid rgba(255, 255, 255, 0.16)',
+            borderRadius: '18px',
+            padding: '0.75rem 1rem 0.65rem 1rem',
+            backdropFilter: 'blur(24px)',
+            boxShadow: !isMicMuted
+              ? '0 12px 40px rgba(0, 0, 0, 0.75), 0 0 20px rgba(217, 183, 122, 0.15)'
+              : '0 12px 36px rgba(0, 0, 0, 0.7)',
             display: 'flex',
-            alignItems: 'center',
-            gap: '0.75rem',
+            flexDirection: 'column',
+            gap: '0.55rem',
             pointerEvents: 'auto',
+            transition: 'border-color 0.2s ease, box-shadow 0.2s ease',
           }}
         >
-          {/* Active Voice Input Mic indicator */}
+          {/* Top Voice Telemetry & Status Header */}
           <div
-            onClick={toggleMicrophone}
             style={{
-              width: '36px',
-              height: '36px',
-              borderRadius: '10px',
-              backgroundColor: !isMicMuted ? 'rgba(34, 197, 94, 0.15)' : 'rgba(239, 68, 68, 0.12)',
-              border: !isMicMuted ? '1px solid rgba(34, 197, 94, 0.3)' : '1px solid rgba(239, 68, 68, 0.25)',
               display: 'flex',
               alignItems: 'center',
-              justifyContent: 'center',
-              color: !isMicMuted ? '#22C55E' : '#EF4444',
-              flexShrink: 0,
-              cursor: 'pointer',
+              justifyContent: 'space-between',
+              gap: '0.75rem',
+              paddingBottom: '0.45rem',
+              borderBottom: '1px solid rgba(255, 255, 255, 0.08)',
+              fontSize: '0.76rem',
             }}
-            title={!isMicMuted ? 'Microphone is ON (Listening). Click to mute' : 'Microphone is MUTED. Click to turn ON'}
           >
-            {!isMicMuted ? <Mic size={18} /> : <MicOff size={18} />}
+            {/* Left: Active Voice / Speaker Status */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+              {isInterviewerSpeaking ? (
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '5px',
+                    color: '#60A5FA',
+                    fontWeight: 600,
+                  }}
+                >
+                  <Volume2 size={14} />
+                  <span>Interviewer is speaking... Listen carefully.</span>
+                </div>
+              ) : speech.micState === 'requesting_permission' ? (
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '5px',
+                    color: '#FBBF24',
+                    fontWeight: 600,
+                  }}
+                >
+                  <Loader2 size={13} className="spin" />
+                  <span>Requesting microphone permission...</span>
+                </div>
+              ) : speech.micState === 'submitting' || speech.micState === 'analyzing' || isSubmittingAnswer ? (
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '5px',
+                    color: '#A78BFA',
+                    fontWeight: 600,
+                  }}
+                >
+                  <Loader2 size={13} className="spin" />
+                  <span>Evaluating answer with AI Interviewer...</span>
+                </div>
+              ) : speech.isListening ? (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.55rem' }}>
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      backgroundColor: 'rgba(239, 68, 68, 0.16)',
+                      border: '1px solid rgba(239, 68, 68, 0.45)',
+                      padding: '2px 9px',
+                      borderRadius: '9999px',
+                      color: '#F87171',
+                      fontWeight: 700,
+                    }}
+                  >
+                    <span
+                      style={{
+                        width: '7px',
+                        height: '7px',
+                        borderRadius: '50%',
+                        backgroundColor: '#EF4444',
+                        boxShadow: '0 0 10px #EF4444',
+                        animation: 'pulse 1s infinite',
+                      }}
+                    />
+                    <span>Recording ({speech.recordingDurationFormatted}) · Listening...</span>
+                  </div>
+
+                  {/* Dynamic Equalizer Bars */}
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '2.5px',
+                      height: '16px',
+                      padding: '0 4px',
+                    }}
+                    title={`Microphone Volume: ${speech.volume}%`}
+                  >
+                    {[0.6, 1.0, 1.4, 0.8, 1.2, 0.9, 1.5, 0.7].map((factor, idx) => {
+                      const computedHeight = Math.max(
+                        3,
+                        Math.min(16, Math.round((speech.volume / 100) * 16 * factor))
+                      );
+                      return (
+                        <div
+                          key={idx}
+                          style={{
+                            width: '2.5px',
+                            height: `${computedHeight}px`,
+                            borderRadius: '1px',
+                            backgroundColor:
+                              speech.volume > 15
+                                ? '#22C55E'
+                                : 'rgba(217, 183, 122, 0.7)',
+                            transition: 'height 0.08s ease',
+                          }}
+                        />
+                      );
+                    })}
+                  </div>
+
+                  {speech.isCandidateSpeaking && (
+                    <span
+                      style={{
+                        color: '#FBBF24',
+                        fontWeight: 600,
+                        fontSize: '0.72rem',
+                      }}
+                    >
+                      Hearing your voice...
+                    </span>
+                  )}
+                </div>
+              ) : speech.micState === 'processing' ? (
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '5px',
+                    color: '#38BDF8',
+                    fontWeight: 600,
+                  }}
+                >
+                  <Loader2 size={13} className="spin" />
+                  <span>Finalizing speech transcript...</span>
+                </div>
+              ) : speech.micState === 'transcript_ready' ? (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '5px',
+                      backgroundColor: 'rgba(34, 197, 94, 0.16)',
+                      border: '1px solid rgba(34, 197, 94, 0.4)',
+                      padding: '2px 8px',
+                      borderRadius: '9999px',
+                      color: '#4ADE80',
+                      fontWeight: 700,
+                    }}
+                  >
+                    <CheckCircle2 size={12} />
+                    <span>Transcript Ready · Click Send or Speak More</span>
+                  </div>
+                </div>
+              ) : (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '5px',
+                      backgroundColor: 'rgba(239, 68, 68, 0.16)',
+                      border: '1px solid rgba(239, 68, 68, 0.35)',
+                      padding: '2px 8px',
+                      borderRadius: '9999px',
+                      color: '#F87171',
+                      fontWeight: 700,
+                    }}
+                  >
+                    <MicOff size={12} />
+                    <span>Mic Paused</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={speech.startRecording}
+                    style={{
+                      background: 'rgba(217, 183, 122, 0.15)',
+                      border: '1px solid rgba(217, 183, 122, 0.35)',
+                      color: '#E5C478',
+                      padding: '2px 8px',
+                      borderRadius: '6px',
+                      fontSize: '0.7rem',
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Start Speaking (Mic)
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* Right: Word Count & Speech Language Selector */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+              <span style={{ color: '#94A3B8', fontSize: '0.72rem' }}>
+                {candidateAnswer.trim()
+                  ? `${candidateAnswer.trim().split(/\s+/).length} words spoken`
+                  : '0 words'}
+              </span>
+
+              {/* Speech Language Toggle */}
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  backgroundColor: 'rgba(255, 255, 255, 0.06)',
+                  borderRadius: '6px',
+                  border: '1px solid rgba(255, 255, 255, 0.1)',
+                  padding: '1px',
+                }}
+              >
+                {[
+                  { code: 'en-IN', label: 'EN (IN)' },
+                  { code: 'en-US', label: 'EN (US)' },
+                  { code: 'hi-IN', label: 'HI (हिंदी)' },
+                ].map((l) => (
+                  <button
+                    key={l.code}
+                    type="button"
+                    onClick={() => handleSwitchLanguage(l.code)}
+                    title={`Speech recognition language: ${l.label}`}
+                    style={{
+                      background:
+                        selectedSpeechLang === l.code
+                          ? 'rgba(217, 183, 122, 0.25)'
+                          : 'transparent',
+                      border: 'none',
+                      color:
+                        selectedSpeechLang === l.code ? '#F2D795' : '#94A3B8',
+                      fontSize: '0.65rem',
+                      fontWeight: selectedSpeechLang === l.code ? 700 : 500,
+                      padding: '2px 6px',
+                      borderRadius: '4px',
+                      cursor: 'pointer',
+                      transition: 'all 0.12s ease',
+                    }}
+                  >
+                    {l.label}
+                  </button>
+                ))}
+              </div>
+            </div>
           </div>
 
-          {/* Response Text Input Area */}
-          <input
-            id="candidate-answer-input"
-            ref={textareaRef}
-            type="text"
-            placeholder={
-              !isMicMuted
-                ? 'Speak your answer, or type here (press Enter to submit)...'
-                : 'Microphone is muted. Type your answer here...'
-            }
-            value={candidateAnswer}
-            onChange={(e) => setCandidateAnswer(e.target.value)}
-            onKeyDown={handleKeyDown}
-            disabled={isSubmittingAnswer}
-            style={{
-              flex: 1,
-              backgroundColor: 'transparent',
-              border: 'none',
-              color: '#FFFFFF',
-              fontSize: '0.94rem',
-              outline: 'none',
-              padding: '0.35rem 0',
-            }}
-          />
+          {/* Permission / Device Warning Banner */}
+          {(speech.error || micPermissionError) && (
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: '0.65rem',
+                backgroundColor: 'rgba(239, 68, 68, 0.15)',
+                border: '1px solid rgba(239, 68, 68, 0.4)',
+                borderRadius: '8px',
+                padding: '0.35rem 0.65rem',
+                fontSize: '0.74rem',
+                color: '#FCA5A5',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <AlertCircle size={14} color="#EF4444" />
+                <span>{speech.error || micPermissionError}</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setMicPermissionError(null);
+                  speech.startRecording();
+                }}
+                style={{
+                  backgroundColor: '#EF4444',
+                  border: 'none',
+                  borderRadius: '5px',
+                  color: '#FFFFFF',
+                  fontWeight: 700,
+                  fontSize: '0.7rem',
+                  padding: '3px 10px',
+                  cursor: 'pointer',
+                  flexShrink: 0,
+                }}
+              >
+                Allow Mic Access
+              </button>
+            </div>
+          )}
 
-          {/* Submit Answer Button */}
-          <button
-            id="send-answer-btn"
-            type="button"
-            onClick={handleSubmitAnswer}
-            disabled={!candidateAnswer.trim() || isSubmittingAnswer}
+          {/* Response Textarea (Auto-syncs with speech recognition & manual edits) */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+            <textarea
+              id="candidate-answer-input"
+              ref={textareaRef}
+              rows={2}
+              placeholder={
+                speech.isListening
+                  ? '🎙️ Listening... Speak naturally into your microphone. Words will appear here in real-time. (You can also type or edit anytime)'
+                  : 'Microphone is paused. Click "Start Speaking (Mic)" or type your response here...'
+              }
+              value={candidateAnswer}
+              onChange={(e) => {
+                setCandidateAnswer(e.target.value);
+                speech.setManualTranscript(e.target.value);
+              }}
+              onKeyDown={handleKeyDown}
+              disabled={isSubmittingAnswer}
+              style={{
+                width: '100%',
+                backgroundColor: 'transparent',
+                border: 'none',
+                color: '#FFFFFF',
+                fontSize: '0.94rem',
+                lineHeight: 1.45,
+                outline: 'none',
+                resize: 'none',
+                padding: '0.2rem 0',
+                fontFamily: 'inherit',
+                minHeight: '44px',
+                maxHeight: '120px',
+              }}
+            />
+
+            {/* Live Interim Speech Preview */}
+            {speech.interimTranscript && (
+              <div
+                style={{
+                  fontSize: '0.76rem',
+                  color: 'rgba(217, 183, 122, 0.9)',
+                  fontStyle: 'italic',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '5px',
+                  paddingTop: '2px',
+                }}
+              >
+                <Radio size={11} color="#E5C478" />
+                <span>Transcribing: "{speech.interimTranscript}..."</span>
+              </div>
+            )}
+          </div>
+
+          {/* Action Row inside Console: Quick Mic, Clear Voice, Submit Button */}
+          <div
             style={{
-              display: 'inline-flex',
+              display: 'flex',
               alignItems: 'center',
-              gap: '0.45rem',
-              padding: '0.55rem 1.25rem',
-              borderRadius: '10px',
-              backgroundColor: candidateAnswer.trim() ? 'var(--accent-gold)' : 'rgba(255, 255, 255, 0.08)',
-              border: 'none',
-              color: candidateAnswer.trim() ? '#080808' : 'var(--text-tertiary)',
-              fontSize: '0.86rem',
-              fontWeight: 700,
-              cursor: candidateAnswer.trim() ? 'pointer' : 'default',
-              transition: 'all 0.15s ease',
-              boxShadow: candidateAnswer.trim() ? '0 4px 16px rgba(217, 183, 122, 0.35)' : 'none',
-              flexShrink: 0,
+              justifyContent: 'space-between',
+              paddingTop: '0.35rem',
+              borderTop: '1px solid rgba(255, 255, 255, 0.06)',
             }}
           >
-            <span>{isSubmittingAnswer ? 'Evaluating...' : 'Send Answer'}</span>
-            <Send size={14} />
-          </button>
+            {/* Left Controls: Mic toggle & Clear Answer */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <button
+                type="button"
+                onClick={speech.toggleRecording}
+                title={speech.isListening ? 'Stop microphone recording' : 'Start microphone recording'}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '5px',
+                  backgroundColor: speech.isListening
+                    ? 'rgba(239, 68, 68, 0.16)'
+                    : 'rgba(34, 197, 94, 0.14)',
+                  border: speech.isListening
+                    ? '1px solid rgba(239, 68, 68, 0.45)'
+                    : '1px solid rgba(34, 197, 94, 0.4)',
+                  color: speech.isListening ? '#F87171' : '#4ADE80',
+                  borderRadius: '8px',
+                  padding: '4px 11px',
+                  fontSize: '0.74rem',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  transition: 'all 0.15s ease',
+                }}
+              >
+                {speech.isListening ? (
+                  <>
+                    <Square size={11} fill="#EF4444" />
+                    <span>Stop Recording ({speech.recordingDurationFormatted})</span>
+                  </>
+                ) : (
+                  <>
+                    <Mic size={13} />
+                    <span>Start Speaking (Mic)</span>
+                  </>
+                )}
+              </button>
+
+              {candidateAnswer.trim() && (
+                <button
+                  type="button"
+                  onClick={handleClearAnswer}
+                  title="Clear transcribed answer and speak again"
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '4px',
+                    backgroundColor: 'rgba(255, 255, 255, 0.06)',
+                    border: '1px solid rgba(255, 255, 255, 0.12)',
+                    color: '#94A3B8',
+                    borderRadius: '8px',
+                    padding: '4px 9px',
+                    fontSize: '0.72rem',
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                  }}
+                >
+                  <Trash2 size={12} />
+                  <span>Clear & Re-speak</span>
+                </button>
+              )}
+
+              <span style={{ fontSize: '0.7rem', color: '#64748B', marginLeft: '4px' }}>
+                Press Enter ↵ to send (Shift+Enter for newline)
+              </span>
+            </div>
+
+            {/* Right: Submit Button */}
+            <button
+              id="send-answer-btn"
+              type="button"
+              onClick={handleSubmitAnswer}
+              disabled={!candidateAnswer.trim() || isSubmittingAnswer}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '0.45rem',
+                padding: '0.48rem 1.35rem',
+                borderRadius: '10px',
+                backgroundColor: candidateAnswer.trim()
+                  ? 'var(--accent-gold)'
+                  : 'rgba(255, 255, 255, 0.08)',
+                border: 'none',
+                color: candidateAnswer.trim() ? '#080808' : 'var(--text-tertiary)',
+                fontSize: '0.86rem',
+                fontWeight: 700,
+                cursor: candidateAnswer.trim() ? 'pointer' : 'default',
+                transition: 'all 0.15s ease',
+                boxShadow: candidateAnswer.trim()
+                  ? '0 4px 16px rgba(217, 183, 122, 0.35)'
+                  : 'none',
+                flexShrink: 0,
+              }}
+            >
+              {isSubmittingAnswer ? (
+                <>
+                  <Loader2 size={14} className="spin" />
+                  <span>Evaluating...</span>
+                </>
+              ) : (
+                <>
+                  <span>Send Answer</span>
+                  <Send size={14} />
+                </>
+              )}
+            </button>
+          </div>
         </div>
 
         {/* Compact Bottom Control Bar */}

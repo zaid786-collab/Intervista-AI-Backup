@@ -82,7 +82,10 @@ class UserProfileUpdate(BaseModel):
     name: Optional[str] = None
     bio: Optional[str] = None
     target_role: Optional[str] = None
-    skills: Optional[str] = None
+    skills: Optional[Union[str, List[str]]] = None
+    avatar: Optional[str] = None
+    picture: Optional[str] = None
+    progress: Optional[int] = None
 
 
 class UserUpdateByAdmin(BaseModel):
@@ -420,6 +423,15 @@ class InterviewTurnResponse(BaseModel):
     marks: Optional[int] = None
     status: Optional[str] = None
     evaluation: Optional[dict] = None
+
+
+class TranscribeAudioResponse(BaseModel):
+    success: bool
+    transcript: str
+    language: Optional[str] = "en"
+    duration_seconds: Optional[float] = None
+    provider: Optional[str] = "browser"
+    message: Optional[str] = None
 
 
 class SubmitInterviewRequest(BaseModel):

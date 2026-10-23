@@ -6,6 +6,7 @@
 
 import { generateInterviewPDF } from './pdfGenerator';
 import { evaluateSingleQuestion } from './evaluator';
+import { registerUser, loginUser } from './auth';
 import {
   getApiBaseUrl,
   getToken as getRootToken,
@@ -119,28 +120,50 @@ export async function apiRegister({ name, email, password }) {
   const cleanEmail = (email || '').toLowerCase().trim();
   const cleanName = (name || '').trim() || cleanEmail.split('@')[0];
 
-  // 1. Create account on backend
-  await request('POST', '/api/auth/signup', { name: cleanName, email: cleanEmail, password });
+  try {
+    // 1. Create account on backend
+    await request('POST', '/api/auth/signup', { name: cleanName, email: cleanEmail, password });
 
-  // 2. Automatically log in to obtain JWT access token
-  const loginData = await request('POST', '/api/auth/login', { email: cleanEmail, password });
-  if (loginData?.access_token) {
-    setToken(loginData.access_token);
+    // 2. Automatically log in to obtain JWT access token
+    const loginData = await request('POST', '/api/auth/login', { email: cleanEmail, password });
+    if (loginData?.access_token) {
+      setToken(loginData.access_token);
+    }
+    const user = loginData?.user || { id: 'u_' + Date.now(), name: cleanName, email: cleanEmail };
+    localStorage.setItem('intervista_current_user', JSON.stringify(user));
+    return user;
+  } catch (err) {
+    // Backend unreachable — fall back to client-side localStorage auth
+    console.warn('[apiRegister] Backend unavailable, using local auth:', err.message);
+    const localUser = await registerUser({ name: cleanName, email: cleanEmail, password });
+    if (localUser.token) {
+      setToken(localUser.token);
+    }
+    localStorage.setItem('intervista_current_user', JSON.stringify(localUser));
+    return localUser;
   }
-  const user = loginData?.user || { id: 'u_' + Date.now(), name: cleanName, email: cleanEmail };
-  localStorage.setItem('intervista_current_user', JSON.stringify(user));
-  return user;
 }
 
 export async function apiLogin({ email, password }) {
   const cleanEmail = (email || '').toLowerCase().trim();
-  const data = await request('POST', '/api/auth/login', { email: cleanEmail, password });
-  if (data?.access_token) {
-    setToken(data.access_token);
+  try {
+    const data = await request('POST', '/api/auth/login', { email: cleanEmail, password });
+    if (data?.access_token) {
+      setToken(data.access_token);
+    }
+    const user = data?.user || { id: 'u_' + Date.now(), email: cleanEmail, name: cleanEmail.split('@')[0] };
+    localStorage.setItem('intervista_current_user', JSON.stringify(user));
+    return user;
+  } catch (err) {
+    // Backend unreachable — fall back to client-side localStorage auth
+    console.warn('[apiLogin] Backend unavailable, using local auth:', err.message);
+    const localUser = await loginUser({ email: cleanEmail, password });
+    if (localUser.token) {
+      setToken(localUser.token);
+    }
+    localStorage.setItem('intervista_current_user', JSON.stringify(localUser));
+    return localUser;
   }
-  const user = data?.user || { id: 'u_' + Date.now(), email: cleanEmail, name: cleanEmail.split('@')[0] };
-  localStorage.setItem('intervista_current_user', JSON.stringify(user));
-  return user;
 }
 
 export async function apiGoogleAuth({ credential }) {
@@ -190,18 +213,26 @@ export async function apiGetMe() {
   return raw ? JSON.parse(raw) : null;
 }
 
-export async function apiUpdateProfile({ name, skills, picture }) {
+export async function apiUpdateProfile({ name, skills, picture, bio, target_role }) {
   try {
-    const data = await request('PATCH', '/api/users/me/progress', { name, skills, picture });
-    if (data?.user) {
-      localStorage.setItem('intervista_current_user', JSON.stringify(data.user));
-      return data.user;
+    const data = await request('PATCH', '/api/users/me', { name, skills, picture, bio, target_role });
+    const user = data?.user || (data?.id ? data : null);
+    if (user) {
+      localStorage.setItem('intervista_current_user', JSON.stringify(user));
+      return user;
     }
   } catch (err) {
     console.warn('[apiUpdateProfile] fallback:', err.message);
   }
   const current = (await apiGetMe()) || { name: 'Candidate', email: 'candidate@example.com' };
-  const updated = { ...current, ...(name ? { name } : {}), ...(skills ? { skills } : {}), ...(picture ? { picture } : {}) };
+  const updated = {
+    ...current,
+    ...(name ? { name } : {}),
+    ...(skills ? { skills } : {}),
+    ...(picture ? { picture } : {}),
+    ...(bio ? { bio } : {}),
+    ...(target_role ? { target_role } : {}),
+  };
   localStorage.setItem('intervista_current_user', JSON.stringify(updated));
   return updated;
 }
@@ -400,6 +431,33 @@ export async function apiSendMessage({ sessionId, content, latencyMs, audioDurat
     technicalScore: localEval.technical_accuracy,
     communicationScore: localEval.communication_clarity,
   };
+}
+
+export async function apiTranscribeAudio({ audioBlob, language = 'en-US', sessionId = null, questionId = null }) {
+  try {
+    const formData = new FormData();
+    formData.append('file', audioBlob, 'candidate_answer.webm');
+    formData.append('language', language);
+    if (sessionId) formData.append('session_id', sessionId);
+    if (questionId) formData.append('question_id', String(questionId));
+
+    const token = getToken();
+    const headers = token ? { Authorization: `Bearer ${token}` } : {};
+
+    const res = await fetch(`${BASE_URL}/api/interviews/transcribe`, {
+      method: 'POST',
+      headers,
+      body: formData,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data?.success && data?.transcript) {
+      return { success: true, transcript: data.transcript, provider: data.provider };
+    }
+    return { success: false, transcript: '', message: data?.message || 'Server transcription unavailable' };
+  } catch (err) {
+    console.warn('[apiTranscribeAudio] Server transcription call failed:', err.message);
+    return { success: false, transcript: '', message: err.message };
+  }
 }
 
 export async function apiRunInterviewCode({ questionId, code, language = 'javascript', testCases = [] }) {

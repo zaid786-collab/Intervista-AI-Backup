@@ -75,6 +75,7 @@ export default function LiveDemoModal({ isOpen, onClose, config, onFinishIntervi
   const mediaStreamRef = useRef(null);
   const audioContextRef = useRef(null);
   const recognitionRef = useRef(null);
+  const demoFinalTranscriptRef = useRef('');
   const messagesEndRef = useRef(null);
   const textareaRef = useRef(null);
 
@@ -540,6 +541,14 @@ export default function LiveDemoModal({ isOpen, onClose, config, onFinishIntervi
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) return;
 
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current.onend = null;
+        recognitionRef.current.stop();
+      } catch (_) {}
+      recognitionRef.current = null;
+    }
+
     try {
       const recognition = new SpeechRecognition();
       recognition.continuous = true;
@@ -547,14 +556,42 @@ export default function LiveDemoModal({ isOpen, onClose, config, onFinishIntervi
       recognition.lang = 'en-US';
 
       recognition.onresult = (event) => {
-        let current = '';
-        for (let i = event.resultIndex; i < event.results.length; i++) {
-          current += event.results[i][0].transcript;
+        let currentSessionFinal = '';
+        let currentSessionInterim = '';
+
+        for (let i = 0; i < event.results.length; i++) {
+          const res = event.results[i];
+          if (res && res[0]) {
+            if (res.isFinal) {
+              currentSessionFinal += res[0].transcript + ' ';
+            } else {
+              currentSessionInterim += res[0].transcript;
+            }
+          }
         }
-        setCandidateAnswer(current);
+
+        const base = demoFinalTranscriptRef.current ? demoFinalTranscriptRef.current.trim() : '';
+        const combined = (base ? base + ' ' : '') + currentSessionFinal.trim();
+        const fullAnswer = (combined + (currentSessionInterim ? ' ' + currentSessionInterim : '')).trim();
+
+        setCandidateAnswer(fullAnswer);
       };
-      recognition.onerror = () => setIsRecognizing(false);
-      recognition.onend = () => setIsRecognizing(false);
+
+      recognition.onerror = (err) => {
+        if (err.error !== 'no-speech' && err.error !== 'aborted') {
+          console.warn('Recognition error:', err);
+        }
+      };
+
+      recognition.onend = () => {
+        setIsRecognizing(false);
+        recognitionRef.current = null;
+        if (isMicActive) {
+          setTimeout(() => {
+            startRecognition();
+          }, 200);
+        }
+      };
 
       recognitionRef.current = recognition;
       recognition.start();
@@ -620,6 +657,7 @@ export default function LiveDemoModal({ isOpen, onClose, config, onFinishIntervi
     // Add candidate message to UI
     setMessages(prev => [...prev, { role: 'candidate', text: answer, ts: Date.now() }]);
     setCandidateAnswer('');
+    demoFinalTranscriptRef.current = '';
     setQuestionCount(q => q + 1);
 
     // Guest mode follow-ups
@@ -1205,7 +1243,10 @@ export default function LiveDemoModal({ isOpen, onClose, config, onFinishIntervi
                     <textarea
                       ref={textareaRef}
                       value={candidateAnswer}
-                      onChange={(e) => setCandidateAnswer(e.target.value)}
+                      onChange={(e) => {
+                        setCandidateAnswer(e.target.value);
+                        demoFinalTranscriptRef.current = e.target.value;
+                      }}
                       onKeyDown={handleKeyDown}
                       placeholder="Speak into your microphone or type your response here..."
                       rows={3}
