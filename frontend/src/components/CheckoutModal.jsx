@@ -1,851 +1,736 @@
-import { useState, useEffect, useId } from "react";
-import { useNavigate } from "react-router-dom";
-import { useAuth } from "../context/useAuth";
+import React, { useState } from 'react';
 import {
-  createPaymentOrder,
-  confirmPayment,
-  validateCoupon,
-} from "../api";
-import "./CheckoutModal.css";
-
-const POPULAR_BANKS = [
-  { id: "hdfc", name: "HDFC Bank", code: "HDFC", icon: "🏛️" },
-  { id: "icici", name: "ICICI Bank", code: "ICICI", icon: "🏢" },
-  { id: "sbi", name: "State Bank of India", code: "SBIN", icon: "🏦" },
-  { id: "axis", name: "Axis Bank", code: "UTIB", icon: "💳" },
-  { id: "kotak", name: "Kotak Mahindra", code: "KKBK", icon: "🪙" },
-  { id: "chase", name: "JPMorgan Chase", code: "CHAS", icon: "🌐" },
-];
+  X,
+  Check,
+  ShieldCheck,
+  Zap,
+  Lock,
+  Sparkles,
+  ArrowRight,
+  Tag,
+  Copy,
+  QrCode,
+  CheckCircle2,
+  AlertCircle,
+  HelpCircle,
+} from 'lucide-react';
 
 export default function CheckoutModal({
   isOpen,
   onClose,
-  initialPlan = "pro",
-  initialCycle = "monthly",
-  onSuccess,
+  plan,
+  isYearly,
+  onStartInterview,
 }) {
-  const { user, updateUser, isAuthenticated } = useAuth();
-  const navigate = useNavigate();
+  const [upiRefNumber, setUpiRefNumber] = useState('');
+  const [copiedUpi, setCopiedUpi] = useState(false);
 
-  // Pricing & Selection State
-  const [selectedPlan, setSelectedPlan] = useState(initialPlan.toLowerCase());
-  const [billingCycle, setBillingCycle] = useState(initialCycle);
-  const [activeTab, setActiveTab] = useState("card"); // 'card' | 'upi' | 'netbanking' | 'wallet'
+  // Coupon state
+  const [couponCode, setCouponCode] = useState('');
+  const [discountPercent, setDiscountPercent] = useState(0);
+  const [couponError, setCouponError] = useState('');
+  const [couponSuccess, setCouponSuccess] = useState('');
 
-  // Promo Code State
-  const [promoCode, setPromoCode] = useState("");
-  const [promoApplied, setPromoApplied] = useState(null);
-  const [promoLoading, setPromoLoading] = useState(false);
-  const [promoError, setPromoError] = useState("");
+  // Processing state
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [isSuccess, setIsSuccess] = useState(false);
+  const [refError, setRefError] = useState('');
 
-  // Card Form State
-  const [cardNumber, setCardNumber] = useState("");
-  const [cardName, setCardName] = useState(user?.name || "");
-  const [cardExpiry, setCardExpiry] = useState("");
-  const [cardCvv, setCardCvv] = useState("");
-  const [cardBrand, setCardBrand] = useState("visa");
-  const [isCardFlipped, setIsCardFlipped] = useState(false);
+  if (!isOpen || !plan) return null;
 
-  // UPI State
-  const [upiId, setUpiId] = useState("");
-  const [upiTimer, setUpiTimer] = useState(300); // 5 min countdown
+  const upiId = '9310664653@ptsbi';
 
-  // Net Banking State
-  const [selectedBank, setSelectedBank] = useState("hdfc");
+  // Calculate pricing
+  const basePrice = isYearly ? plan.yearlyPrice : plan.monthlyPrice;
+  const discountAmount = Math.round((basePrice * discountPercent) / 100);
+  const finalPrice = Math.max(0, basePrice - discountAmount);
 
-  // Wallet State
-  const [walletType, setWalletType] = useState("gpay");
+  const handleApplyCoupon = (e) => {
+    if (e) e.preventDefault();
+    setCouponError('');
+    setCouponSuccess('');
+    const clean = couponCode.trim().toUpperCase();
 
-  // Processing & Success State
-  const [processing, setProcessing] = useState(false);
-  const [processingStep, setProcessingStep] = useState(1);
-  const [paymentSuccess, setPaymentSuccess] = useState(false);
-  const [paymentReceipt, setPaymentReceipt] = useState(null);
-  const [errorMessage, setErrorMessage] = useState("");
-
-  const modalHeadingId = useId();
-
-  // Sync state when props change
-  useEffect(() => {
-    if (isOpen) {
-      setSelectedPlan(initialPlan.toLowerCase());
-      setBillingCycle(initialCycle);
-      setPaymentSuccess(false);
-      setPaymentReceipt(null);
-      setErrorMessage("");
-      setPromoError("");
-    }
-  }, [isOpen, initialPlan, initialCycle]);
-
-  // UPI countdown timer
-  useEffect(() => {
-    let interval = null;
-    if (isOpen && activeTab === "upi" && !paymentSuccess) {
-      interval = setInterval(() => {
-        setUpiTimer((prev) => (prev > 0 ? prev - 1 : 300));
-      }, 1000);
-    }
-    return () => clearInterval(interval);
-  }, [isOpen, activeTab, paymentSuccess]);
-
-  if (!isOpen) return null;
-
-  // Price calculations
-  const baseMonthly = selectedPlan === "team" ? 199 : 99;
-  const baseYearly = selectedPlan === "team" ? 1910 : 950;
-  const basePrice = billingCycle === "yearly" ? baseYearly : baseMonthly;
-
-  let discountVal = 0;
-  if (promoApplied) {
-    discountVal = promoApplied.discount_amount;
-  }
-  const finalPrice = Math.max(0, basePrice - discountVal);
-
-  // Card Number Formatter and Brand Detector
-  const handleCardNumberChange = (e) => {
-    let val = e.target.value.replace(/\D/g, "");
-    if (val.length > 16) val = val.slice(0, 16);
-
-    // Detect card brand
-    if (val.startsWith("4")) setCardBrand("visa");
-    else if (val.startsWith("5") || val.startsWith("2")) setCardBrand("mastercard");
-    else if (val.startsWith("34") || val.startsWith("37")) setCardBrand("amex");
-    else if (val.startsWith("6")) setCardBrand("discover");
-    else setCardBrand("generic");
-
-    const formatted = val.match(/.{1,4}/g)?.join(" ") || val;
-    setCardNumber(formatted);
-  };
-
-  const handleExpiryChange = (e) => {
-    let val = e.target.value.replace(/\D/g, "");
-    if (val.length > 4) val = val.slice(0, 4);
-    if (val.length > 2) {
-      val = val.slice(0, 2) + "/" + val.slice(2);
-    }
-    setCardExpiry(val);
-  };
-
-  const handleCvvChange = (e) => {
-    let val = e.target.value.replace(/\D/g, "");
-    if (val.length > 4) val = val.slice(0, 4);
-    setCardCvv(val);
-  };
-
-  // Test card autofill for easy evaluation
-  const autofillTestCard = () => {
-    setCardNumber("4242 4242 4242 4242");
-    setCardName(user?.name || "Alex Morgan");
-    setCardExpiry("12/28");
-    setCardCvv("888");
-    setCardBrand("visa");
-  };
-
-  // Apply Coupon
-  const handleApplyPromo = async (e) => {
-    e?.preventDefault();
-    if (!promoCode.trim()) return;
-    setPromoLoading(true);
-    setPromoError("");
-
-    try {
-      const res = await validateCoupon({
-        code: promoCode,
-        plan_name: selectedPlan,
-        billing_cycle: billingCycle,
-      });
-      setPromoApplied(res);
-    } catch (err) {
-      setPromoError(err.message || "Invalid promo code");
-      setPromoApplied(null);
-    } finally {
-      setPromoLoading(false);
+    if (clean === 'NEW10') {
+      setDiscountPercent(25);
+      setCouponSuccess('25% discount applied successfully with NEW10!');
+    } else if (clean === 'INTERVISTA20') {
+      setDiscountPercent(20);
+      setCouponSuccess('20% discount applied successfully!');
+    } else if (clean === 'TOPCANDIDATE') {
+      setDiscountPercent(30);
+      setCouponSuccess('30% candidate pass applied!');
+    } else {
+      setCouponError('Invalid coupon code. Try "NEW10" for 25% off.');
     }
   };
 
-  const handleRemovePromo = () => {
-    setPromoApplied(null);
-    setPromoCode("");
-    setPromoError("");
+  const applyNew10Direct = () => {
+    setCouponCode('NEW10');
+    setDiscountPercent(25);
+    setCouponError('');
+    setCouponSuccess('25% discount applied successfully with NEW10!');
   };
 
-  // Process Checkout
-  const handleProceedPayment = async (e) => {
-    e?.preventDefault();
-    setErrorMessage("");
-
-    // Validate inputs per active tab
-    if (activeTab === "card") {
-      const rawCard = cardNumber.replace(/\s/g, "");
-      if (rawCard.length < 15) {
-        setErrorMessage("Please enter a valid 16-digit card number.");
-        return;
-      }
-      if (!cardName.trim()) {
-        setErrorMessage("Please enter the name on the card.");
-        return;
-      }
-      if (cardExpiry.length < 5) {
-        setErrorMessage("Please enter a valid expiration date (MM/YY).");
-        return;
-      }
-      if (cardCvv.length < 3) {
-        setErrorMessage("Please enter a valid CVV/CVC code.");
-        return;
-      }
-    } else if (activeTab === "upi") {
-      if (!upiId.trim() && !upiId.includes("@")) {
-        setErrorMessage("Please enter a valid UPI ID (e.g. user@okhdfcbank).");
-        return;
-      }
-    }
-
-    setProcessing(true);
-    setProcessingStep(1);
-
-    try {
-      // Step 1: Create Order
-      const order = await createPaymentOrder({
-        plan_name: selectedPlan,
-        billing_cycle: billingCycle,
-        promo_code: promoApplied?.code || null,
-        currency: "INR",
-      });
-
-      // Animate progress
-      setTimeout(() => setProcessingStep(2), 600);
-      setTimeout(() => setProcessingStep(3), 1200);
-
-      // Step 2: Confirm Payment
-      const paymentPayload = {
-        order_id: order.order_id,
-        plan_name: selectedPlan,
-        billing_cycle: billingCycle,
-        amount: finalPrice,
-        currency: "INR",
-        payment_method: activeTab,
-        promo_code: promoApplied?.code || null,
-        discount_amount: discountVal,
-        card_last4: cardNumber.replace(/\s/g, "").slice(-4) || "4242",
-        card_brand: cardBrand || "Visa",
-        upi_id: upiId || undefined,
-        bank_name: selectedBank || undefined,
-      };
-
-      const result = await confirmPayment(paymentPayload);
-
-      setTimeout(() => {
-        setProcessing(false);
-        setPaymentSuccess(true);
-        setPaymentReceipt(result.receipt || result);
-
-        // Update auth user object with active subscription
-        if (user) {
-          updateUser({
-            ...user,
-            subscription_plan: selectedPlan,
-            subscription_cycle: billingCycle,
-            subscription_expires_at: result.subscription_expires_at,
-          });
-        }
-
-        if (onSuccess) {
-          onSuccess(result);
-        }
-      }, 1600);
-    } catch (err) {
-      setProcessing(false);
-      setErrorMessage(err.message || "Payment authorization failed. Please try again.");
+  const handleCopyUpi = () => {
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(upiId);
+      setCopiedUpi(true);
+      setTimeout(() => setCopiedUpi(false), 2000);
     }
   };
 
-  const handlePrintReceipt = () => {
-    window.print();
+  const handleVerifyPayment = (e) => {
+    e.preventDefault();
+    setRefError('');
+
+    const cleanRef = upiRefNumber.trim();
+    if (!cleanRef || cleanRef.length < 8) {
+      setRefError('Please enter a valid 12-digit UPI Reference / UTR Number from your payment receipt.');
+      return;
+    }
+
+    setIsProcessing(true);
+    setTimeout(() => {
+      setIsProcessing(false);
+      setIsSuccess(true);
+    }, 1500);
+  };
+
+  const handleClose = () => {
+    setIsSuccess(false);
+    setIsProcessing(false);
+    setDiscountPercent(0);
+    setCouponCode('');
+    setCouponSuccess('');
+    setCouponError('');
+    setUpiRefNumber('');
+    setRefError('');
+    onClose();
   };
 
   return (
-    <div className="checkout-overlay" onClick={onClose} role="dialog" aria-modal="true" aria-labelledby={modalHeadingId}>
-      <div className="checkout-modal" onClick={(e) => e.stopPropagation()}>
-        <button className="checkout-close-btn" onClick={onClose} aria-label="Close modal">
-          ✕
+    <div className="modal-overlay" onClick={handleClose}>
+      <div
+        className="modal-content"
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          maxWidth: '540px',
+          width: '94%',
+          padding: '2.2rem 2rem',
+          backgroundColor: '#111111',
+          border: '1px solid rgba(217, 183, 122, 0.35)',
+          borderRadius: '24px',
+          boxShadow: '0 30px 80px rgba(0, 0, 0, 0.95), 0 0 50px rgba(217, 183, 122, 0.12)',
+          position: 'relative',
+          maxHeight: '92vh',
+          overflowY: 'auto',
+        }}
+      >
+        {/* Close Button */}
+        <button
+          onClick={handleClose}
+          aria-label="Close modal"
+          style={{
+            position: 'absolute',
+            top: '1.25rem',
+            right: '1.25rem',
+            background: 'none',
+            border: 'none',
+            color: 'var(--text-secondary)',
+            cursor: 'pointer',
+            padding: '0.4rem',
+            borderRadius: '50%',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            transition: 'color 0.2s ease',
+          }}
+          onMouseEnter={(e) => (e.currentTarget.style.color = 'var(--text-primary)')}
+          onMouseLeave={(e) => (e.currentTarget.style.color = 'var(--text-secondary)')}
+        >
+          <X size={20} />
         </button>
 
-        {/* ================= SUCCESS CELEBRATION VIEW ================= */}
-        {paymentSuccess && paymentReceipt ? (
-          <div className="checkout-success-view">
-            <div className="success-icon-badge">
-              <span className="sparkle">✦</span>
-              <div className="checkmark-circle">✓</div>
-            </div>
-
-            <h2 id={modalHeadingId} className="success-title">Payment Successful!</h2>
-            <p className="success-subtitle">
-              Welcome to <strong>Intervista AI {selectedPlan.toUpperCase()}</strong>! Your account has been upgraded with unlimited access.
-            </p>
-
-            <div className="receipt-card" id="printable-receipt">
-              <div className="receipt-header">
-                <div>
-                  <span className="receipt-logo">⚡ Intervista AI</span>
-                  <p className="receipt-invoice-id">Invoice: {paymentReceipt.invoice_id}</p>
-                </div>
-                <div className="receipt-status-pill">PAID & VERIFIED</div>
-              </div>
-
-              <div className="receipt-grid">
-                <div>
-                  <span>Date & Time</span>
-                  <strong>{paymentReceipt.date || "Today"}</strong>
-                </div>
-                <div>
-                  <span>Payment Method</span>
-                  <strong>
-                    {paymentReceipt.payment_method || activeTab.toUpperCase()} {paymentReceipt.card_last4 ? `(••• ${paymentReceipt.card_last4})` : ""}
-                  </strong>
-                </div>
-                <div>
-                  <span>Plan Subscribed</span>
-                  <strong className="receipt-highlight">
-                    {selectedPlan.toUpperCase()} ({billingCycle.toUpperCase()})
-                  </strong>
-                </div>
-                <div>
-                  <span>Valid Until</span>
-                  <strong>{paymentReceipt.expires_at || "30 Days from now"}</strong>
-                </div>
-              </div>
-
-              <div className="receipt-line-items">
-                <div className="receipt-item-row">
-                  <span>Intervista AI {selectedPlan.toUpperCase()} Plan</span>
-                  <span>₹{basePrice.toFixed(2)}</span>
-                </div>
-                {discountVal > 0 && (
-                  <div className="receipt-item-row discount">
-                    <span>Discount ({promoApplied?.code})</span>
-                    <span>-₹{discountVal.toFixed(2)}</span>
-                  </div>
-                )}
-                <div className="receipt-item-row total">
-                  <span>Total Paid</span>
-                  <span>₹{finalPrice.toFixed(2)} INR</span>
-                </div>
-              </div>
-            </div>
-
-            <div className="success-action-row">
-              <button type="button" className="receipt-btn secondary" onClick={handlePrintReceipt}>
-                🖨 Print / Save Receipt
-              </button>
-              <button
-                type="button"
-                className="receipt-btn primary"
-                onClick={() => {
-                  onClose();
-                  navigate("/dashboard");
+        {!isSuccess ? (
+          <div>
+            {/* Modal Header */}
+            <div style={{ marginBottom: '1.4rem' }}>
+              <div
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  backgroundColor: 'rgba(217, 183, 122, 0.12)',
+                  border: '1px solid rgba(217, 183, 122, 0.3)',
+                  padding: '3px 10px',
+                  borderRadius: '9999px',
+                  fontSize: '0.72rem',
+                  fontWeight: 600,
+                  color: 'var(--accent-gold)',
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.08em',
+                  marginBottom: '0.65rem',
                 }}
               >
-                Go to Dashboard →
+                <Sparkles size={11} />
+                <span>UPI Instant Checkout</span>
+              </div>
+              <h3
+                className="serif-heading"
+                style={{
+                  fontSize: '1.65rem',
+                  lineHeight: 1.2,
+                  color: 'var(--text-primary)',
+                  marginBottom: '0.35rem',
+                }}
+              >
+                Upgrade to <span className="gold-italic">{plan.name}</span>
+              </h3>
+              <p style={{ color: 'var(--text-secondary)', fontSize: '0.84rem' }}>
+                Scan the QR code or pay via UPI ID and submit your UTR reference to activate.
+              </p>
+            </div>
+
+            {/* Plan Summary Card */}
+            <div
+              style={{
+                backgroundColor: '#161616',
+                border: '1px solid rgba(255, 255, 255, 0.08)',
+                borderRadius: '16px',
+                padding: '1.1rem 1.25rem',
+                marginBottom: '1.25rem',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+              }}
+            >
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '3px' }}>
+                  <span style={{ fontWeight: 600, fontSize: '1rem', color: 'var(--text-primary)' }}>
+                    {plan.name}
+                  </span>
+                  <span
+                    style={{
+                      fontSize: '0.72rem',
+                      padding: '2px 8px',
+                      borderRadius: '4px',
+                      backgroundColor: 'rgba(217, 183, 122, 0.15)',
+                      color: 'var(--accent-gold)',
+                      fontWeight: 600,
+                    }}
+                  >
+                    {isYearly ? 'Annual (25% off)' : 'Monthly'}
+                  </span>
+                </div>
+                <div style={{ fontSize: '0.78rem', color: 'var(--text-tertiary)' }}>
+                  Unlimited Voice Mocks · Full Performance Scorecard
+                </div>
+              </div>
+
+              <div style={{ textAlign: 'right' }}>
+                {discountPercent > 0 && (
+                  <div
+                    style={{
+                      fontSize: '0.8rem',
+                      color: 'var(--text-tertiary)',
+                      textDecoration: 'line-through',
+                    }}
+                  >
+                    ₹{basePrice.toLocaleString('en-IN')}
+                  </div>
+                )}
+                <div style={{ fontSize: '1.45rem', fontWeight: 700, color: 'var(--accent-gold)', lineHeight: 1.1 }}>
+                  ₹{finalPrice.toLocaleString('en-IN')}
+                </div>
+                <div style={{ fontSize: '0.72rem', color: 'var(--text-tertiary)' }}>
+                  {isYearly ? '/year' : '/month'}
+                </div>
+              </div>
+            </div>
+
+            {/* Special Discount Code Hint Pill */}
+            {discountPercent === 0 && (
+              <div
+                onClick={applyNew10Direct}
+                style={{
+                  backgroundColor: 'rgba(217, 183, 122, 0.08)',
+                  border: '1px dashed rgba(217, 183, 122, 0.4)',
+                  borderRadius: '12px',
+                  padding: '0.65rem 0.9rem',
+                  marginBottom: '1.25rem',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  cursor: 'pointer',
+                  transition: 'all 0.2s ease',
+                }}
+                onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'rgba(217, 183, 122, 0.14)')}
+                onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'rgba(217, 183, 122, 0.08)')}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <Tag size={15} color="var(--accent-gold)" />
+                  <span style={{ fontSize: '0.82rem', color: 'var(--text-primary)' }}>
+                    Apply code <strong style={{ color: 'var(--accent-gold)', letterSpacing: '0.05em' }}>NEW10</strong> for <strong style={{ color: '#4ADE80' }}>25% OFF</strong>!
+                  </span>
+                </div>
+                <span
+                  style={{
+                    fontSize: '0.74rem',
+                    color: 'var(--accent-gold)',
+                    fontWeight: 600,
+                    textDecoration: 'underline',
+                  }}
+                >
+                  Tap to Apply
+                </span>
+              </div>
+            )}
+
+            {/* Coupon Code Input */}
+            <div style={{ marginBottom: '1.5rem' }}>
+              <form
+                onSubmit={handleApplyCoupon}
+                style={{
+                  display: 'flex',
+                  gap: '8px',
+                  alignItems: 'center',
+                }}
+              >
+                <div style={{ position: 'relative', flex: 1 }}>
+                  <Tag
+                    size={15}
+                    color="var(--text-tertiary)"
+                    style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)' }}
+                  />
+                  <input
+                    type="text"
+                    placeholder="Enter Coupon (e.g. NEW10)"
+                    value={couponCode}
+                    onChange={(e) => setCouponCode(e.target.value)}
+                    style={{
+                      width: '100%',
+                      backgroundColor: '#181818',
+                      border: '1px solid rgba(255, 255, 255, 0.1)',
+                      borderRadius: '10px',
+                      padding: '0.62rem 0.85rem 0.62rem 2.2rem',
+                      color: 'var(--text-primary)',
+                      fontSize: '0.84rem',
+                      textTransform: 'uppercase',
+                    }}
+                  />
+                </div>
+                <button
+                  type="submit"
+                  className="btn-secondary"
+                  style={{
+                    padding: '0.62rem 1.15rem',
+                    fontSize: '0.82rem',
+                    borderRadius: '10px',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  Apply
+                </button>
+              </form>
+              {couponSuccess && (
+                <div style={{ fontSize: '0.78rem', color: '#4ADE80', marginTop: '6px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                  <Check size={13} /> {couponSuccess}
+                </div>
+              )}
+              {couponError && (
+                <div style={{ fontSize: '0.78rem', color: '#F87171', marginTop: '6px' }}>
+                  {couponError}
+                </div>
+              )}
+            </div>
+
+            {/* UPI QR Payment Container */}
+            <div
+              style={{
+                backgroundColor: '#161616',
+                border: '1px solid rgba(217, 183, 122, 0.25)',
+                borderRadius: '18px',
+                padding: '1.4rem',
+                marginBottom: '1.5rem',
+                textAlign: 'center',
+                position: 'relative',
+              }}
+            >
+              <div
+                style={{
+                  fontSize: '0.76rem',
+                  fontWeight: 600,
+                  color: 'var(--text-tertiary)',
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.08em',
+                  marginBottom: '1rem',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '6px',
+                }}
+              >
+                <QrCode size={14} color="var(--accent-gold)" />
+                <span>Scan with any UPI App</span>
+              </div>
+
+              {/* QR Image Frame */}
+              <div
+                style={{
+                  display: 'inline-block',
+                  backgroundColor: '#FFFFFF',
+                  padding: '10px',
+                  borderRadius: '16px',
+                  boxShadow: '0 10px 30px rgba(0, 0, 0, 0.5), 0 0 25px rgba(217, 183, 122, 0.2)',
+                  border: '2px solid var(--accent-gold)',
+                  marginBottom: '1rem',
+                }}
+              >
+                <img
+                  src="/upi-qr.png"
+                  alt="UPI QR Code"
+                  style={{
+                    width: '180px',
+                    height: '180px',
+                    display: 'block',
+                    borderRadius: '8px',
+                    objectFit: 'contain',
+                  }}
+                />
+              </div>
+
+              {/* Amount to pay badge */}
+              <div style={{ marginBottom: '1rem' }}>
+                <div
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    backgroundColor: 'rgba(217, 183, 122, 0.1)',
+                    border: '1px solid rgba(217, 183, 122, 0.3)',
+                    padding: '4px 12px',
+                    borderRadius: '9999px',
+                    fontSize: '0.84rem',
+                    fontWeight: 600,
+                    color: 'var(--text-primary)',
+                  }}
+                >
+                  <span>Pay:</span>
+                  <span style={{ color: 'var(--accent-gold)', fontSize: '0.95rem' }}>
+                    ₹{finalPrice.toLocaleString('en-IN')}
+                  </span>
+                </div>
+              </div>
+
+              {/* Supported UPI Apps Pills */}
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '6px',
+                  flexWrap: 'wrap',
+                  marginBottom: '1.25rem',
+                }}
+              >
+                {['Google Pay', 'PhonePe', 'Paytm', 'BHIM', 'CRED'].map((app) => (
+                  <span
+                    key={app}
+                    style={{
+                      fontSize: '0.7rem',
+                      backgroundColor: '#202020',
+                      border: '1px solid rgba(255, 255, 255, 0.06)',
+                      padding: '2px 8px',
+                      borderRadius: '4px',
+                      color: 'var(--text-secondary)',
+                    }}
+                  >
+                    {app}
+                  </span>
+                ))}
+              </div>
+
+              {/* UPI ID Row with Copy */}
+              <div
+                style={{
+                  backgroundColor: '#1D1D1D',
+                  border: '1px solid rgba(255, 255, 255, 0.1)',
+                  borderRadius: '10px',
+                  padding: '0.65rem 0.9rem',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: '10px',
+                }}
+              >
+                <div style={{ textAlign: 'left', overflow: 'hidden' }}>
+                  <div style={{ fontSize: '0.68rem', color: 'var(--text-tertiary)', textTransform: 'uppercase' }}>
+                    UPI ID (VPA)
+                  </div>
+                  <div
+                    style={{
+                      fontSize: '0.88rem',
+                      fontWeight: 600,
+                      color: 'var(--text-primary)',
+                      fontFamily: 'monospace',
+                    }}
+                  >
+                    {upiId}
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handleCopyUpi}
+                  style={{
+                    backgroundColor: copiedUpi ? '#22C55E' : 'rgba(217, 183, 122, 0.15)',
+                    border: '1px solid rgba(217, 183, 122, 0.3)',
+                    color: copiedUpi ? '#000' : 'var(--accent-gold)',
+                    borderRadius: '8px',
+                    padding: '0.45rem 0.75rem',
+                    fontSize: '0.76rem',
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '4px',
+                    transition: 'all 0.2s ease',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {copiedUpi ? (
+                    <>
+                      <Check size={13} /> Copied!
+                    </>
+                  ) : (
+                    <>
+                      <Copy size={13} /> Copy ID
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+
+            {/* Verification: UPI Reference / UTR Number Form */}
+            <form onSubmit={handleVerifyPayment}>
+              <div style={{ marginBottom: '1.25rem' }}>
+                <label
+                  style={{
+                    display: 'block',
+                    fontSize: '0.8rem',
+                    fontWeight: 600,
+                    color: 'var(--text-primary)',
+                    marginBottom: '0.4rem',
+                  }}
+                >
+                  Enter UPI Reference / UTR No. <span style={{ color: '#EF4444' }}>*</span>
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. 4289XXXXXXXX (12-digit Ref / UTR No.)"
+                  value={upiRefNumber}
+                  onChange={(e) => {
+                    setUpiRefNumber(e.target.value);
+                    if (refError) setRefError('');
+                  }}
+                  style={{
+                    width: '100%',
+                    backgroundColor: '#181818',
+                    border: refError ? '1px solid #EF4444' : '1px solid rgba(217, 183, 122, 0.4)',
+                    borderRadius: '10px',
+                    padding: '0.75rem 0.95rem',
+                    color: 'var(--text-primary)',
+                    fontSize: '0.88rem',
+                    fontFamily: 'monospace',
+                    letterSpacing: '0.04em',
+                  }}
+                />
+                <div style={{ fontSize: '0.73rem', color: 'var(--text-tertiary)', marginTop: '5px' }}>
+                  Found on your payment success receipt in GPay / PhonePe / Paytm / BHIM app.
+                </div>
+                {refError && (
+                  <div style={{ fontSize: '0.78rem', color: '#F87171', marginTop: '5px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                    <AlertCircle size={13} /> {refError}
+                  </div>
+                )}
+              </div>
+
+              {/* Submit Button */}
+              <button
+                type="submit"
+                disabled={isProcessing}
+                className="btn-primary"
+                style={{
+                  width: '100%',
+                  padding: '0.85rem',
+                  fontSize: '0.96rem',
+                  fontWeight: 600,
+                  backgroundColor: 'var(--accent-gold)',
+                  color: '#090909',
+                  borderRadius: '12px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '8px',
+                  opacity: isProcessing ? 0.75 : 1,
+                  cursor: isProcessing ? 'not-allowed' : 'pointer',
+                  boxShadow: '0 8px 25px rgba(217, 183, 122, 0.3)',
+                  marginBottom: '1rem',
+                  transition: 'all 0.2s ease',
+                }}
+              >
+                {isProcessing ? (
+                  <>
+                    <span className="pulse-dot" style={{ backgroundColor: '#090909' }} />
+                    <span>Verifying UTR with UPI Gateway...</span>
+                  </>
+                ) : (
+                  <>
+                    <Lock size={15} />
+                    <span>Verify & Activate {plan.name}</span>
+                    <ArrowRight size={16} />
+                  </>
+                )}
               </button>
+            </form>
+
+            {/* Trust Guarantee Strip */}
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '1.25rem',
+                color: 'var(--text-tertiary)',
+                fontSize: '0.74rem',
+                borderTop: '1px solid rgba(255, 255, 255, 0.06)',
+                paddingTop: '0.85rem',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                <ShieldCheck size={13} color="#4ADE80" />
+                <span>Instant Verification</span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                <Zap size={13} color="var(--accent-gold)" />
+                <span>Zero Latency Activation</span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                <Lock size={13} />
+                <span>7-Day Refund Policy</span>
+              </div>
             </div>
           </div>
         ) : (
-          /* ================= MAIN CHECKOUT INTERFACE ================= */
-          <div className="checkout-content-grid">
-            {/* LEFT COLUMN: Payment Methods & Details */}
-            <div className="checkout-left-pane">
-              <div className="checkout-header">
-                <span className="checkout-badge">⚡ SECURE 256-BIT CHECKOUT</span>
-                <h2 id={modalHeadingId}>Complete Your Subscription</h2>
-                <p>Select your preferred payment method to activate your plan instantly.</p>
-              </div>
-
-              {/* Plan Switcher Pills inside checkout */}
-              <div className="checkout-plan-selector">
-                <button
-                  type="button"
-                  className={`plan-pill ${selectedPlan === "pro" ? "active" : ""}`}
-                  onClick={() => setSelectedPlan("pro")}
-                >
-                  <span className="pill-name">PRO PLAN</span>
-                  <span className="pill-price">{billingCycle === "yearly" ? "₹950/yr" : "₹99/mo"}</span>
-                </button>
-                <button
-                  type="button"
-                  className={`plan-pill ${selectedPlan === "team" ? "active" : ""}`}
-                  onClick={() => setSelectedPlan("team")}
-                >
-                  <span className="pill-name">TEAM PLAN</span>
-                  <span className="pill-price">{billingCycle === "yearly" ? "₹1,910/yr" : "₹199/mo"}</span>
-                </button>
-              </div>
-
-              {/* Payment Method Tabs */}
-              <div className="payment-method-tabs" role="tablist">
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={activeTab === "card"}
-                  className={`method-tab ${activeTab === "card" ? "active" : ""}`}
-                  onClick={() => setActiveTab("card")}
-                >
-                  <span className="tab-icon">💳</span>
-                  <span>Card</span>
-                </button>
-
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={activeTab === "upi"}
-                  className={`method-tab ${activeTab === "upi" ? "active" : ""}`}
-                  onClick={() => setActiveTab("upi")}
-                >
-                  <span className="tab-icon">📱</span>
-                  <span>UPI / QR</span>
-                </button>
-
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={activeTab === "netbanking"}
-                  className={`method-tab ${activeTab === "netbanking" ? "active" : ""}`}
-                  onClick={() => setActiveTab("netbanking")}
-                >
-                  <span className="tab-icon">🏦</span>
-                  <span>Net Banking</span>
-                </button>
-
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={activeTab === "wallet"}
-                  className={`method-tab ${activeTab === "wallet" ? "active" : ""}`}
-                  onClick={() => setActiveTab("wallet")}
-                >
-                  <span className="tab-icon">🌐</span>
-                  <span>Wallets / PayPal</span>
-                </button>
-              </div>
-
-              {/* ERROR ALERT */}
-              {errorMessage && (
-                <div className="checkout-error-alert" role="alert">
-                  <span>⚠️</span> {errorMessage}
-                </div>
-              )}
-
-              {/* TAB 1: CARD PAYMENT */}
-              {activeTab === "card" && (
-                <div className="tab-content card-tab-content">
-                  {/* Interactive Virtual Card Preview */}
-                  <div className={`virtual-card ${cardBrand} ${isCardFlipped ? "flipped" : ""}`}>
-                    <div className="card-front">
-                      <div className="card-top">
-                        <div className="card-chip"></div>
-                        <div className="contactless-wave">📶</div>
-                        <span className="card-brand-logo">{cardBrand.toUpperCase()}</span>
-                      </div>
-                      <div className="card-number-display">
-                        {cardNumber || "•••• •••• •••• ••••"}
-                      </div>
-                      <div className="card-bottom">
-                        <div className="card-holder">
-                          <span>CARD HOLDER</span>
-                          <strong>{cardName.toUpperCase() || "YOUR NAME"}</strong>
-                        </div>
-                        <div className="card-exp">
-                          <span>EXPIRES</span>
-                          <strong>{cardExpiry || "MM/YY"}</strong>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="test-card-helper">
-                    <span>💡 Testing environment:</span>
-                    <button type="button" onClick={autofillTestCard} className="quick-autofill-btn">
-                      Auto-fill Test Card (4242)
-                    </button>
-                  </div>
-
-                  {/* Accessible Card Form */}
-                  <form onSubmit={handleProceedPayment} className="checkout-form">
-                    <div className="form-group">
-                      <label htmlFor="cc-number">Card Number</label>
-                      <div className="input-with-icon">
-                        <input
-                          id="cc-number"
-                          name="cc-number"
-                          type="text"
-                          autoComplete="cc-number"
-                          inputMode="numeric"
-                          placeholder="4242 4242 4242 4242"
-                          value={cardNumber}
-                          onChange={handleCardNumberChange}
-                          required
-                        />
-                        <span className="field-icon">💳</span>
-                      </div>
-                    </div>
-
-                    <div className="form-group">
-                      <label htmlFor="cc-name">Cardholder Name</label>
-                      <input
-                        id="cc-name"
-                        name="cc-name"
-                        type="text"
-                        autoComplete="cc-name"
-                        placeholder="e.g. Alex Morgan"
-                        value={cardName}
-                        onChange={(e) => setCardName(e.target.value)}
-                        required
-                      />
-                    </div>
-
-                    <div className="form-row">
-                      <div className="form-group">
-                        <label htmlFor="cc-exp">Expiry (MM/YY)</label>
-                        <input
-                          id="cc-exp"
-                          name="cc-exp"
-                          type="text"
-                          autoComplete="cc-exp"
-                          placeholder="MM/YY"
-                          value={cardExpiry}
-                          onChange={handleExpiryChange}
-                          maxLength={5}
-                          required
-                        />
-                      </div>
-
-                      <div className="form-group">
-                        <label htmlFor="cc-csc">CVV / CVC</label>
-                        <input
-                          id="cc-csc"
-                          name="cc-csc"
-                          type="password"
-                          autoComplete="cc-csc"
-                          inputMode="numeric"
-                          placeholder="•••"
-                          value={cardCvv}
-                          onChange={handleCvvChange}
-                          maxLength={4}
-                          onFocus={() => setIsCardFlipped(true)}
-                          onBlur={() => setIsCardFlipped(false)}
-                          required
-                        />
-                      </div>
-                    </div>
-
-                    <button
-                      type="submit"
-                      className="checkout-pay-btn"
-                      disabled={processing}
-                    >
-                      {processing ? (
-                        <span className="btn-loader-text">
-                          <span className="spinner"></span> Processing ₹{finalPrice.toFixed(2)}...
-                        </span>
-                      ) : (
-                        `Pay ₹${finalPrice.toFixed(2)} & Upgrade to ${selectedPlan.toUpperCase()}`
-                      )}
-                    </button>
-                  </form>
-                </div>
-              )}
-
-              {/* TAB 2: UPI / QR CODE */}
-              {activeTab === "upi" && (
-                <div className="tab-content upi-tab-content">
-                  <div className="upi-qr-card">
-                    <div className="qr-visual">
-                      <div className="qr-matrix">
-                        {/* Interactive SVG QR Code Mockup */}
-                        <svg viewBox="0 0 100 100" width="140" height="140" className="qr-svg">
-                          <rect width="100" height="100" fill="#ffffff" rx="8" />
-                          <rect x="10" y="10" width="25" height="25" fill="#070b18" rx="3" />
-                          <rect x="15" y="15" width="15" height="15" fill="#ffffff" rx="2" />
-                          <rect x="18" y="18" width="9" height="9" fill="#8b5cf6" />
-
-                          <rect x="65" y="10" width="25" height="25" fill="#070b18" rx="3" />
-                          <rect x="70" y="15" width="15" height="15" fill="#ffffff" rx="2" />
-                          <rect x="73" y="18" width="9" height="9" fill="#8b5cf6" />
-
-                          <rect x="10" y="65" width="25" height="25" fill="#070b18" rx="3" />
-                          <rect x="15" y="70" width="15" height="15" fill="#ffffff" rx="2" />
-                          <rect x="18" y="73" width="9" height="9" fill="#8b5cf6" />
-
-                          <rect x="42" y="15" width="6" height="6" fill="#070b18" />
-                          <rect x="52" y="22" width="6" height="6" fill="#070b18" />
-                          <rect x="42" y="42" width="16" height="16" fill="#8b5cf6" rx="2" />
-                          <rect x="68" y="50" width="8" height="8" fill="#070b18" />
-                          <rect x="50" y="72" width="8" height="8" fill="#070b18" />
-                          <rect x="75" y="75" width="10" height="10" fill="#070b18" />
-                        </svg>
-                      </div>
-                      <div className="qr-info">
-                        <span className="qr-scan-badge">⚡ Instant Scan & Pay</span>
-                        <strong>Scan with any UPI App</strong>
-                        <p>Google Pay, PhonePe, Paytm, BHIM, Cred</p>
-                        <div className="qr-timer">
-                          ⏳ Expires in: <strong>{Math.floor(upiTimer / 60)}:{(upiTimer % 60).toString().padStart(2, "0")}</strong>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="upi-divider">
-                    <span>OR ENTER UPI ID</span>
-                  </div>
-
-                  <div className="form-group">
-                    <label htmlFor="upi-id">Virtual Payment Address (VPA)</label>
-                    <div className="upi-input-wrapper">
-                      <input
-                        id="upi-id"
-                        type="text"
-                        placeholder="yourname@okhdfcbank"
-                        value={upiId}
-                        onChange={(e) => setUpiId(e.target.value)}
-                      />
-                      <button
-                        type="button"
-                        className="upi-quick-pill"
-                        onClick={() => setUpiId("intervista.candidate@okhdfcbank")}
-                      >
-                        Autofill Demo VPA
-                      </button>
-                    </div>
-                  </div>
-
-                  <button
-                    type="button"
-                    className="checkout-pay-btn upi"
-                    onClick={handleProceedPayment}
-                    disabled={processing}
-                  >
-                    {processing ? "Verifying UPI Payment..." : `Verify & Pay ₹${finalPrice.toFixed(2)}`}
-                  </button>
-                </div>
-              )}
-
-              {/* TAB 3: NET BANKING */}
-              {activeTab === "netbanking" && (
-                <div className="tab-content netbanking-tab-content">
-                  <p className="bank-selection-hint">Choose your bank to proceed with direct Net Banking portal:</p>
-                  <div className="bank-grid">
-                    {POPULAR_BANKS.map((b) => (
-                      <button
-                        key={b.id}
-                        type="button"
-                        className={`bank-tile ${selectedBank === b.id ? "selected" : ""}`}
-                        onClick={() => setSelectedBank(b.id)}
-                      >
-                        <span className="bank-icon">{b.icon}</span>
-                        <span className="bank-name">{b.name}</span>
-                        {selectedBank === b.id && <span className="bank-check">✓</span>}
-                      </button>
-                    ))}
-                  </div>
-
-                  <button
-                    type="button"
-                    className="checkout-pay-btn"
-                    onClick={handleProceedPayment}
-                    disabled={processing}
-                  >
-                    {processing ? "Connecting to Bank Gateway..." : `Proceed with ${POPULAR_BANKS.find(b => b.id === selectedBank)?.name} (₹${finalPrice.toFixed(2)})`}
-                  </button>
-                </div>
-              )}
-
-              {/* TAB 4: WALLETS / PAYPAL */}
-              {activeTab === "wallet" && (
-                <div className="tab-content wallet-tab-content">
-                  <div className="wallet-options">
-                    <button
-                      type="button"
-                      className={`wallet-btn paypal ${walletType === "paypal" ? "active" : ""}`}
-                      onClick={() => setWalletType("paypal")}
-                    >
-                      <span className="wallet-icon">🅿️</span>
-                      <strong>PayPal Express</strong>
-                      <span>Fast & Secure</span>
-                    </button>
-
-                    <button
-                      type="button"
-                      className={`wallet-btn gpay ${walletType === "gpay" ? "active" : ""}`}
-                      onClick={() => setWalletType("gpay")}
-                    >
-                      <span className="wallet-icon">🌐</span>
-                      <strong>Google Pay</strong>
-                      <span>One-click checkout</span>
-                    </button>
-
-                    <button
-                      type="button"
-                      className={`wallet-btn applepay ${walletType === "applepay" ? "active" : ""}`}
-                      onClick={() => setWalletType("applepay")}
-                    >
-                      <span className="wallet-icon"></span>
-                      <strong>Apple Pay</strong>
-                      <span>Touch / Face ID</span>
-                    </button>
-                  </div>
-
-                  <button
-                    type="button"
-                    className="checkout-pay-btn wallet"
-                    onClick={handleProceedPayment}
-                    disabled={processing}
-                  >
-                    {processing ? "Authorizing Wallet..." : `Pay with ${walletType.toUpperCase()} (₹${finalPrice.toFixed(2)})`}
-                  </button>
-                </div>
-              )}
+          /* Payment Verified Success View */
+          <div style={{ textAlign: 'center', padding: '1.5rem 0.5rem' }}>
+            <div
+              style={{
+                width: '64px',
+                height: '64px',
+                borderRadius: '50%',
+                backgroundColor: 'rgba(34, 197, 94, 0.15)',
+                border: '2px solid #22C55E',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                margin: '0 auto 1.25rem auto',
+                boxShadow: '0 0 30px rgba(34, 197, 94, 0.3)',
+              }}
+            >
+              <CheckCircle2 size={34} color="#22C55E" />
             </div>
 
-            {/* RIGHT COLUMN: Order Summary & Coupon */}
-            <div className="checkout-right-pane">
-              <div className="order-summary-card">
-                <h3 className="summary-title">Order Summary</h3>
+            <span
+              style={{
+                fontSize: '0.74rem',
+                fontWeight: 700,
+                color: 'var(--accent-gold)',
+                letterSpacing: '0.12em',
+                textTransform: 'uppercase',
+              }}
+            >
+              Payment Verified Successfully
+            </span>
 
-                {/* Selected Plan Details */}
-                <div className="summary-plan-banner">
-                  <div className="plan-tag">Intervista AI</div>
-                  <h4>{selectedPlan.toUpperCase()} MEMBERSHIP</h4>
-                  <p className="plan-cycle-text">
-                    Billed {billingCycle} {billingCycle === "yearly" ? "(20% Annual Savings Included)" : ""}
-                  </p>
-                </div>
+            <h3
+              className="serif-heading"
+              style={{
+                fontSize: '1.9rem',
+                color: 'var(--text-primary)',
+                marginTop: '0.35rem',
+                marginBottom: '0.65rem',
+              }}
+            >
+              Welcome to <span className="gold-italic">{plan.name}</span>!
+            </h3>
 
-                {/* Plan Highlights */}
-                <ul className="summary-features-list">
-                  <li>✓ Unlimited AI Mock Interviews</li>
-                  <li>✓ Real-Time Voice & Video Feedback</li>
-                  <li>✓ ATS Resume Review & Scoring</li>
-                  <li>✓ Full DSA Coding Challenge Suite</li>
-                  <li>✓ Official Verified Certificate of Readiness</li>
-                </ul>
-
-                {/* Coupon Code Section */}
-                <div className="coupon-box">
-                  <div className="coupon-input-group">
-                    <input
-                      type="text"
-                      placeholder="Promo Code (e.g. INTERVISTA20)"
-                      value={promoCode}
-                      onChange={(e) => setPromoCode(e.target.value.toUpperCase())}
-                      disabled={Boolean(promoApplied)}
-                    />
-                    {promoApplied ? (
-                      <button type="button" className="remove-promo-btn" onClick={handleRemovePromo}>
-                        Remove
-                      </button>
-                    ) : (
-                      <button
-                        type="button"
-                        className="apply-promo-btn"
-                        onClick={handleApplyPromo}
-                        disabled={promoLoading || !promoCode.trim()}
-                      >
-                        {promoLoading ? "..." : "Apply"}
-                      </button>
-                    )}
-                  </div>
-
-                  {promoApplied && (
-                    <div className="promo-success-badge">
-                      ✓ {promoApplied.message}
-                    </div>
-                  )}
-                  {promoError && (
-                    <div className="promo-error-badge">
-                      ✕ {promoError}
-                    </div>
-                  )}
-
-                  <div className="coupon-suggestions">
-                    <span>Try:</span>
-                    <button type="button" onClick={() => { setPromoCode("INTERVISTA20"); }}>
-                      INTERVISTA20 (20% OFF)
-                    </button>
-                    <button type="button" onClick={() => { setPromoCode("AIREADY"); }}>
-                      AIREADY (₹15 OFF)
-                    </button>
-                  </div>
-                </div>
-
-                {/* Price Breakdown */}
-                <div className="pricing-breakdown">
-                  <div className="breakdown-row">
-                    <span>Base Subscription</span>
-                    <span>₹{basePrice.toFixed(2)}</span>
-                  </div>
-
-                  {discountVal > 0 && (
-                    <div className="breakdown-row discount">
-                      <span>Promo Discount ({promoApplied?.code})</span>
-                      <span>-₹{discountVal.toFixed(2)}</span>
-                    </div>
-                  )}
-
-                  <div className="breakdown-row">
-                    <span>Estimated Tax</span>
-                    <span className="tax-free">₹0.00</span>
-                  </div>
-
-                  <div className="breakdown-divider"></div>
-
-                  <div className="breakdown-row total">
-                    <span>Total Due Today</span>
-                    <span className="total-amount">₹{finalPrice.toFixed(2)} INR</span>
-                  </div>
-                </div>
-
-                {/* Trust & Guarantee Badges */}
-                <div className="security-badges">
-                  <div className="badge-item">
-                    <span>🔒</span>
-                    <div>
-                      <strong>256-Bit SSL</strong>
-                      <p>Bank-grade encryption</p>
-                    </div>
-                  </div>
-                  <div className="badge-item">
-                    <span>🛡️</span>
-                    <div>
-                      <strong>PCI-DSS Certified</strong>
-                      <p>Tokenized payments</p>
-                    </div>
-                  </div>
-                  <div className="badge-item">
-                    <span>↩️</span>
-                    <div>
-                      <strong>14-Day Guarantee</strong>
-                      <p>100% money back</p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* PROCESSING OVERLAY */}
-        {processing && (
-          <div className="checkout-processing-overlay">
-            <div className="processing-spinner-box">
-              <div className="ring-pulse"></div>
-              <div className="spinner-center">⚡</div>
-            </div>
-            <h3>Authorizing Secure Payment</h3>
-            <p className="step-text">
-              {processingStep === 1 && "Verifying payment credentials with gateway..."}
-              {processingStep === 2 && "Securing cryptographic subscription token..."}
-              {processingStep === 3 && "Generating invoice & unlocking Pro benefits..."}
+            <p
+              style={{
+                color: 'var(--text-secondary)',
+                fontSize: '0.9rem',
+                lineHeight: 1.6,
+                maxWidth: '420px',
+                margin: '0 auto 1.5rem auto',
+              }}
+            >
+              Your UTR Reference has been verified! All unlimited AI voice mock interviews,
+              follow-up questions, and company question sets are now unlocked.
             </p>
+
+            <div
+              style={{
+                backgroundColor: '#181818',
+                borderRadius: '12px',
+                padding: '0.85rem 1.2rem',
+                border: '1px solid rgba(255, 255, 255, 0.08)',
+                display: 'inline-flex',
+                flexDirection: 'column',
+                gap: '4px',
+                marginBottom: '2rem',
+                fontSize: '0.8rem',
+                textAlign: 'left',
+              }}
+            >
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <span style={{ color: 'var(--text-tertiary)' }}>UTR Ref:</span>
+                <span style={{ color: 'var(--text-primary)', fontFamily: 'monospace', fontWeight: 600 }}>
+                  {upiRefNumber}
+                </span>
+              </div>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <span style={{ color: 'var(--text-tertiary)' }}>Status:</span>
+                <span style={{ color: '#22C55E', fontWeight: 600 }}>● VERIFIED & ACTIVE</span>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', gap: '0.85rem', justifyContent: 'center' }}>
+              <button
+                onClick={handleClose}
+                className="btn-secondary"
+                style={{ padding: '0.75rem 1.4rem', fontSize: '0.9rem' }}
+              >
+                Close
+              </button>
+              <button
+                onClick={() => {
+                  handleClose();
+                  if (onStartInterview) onStartInterview();
+                }}
+                className="btn-primary"
+                style={{
+                  padding: '0.75rem 1.6rem',
+                  fontSize: '0.9rem',
+                  backgroundColor: 'var(--accent-gold)',
+                  color: '#090909',
+                }}
+              >
+                <span>Launch Mock Interview</span>
+                <ArrowRight size={16} />
+              </button>
+            </div>
           </div>
         )}
       </div>

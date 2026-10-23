@@ -1,370 +1,317 @@
-import { useState, useEffect } from "react";
-import { Link, useNavigate, useSearchParams } from "react-router-dom";
-import { useAuth } from "../context/useAuth";
-import { resendOtp, getOAuthUrl } from "../api";
-import "./AuthPage.css";
+import React, { useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import { Lock, Mail, User, Eye, EyeOff, ArrowRight, AlertCircle, CheckCircle2 } from 'lucide-react';
+import { useAuth } from '../context/useAuth';
+import { apiLogin, apiRegister } from '../utils/api';
+import './AuthPage.css';
 
-export default function AuthPage({ mode = "login" }) {
-  const isLogin = mode === "login";
-  const { login, signup, verifyEmail, isAuthenticated } = useAuth();
+export default function AuthPage({ mode = 'login' }) {
+  const [currentMode, setCurrentMode] = useState(mode);
+  const [name, setName] = useState('');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [successMsg, setSuccessMsg] = useState('');
+
+  const { login: authContextLogin, updateUser } = useAuth();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
+  const redirectDest = searchParams.get('redirect') || '/dashboard';
 
-  const redirectDest = searchParams.get("redirect") || "/dashboard";
-  const redirectQuery = searchParams.get("redirect")
-    ? `?redirect=${encodeURIComponent(searchParams.get("redirect"))}`
-    : "";
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setError('');
+    setSuccessMsg('');
 
-  const [formData, setFormData] = useState({
-    name: "",
-    email: "",
-    password: "",
-    confirmPassword: "",
-  });
-  const [error, setError] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [oauthLoading, setOauthLoading] = useState(null);
-  const [awaitingVerification, setAwaitingVerification] = useState(false);
-  const [verificationEmail, setVerificationEmail] = useState("");
-  const [code, setCode] = useState("");
-  const [notice, setNotice] = useState("");
-  const [showForgotModal, setShowForgotModal] = useState(false);
-
-  // If already authenticated, redirect to destination
-  useEffect(() => {
-    if (isAuthenticated) {
-      navigate(redirectDest, { replace: true });
-    }
-  }, [isAuthenticated, navigate, redirectDest]);
-
-  // Read any error notice passed via URL
-  useEffect(() => {
-    const urlError = searchParams.get("error");
-    const urlNotice = searchParams.get("notice");
-    if (urlError) setError(urlError);
-    if (urlNotice) setNotice(urlNotice);
-  }, [searchParams]);
-
-  const updateField = (event) =>
-    setFormData((current) => ({
-      ...current,
-      [event.target.name]: event.target.value,
-    }));
-
-  const handleSubmit = async (event) => {
-    event.preventDefault();
-    setError("");
-
-    const email = formData.email.trim().toLowerCase();
-    const password = formData.password;
-    if (!email || !password) {
-      return setError("Please fill in your email and password.");
+    const cleanEmail = email.trim().toLowerCase();
+    if (!cleanEmail || !password) {
+      setError('Please provide both email and password.');
+      return;
     }
 
-    if (!isLogin) {
+    if (currentMode === 'signup') {
+      if (!name.trim()) {
+        setError('Please enter your full name.');
+        return;
+      }
       if (password.length < 6) {
-        return setError("Password must be at least 6 characters long.");
+        setError('Password must be at least 6 characters long.');
+        return;
       }
-      if (formData.confirmPassword !== password) {
-        return setError("Passwords do not match.");
+      if (password !== confirmPassword) {
+        setError('Passwords do not match.');
+        return;
       }
     }
 
     setLoading(true);
     try {
-      if (isLogin) {
-        await login({ email, password });
+      let authenticatedUser;
+      if (currentMode === 'signup') {
+        authenticatedUser = await apiRegister({ name: name.trim(), email: cleanEmail, password });
+        setSuccessMsg(`Account created! Welcome, ${authenticatedUser.name || 'Candidate'}. Redirecting to Dashboard...`);
+      } else {
+        authenticatedUser = await apiLogin({ email: cleanEmail, password });
+        setSuccessMsg(`Welcome back, ${authenticatedUser.name || 'Candidate'}! Redirecting to Dashboard...`);
+      }
+
+      if (updateUser) updateUser(authenticatedUser);
+      if (authContextLogin) {
+        try {
+          await authContextLogin({ email: cleanEmail, password });
+        } catch (_) {}
+      }
+
+      setTimeout(() => {
         navigate(redirectDest, { replace: true });
-      } else {
-        const res = await signup({
-          name: formData.name.trim() || email.split("@")[0],
-          email,
-          password,
-        });
-        setVerificationEmail(email);
-        setAwaitingVerification(true);
-        setNotice(res?.message || `We sent a 6-digit verification code to ${email}.`);
-      }
+      }, 700);
     } catch (err) {
-      setError(err.message || "Authentication failed. Please check your credentials.");
+      setError(err.message || 'Authentication failed. Please verify your credentials.');
     } finally {
       setLoading(false);
-    }
-  };
-
-  const handleVerification = async (event) => {
-    event.preventDefault();
-    setError("");
-    if (!/^\d{6}$/.test(code)) return setError("Enter the 6-digit code sent to your email.");
-    setLoading(true);
-    try {
-      await verifyEmail({ email: verificationEmail, code });
-      navigate(redirectDest, { replace: true });
-    } catch (err) {
-      setError(err.message || "Invalid or expired verification code.");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleResend = async () => {
-    setError("");
-    setLoading(true);
-    try {
-      const res = await resendOtp(verificationEmail);
-      setNotice(res?.message || "A new code has been sent to your email.");
-    } catch (err) {
-      setError(err.message || "Could not resend the code.");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleOAuthLogin = async (provider) => {
-    setError("");
-    setOauthLoading(provider);
-    try {
-      const baseOrigin = window.location.origin.includes("127.0.0.1")
-        ? window.location.origin.replace("127.0.0.1", "localhost")
-        : window.location.origin;
-
-      const redirectUri = provider === "github"
-        ? `${baseOrigin}/oauth/github/callback`
-        : `${baseOrigin}/oauth/callback`;
-
-      // Store provider and redirect destination in sessionStorage for reliable callback resolution
-      sessionStorage.setItem("oauth_provider", provider);
-      if (redirectDest && redirectDest !== "/dashboard") {
-        sessionStorage.setItem("oauth_redirect", redirectDest);
-      } else {
-        sessionStorage.removeItem("oauth_redirect");
-      }
-
-      const res = await getOAuthUrl(provider, redirectUri);
-      if (res?.url) {
-        window.location.href = res.url;
-      } else {
-        throw new Error(`Unable to obtain ${provider} authorization link.`);
-      }
-    } catch (err) {
-      setError(err.message || `Failed to connect with ${provider}. Please try again.`);
-      setOauthLoading(null);
     }
   };
 
   return (
     <div className="authPage">
-      <main className="authCard">
-        <header className="authIntro">
-          <p className="eyebrow">Intervista AI</p>
-          <h1>{isLogin ? "Welcome back" : "Create your account"}</h1>
-          <p>
-            {isLogin
-              ? "Sign in to access your interview workspace, analysis, and preparation tools."
-              : "Join Intervista AI and start realistic AI-powered mock interviews."}
+      <div className="authCard">
+        <div className="authIntro">
+          <span className="eyebrow">INTERVISTA AI</span>
+          <h2 style={{ fontFamily: 'var(--font-serif)', fontSize: '2rem', marginTop: '0.5rem', color: 'var(--text-primary)' }}>
+            {currentMode === 'login' ? 'Welcome Back' : 'Create Your Account'}
+          </h2>
+          <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', marginTop: '0.4rem' }}>
+            {currentMode === 'login'
+              ? 'Sign in to access your VR Mock Interview Simulator & Dashboard.'
+              : 'Prepare like it is the real interview with high-fidelity AI feedback.'}
           </p>
-        </header>
+        </div>
 
-        {/* Forgot password helper modal / banner */}
-        {showForgotModal && (
+        {error && (
           <div
             style={{
-              padding: "16px",
-              borderRadius: "14px",
-              background: "rgba(31, 219, 252, 0.08)",
-              border: "1px solid rgba(31, 219, 252, 0.25)",
-              marginBottom: "18px",
-              fontSize: "0.88rem",
-              lineHeight: "1.5",
-              color: "#c2e7ff",
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.65rem',
+              backgroundColor: 'rgba(239, 68, 68, 0.12)',
+              border: '1px solid rgba(239, 68, 68, 0.3)',
+              borderRadius: '12px',
+              padding: '0.75rem 1rem',
+              color: '#EF4444',
+              fontSize: '0.86rem',
+              marginBottom: '1.25rem',
             }}
           >
-            <strong>Password Recovery Assistance:</strong>
-            <p style={{ margin: "6px 0 10px", color: "#98a3b7" }}>
-              To reset your credentials, please enter your registered email in the form below or contact support at{" "}
-              <span style={{ color: "#1fdbfc" }}>support@intervista.ai</span>. You can also re-authenticate via Google or GitHub if previously linked.
-            </p>
-            <button
-              type="button"
-              className="textButton"
-              style={{ fontSize: "0.85rem" }}
-              onClick={() => setShowForgotModal(false)}
-            >
-              Dismiss
-            </button>
+            <AlertCircle size={16} style={{ flexShrink: 0 }} />
+            <span>{error}</span>
           </div>
         )}
 
-        {awaitingVerification ? (
-          <form className="authForm" onSubmit={handleVerification}>
-            <label>
-              Email verification code
-              <input
-                type="text"
-                inputMode="numeric"
-                autoComplete="one-time-code"
-                value={code}
-                onChange={(event) => setCode(event.target.value.replace(/\D/g, "").slice(0, 6))}
-                placeholder="123456"
-                maxLength="6"
-                autoFocus
-              />
+        {successMsg && (
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.65rem',
+              backgroundColor: 'rgba(34, 197, 94, 0.12)',
+              border: '1px solid rgba(34, 197, 94, 0.3)',
+              borderRadius: '12px',
+              padding: '0.75rem 1rem',
+              color: '#22C55E',
+              fontSize: '0.86rem',
+              marginBottom: '1.25rem',
+            }}
+          >
+            <CheckCircle2 size={16} style={{ flexShrink: 0 }} />
+            <span>{successMsg}</span>
+          </div>
+        )}
+
+        <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+          {currentMode === 'signup' && (
+            <div>
+              <label style={{ display: 'block', fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '0.35rem' }}>
+                Full Name
+              </label>
+              <div style={{ position: 'relative' }}>
+                <User size={16} style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-tertiary)' }} />
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. Alex Chen"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  style={{
+                    width: '100%',
+                    backgroundColor: '#191919',
+                    border: '1px solid var(--border-card)',
+                    borderRadius: '10px',
+                    padding: '0.75rem 1rem 0.75rem 2.6rem',
+                    color: 'var(--text-primary)',
+                    fontSize: '0.9rem',
+                    outline: 'none',
+                    boxSizing: 'border-box',
+                  }}
+                />
+              </div>
+            </div>
+          )}
+
+          <div>
+            <label style={{ display: 'block', fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '0.35rem' }}>
+              Email Address
             </label>
-            {notice && <p className="authNotice">{notice}</p>}
-            {error && <p className="authError">{error}</p>}
-            <button type="submit" className="authSubmitBtn" disabled={loading}>
-              {loading ? "Verifying..." : "Verify & Continue"}
-            </button>
-            <div style={{ display: "flex", justifyContent: "space-between", marginTop: "12px" }}>
-              <button type="button" className="textButton authResend" disabled={loading} onClick={handleResend}>
-                Resend code
-              </button>
+            <div style={{ position: 'relative' }}>
+              <Mail size={16} style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-tertiary)' }} />
+              <input
+                type="email"
+                required
+                placeholder="you@example.com"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                style={{
+                  width: '100%',
+                  backgroundColor: '#191919',
+                  border: '1px solid var(--border-card)',
+                  borderRadius: '10px',
+                  padding: '0.75rem 1rem 0.75rem 2.6rem',
+                  color: 'var(--text-primary)',
+                  fontSize: '0.9rem',
+                  outline: 'none',
+                  boxSizing: 'border-box',
+                }}
+              />
+            </div>
+          </div>
+
+          <div>
+            <label style={{ display: 'block', fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '0.35rem' }}>
+              Password
+            </label>
+            <div style={{ position: 'relative' }}>
+              <Lock size={16} style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-tertiary)' }} />
+              <input
+                type={showPassword ? 'text' : 'password'}
+                required
+                minLength={6}
+                placeholder="At least 6 characters"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                style={{
+                  width: '100%',
+                  backgroundColor: '#191919',
+                  border: '1px solid var(--border-card)',
+                  borderRadius: '10px',
+                  padding: '0.75rem 2.6rem',
+                  color: 'var(--text-primary)',
+                  fontSize: '0.9rem',
+                  outline: 'none',
+                  boxSizing: 'border-box',
+                }}
+              />
               <button
                 type="button"
-                className="textButton"
-                onClick={() => {
-                  setAwaitingVerification(false);
-                  setError("");
-                  setNotice("");
+                onClick={() => setShowPassword(!showPassword)}
+                style={{
+                  position: 'absolute',
+                  right: '0.85rem',
+                  top: '50%',
+                  transform: 'translateY(-50%)',
+                  background: 'none',
+                  border: 'none',
+                  color: 'var(--text-tertiary)',
+                  cursor: 'pointer',
+                  padding: 0,
+                  display: 'flex',
                 }}
               >
-                ← Back to edit
+                {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
               </button>
             </div>
-          </form>
-        ) : (
-          <>
-            <form className="authForm" onSubmit={handleSubmit}>
-              {!isLogin && (
-                <label>
-                  Full name
-                  <input
-                    type="text"
-                    name="name"
-                    value={formData.name}
-                    onChange={updateField}
-                    placeholder="Ava Taylor"
-                  />
-                </label>
-              )}
+          </div>
 
-              <label>
-                Email address
-                <input
-                  type="email"
-                  name="email"
-                  value={formData.email}
-                  onChange={updateField}
-                  placeholder="you@example.com"
-                  autoComplete="email"
-                />
+          {currentMode === 'signup' && (
+            <div>
+              <label style={{ display: 'block', fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '0.35rem' }}>
+                Confirm Password
               </label>
-
-              <label>
-                <div className="authLabelRow">
-                  <span>Password</span>
-                  {isLogin && (
-                    <button
-                      type="button"
-                      className="authForgotLink"
-                      onClick={() => setShowForgotModal((prev) => !prev)}
-                    >
-                      Forgot password?
-                    </button>
-                  )}
-                </div>
+              <div style={{ position: 'relative' }}>
+                <Lock size={16} style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-tertiary)' }} />
                 <input
-                  type="password"
-                  name="password"
-                  value={formData.password}
-                  onChange={updateField}
-                  placeholder="Enter your password"
-                  autoComplete={isLogin ? "current-password" : "new-password"}
+                  type={showPassword ? 'text' : 'password'}
+                  required
+                  placeholder="Repeat your password"
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  style={{
+                    width: '100%',
+                    backgroundColor: '#191919',
+                    border: '1px solid var(--border-card)',
+                    borderRadius: '10px',
+                    padding: '0.75rem 1rem 0.75rem 2.6rem',
+                    color: 'var(--text-primary)',
+                    fontSize: '0.9rem',
+                    outline: 'none',
+                    boxSizing: 'border-box',
+                  }}
                 />
-              </label>
-
-              {!isLogin && (
-                <label>
-                  Confirm password
-                  <input
-                    type="password"
-                    name="confirmPassword"
-                    value={formData.confirmPassword}
-                    onChange={updateField}
-                    placeholder="Confirm your password"
-                    autoComplete="new-password"
-                  />
-                </label>
-              )}
-
-              {notice && <p className="authNotice">{notice}</p>}
-              {error && <p className="authError">{error}</p>}
-
-              <button type="submit" className="authSubmitBtn" disabled={loading || Boolean(oauthLoading)}>
-                {loading ? "Please wait..." : isLogin ? "Log in" : "Create account"}
-              </button>
-            </form>
-
-            <div className="authDivider">
-              <span>OR</span>
+              </div>
             </div>
+          )}
 
-            <div className="authSocialContainer">
+          <button
+            type="submit"
+            disabled={loading}
+            className="btn-primary"
+            style={{
+              width: '100%',
+              padding: '0.85rem',
+              marginTop: '0.5rem',
+              fontSize: '0.92rem',
+              fontWeight: 600,
+              cursor: loading ? 'wait' : 'pointer',
+            }}
+          >
+            <span>{loading ? 'Authenticating...' : currentMode === 'login' ? 'Sign In to Dashboard' : 'Create Account & Enter'}</span>
+            {!loading && <ArrowRight size={16} />}
+          </button>
+        </form>
+
+        <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginTop: '1.5rem', textAlign: 'center' }}>
+          {currentMode === 'login' ? (
+            <>
+              Don't have an account?{' '}
               <button
                 type="button"
-                className="authSocialBtn"
-                disabled={loading || Boolean(oauthLoading)}
-                onClick={() => handleOAuthLogin("google")}
+                onClick={() => {
+                  setCurrentMode('signup');
+                  setError('');
+                }}
+                style={{ background: 'none', border: 'none', color: 'var(--accent-gold)', fontWeight: 600, cursor: 'pointer', textDecoration: 'underline' }}
               >
-                <svg className="authSocialIcon" viewBox="0 0 24 24">
-                  <path
-                    fill="#4285F4"
-                    d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.665-5.17 3.665-9.17z"
-                  />
-                  <path
-                    fill="#34A853"
-                    d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.1-6.72-4.93H1.26v3.15C3.26 21.36 7.33 24 12 24z"
-                  />
-                  <path
-                    fill="#FBBC05"
-                    d="M5.28 14.27c-.25-.72-.38-1.49-.38-2.27s.13-1.55.38-2.27V6.58H1.26C.46 8.16 0 9.94 0 12s.46 3.84 1.26 5.42l4.02-3.15z"
-                  />
-                  <path
-                    fill="#EA4335"
-                    d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.33 0 3.26 2.64 1.26 6.58l4.02 3.15c.95-2.83 3.6-4.98 6.72-4.98z"
-                  />
-                </svg>
-                <span>{oauthLoading === "google" ? "Connecting to Google..." : "Continue with Google"}</span>
+                Sign up
               </button>
-
+            </>
+          ) : (
+            <>
+              Already registered?{' '}
               <button
                 type="button"
-                className="authSocialBtn"
-                disabled={loading || Boolean(oauthLoading)}
-                onClick={() => handleOAuthLogin("github")}
+                onClick={() => {
+                  setCurrentMode('login');
+                  setError('');
+                }}
+                style={{ background: 'none', border: 'none', color: 'var(--accent-gold)', fontWeight: 600, cursor: 'pointer', textDecoration: 'underline' }}
               >
-                <svg className="authSocialIcon" viewBox="0 0 24 24" fill="currentColor">
-                  <path
-                    fillRule="evenodd"
-                    clipRule="evenodd"
-                    d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.53 1.032 1.53 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z"
-                  />
-                </svg>
-                <span>{oauthLoading === "github" ? "Connecting to GitHub..." : "Continue with GitHub"}</span>
+                Sign in
               </button>
-            </div>
-          </>
-        )}
-
-        {!awaitingVerification && (
-          <p className="authSwitch">
-            {isLogin ? "New here?" : "Already have an account?"}{" "}
-            <Link to={isLogin ? `/signup${redirectQuery}` : `/login${redirectQuery}`}>
-              {isLogin ? "Create an account" : "Log in"}
-            </Link>
-          </p>
-        )}
-      </main>
+            </>
+          )}
+        </p>
+      </div>
     </div>
   );
 }

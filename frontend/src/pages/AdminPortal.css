@@ -3,21 +3,11 @@
 .admin-page {
   min-height: 100vh;
   padding: 140px 55px 90px;
-
-  background:
-    radial-gradient(
-      circle at 80% 10%,
-      rgba(37, 121, 255, 0.10),
-      transparent 30%
-    ),
-    radial-gradient(
-      circle at 15% 35%,
-      rgba(0, 191, 255, 0.06),
-      transparent 28%
-    ),
-    #05070f;
-
-  color: #ffffff;
+  background-color: var(--bg-base, #090909);
+  color: var(--text-primary, #F6F0E7);
+  background-image: 
+    radial-gradient(circle at 50% -10%, rgba(217, 183, 122, 0.08) 0%, transparent 60%),
+    radial-gradient(circle at 90% 25%, rgba(217, 183, 122, 0.04) 0%, transparent 45%);
 }
 
 .admin-container {
@@ -29,29 +19,30 @@
 .admin-hero {
   padding: 35px;
   margin-bottom: 30px;
-
-  background: rgba(11, 16, 32, 0.85);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: var(--bg-card, #151515);
+  border: 1px solid var(--border-card, rgba(255, 255, 255, 0.12));
   border-radius: 24px;
-
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.25);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.4);
 }
 
 .admin-hero span.eyebrow {
-  color: #25d6ff;
+  color: var(--accent-gold, #D9B77A);
   font-size: 12px;
   font-weight: 700;
   letter-spacing: 1.5px;
+  text-transform: uppercase;
 }
 
 .admin-hero h1 {
   margin: 8px 0;
   font-size: 30px;
+  font-family: var(--font-serif, 'Newsreader', Georgia, serif);
+  color: var(--text-primary, #F6F0E7);
 }
 
 .admin-hero p {
   margin: 0;
-  color: #9ca8bd;
+  color: var(--text-secondary, #AAA7A1);
   font-size: 15px;
 }
 
@@ -64,40 +55,36 @@
 
 .admin-summary-card {
   padding: 22px;
-
-  background:
-    linear-gradient(
-      145deg,
-      rgba(53, 109, 255, 0.10),
-      rgba(37, 214, 255, 0.035)
-    );
-
-  border: 1px solid rgba(53, 109, 255, 0.12);
+  background: var(--bg-card, #151515);
+  border: 1px solid var(--border-card, rgba(255, 255, 255, 0.12));
   border-radius: 16px;
+  transition: all 0.3s ease;
+}
+
+.admin-summary-card:hover {
+  border-color: var(--border-gold, rgba(217, 183, 122, 0.35));
+  transform: translateY(-2px);
 }
 
 .admin-summary-card span {
   display: block;
-  color: #8e9ab0;
+  color: var(--text-secondary, #AAA7A1);
   font-size: 12px;
   margin-bottom: 8px;
 }
 
 .admin-summary-card strong {
   font-size: 26px;
-  color: #ffffff;
+  color: var(--accent-gold, #D9B77A);
 }
 
 .admin-card {
   padding: 32px;
   margin-bottom: 25px;
-
-  background: rgba(11, 16, 32, 0.88);
-  border: 1px solid rgba(255, 255, 255, 0.07);
+  background: var(--bg-card, #151515);
+  border: 1px solid var(--border-card, rgba(255, 255, 255, 0.12));
   border-radius: 22px;
-
-  box-shadow: 0 15px 45px rgba(0, 0, 0, 0.20);
-
+  box-shadow: 0 15px 45px rgba(0, 0, 0, 0.3);
   overflow-x: auto;
 }
 
