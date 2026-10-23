@@ -93,6 +93,7 @@ export default function ImmersiveInterviewRoom({
   const [interviewQuestions, setInterviewQuestions] = useState([]);
   const [currentQuestionObj, setCurrentQuestionObj] = useState(null);
   const [warningCount, setWarningCount] = useState(0);
+  const [activeWarning, setActiveWarning] = useState(null);
   // Adaptive Difficulty Engine Live HUD State
   const [adaptiveState, setAdaptiveState] = useState({
     level: 2,
