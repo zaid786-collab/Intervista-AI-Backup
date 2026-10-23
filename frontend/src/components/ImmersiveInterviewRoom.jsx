@@ -108,7 +108,8 @@ export default function ImmersiveInterviewRoom({
   });
 
   // ─── Hardware & Device Controls ─────────────────────────────────────────────
-  const [isMicMuted, setIsMicMuted] = useState(config?.isMicActive === false);
+  const [isMicMuted, setIsMicMuted] = useState(false);
+  const [micPermissionError, setMicPermissionError] = useState(null);
   const [isCameraOff, setIsCameraOff] = useState(config?.isCameraActive === false);
   const [isScreenSharing, setIsScreenSharing] = useState(!!config?.isScreenShareActive);
   const [micVolume, setMicVolume] = useState(0);
@@ -189,7 +190,8 @@ export default function ImmersiveInterviewRoom({
   const restartTimeoutRef = useRef(null);
   const transcriptScrollRef = useRef(null);
   const interviewerFinishedSpeakingAtRef = useRef(Date.now());
-  const isMicMutedRef = useRef(isMicMuted);
+  const isMicMutedRef = useRef(false);
+  const currentRecognitionFinalRef = useRef('');
   const sessionPhaseRef = useRef(sessionPhase);
   const textareaRef = useRef(null);
 
@@ -200,6 +202,23 @@ export default function ImmersiveInterviewRoom({
   useEffect(() => {
     sessionPhaseRef.current = sessionPhase;
   }, [sessionPhase]);
+
+  // Auto-resume AudioContext on first user interaction if browser suspended it
+  useEffect(() => {
+    const resumeAudioCtx = () => {
+      if (audioContextRef.current && audioContextRef.current.state === 'suspended') {
+        audioContextRef.current.resume().catch(() => {});
+      }
+    };
+    window.addEventListener('click', resumeAudioCtx);
+    window.addEventListener('keydown', resumeAudioCtx);
+    window.addEventListener('touchstart', resumeAudioCtx);
+    return () => {
+      window.removeEventListener('click', resumeAudioCtx);
+      window.removeEventListener('keydown', resumeAudioCtx);
+      window.removeEventListener('touchstart', resumeAudioCtx);
+    };
+  }, []);
 
   const trackerRef = useRef(null);
   const proctorRef = useRef(null);
@@ -252,19 +271,54 @@ export default function ImmersiveInterviewRoom({
           }
         }
 
-        // Start Audio Stream & Analyzer
-        const audioConstraints = config?.selectedMicId
-          ? { audio: { deviceId: { exact: config.selectedMicId } } }
-          : { audio: true };
+        // Start Audio Stream & Analyzer with multi-tiered fallback
+        let audStream = null;
+        if (config?.selectedMicId) {
+          try {
+            audStream = await navigator.mediaDevices.getUserMedia({
+              audio: {
+                deviceId: { exact: config.selectedMicId },
+                echoCancellation: true,
+                noiseSuppression: true,
+                autoGainControl: true,
+              },
+            });
+          } catch (e) {
+            console.warn('Exact mic deviceId failed, attempting fallback audio constraints:', e);
+          }
+        }
 
-        const audStream = await navigator.mediaDevices.getUserMedia(audioConstraints).catch(() => null);
+        if (!audStream) {
+          try {
+            audStream = await navigator.mediaDevices.getUserMedia({
+              audio: {
+                echoCancellation: true,
+                noiseSuppression: true,
+                autoGainControl: true,
+              },
+            });
+          } catch (e) {
+            console.warn('Advanced audio constraints failed, trying basic audio: true:', e);
+            try {
+              audStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            } catch (err2) {
+              console.error('All microphone getUserMedia attempts failed:', err2);
+              setMicPermissionError('Microphone permission blocked or device not found. Please click "Allow Mic Access" below.');
+            }
+          }
+        }
+
         if (audStream) {
           micStreamRef.current = audStream;
+          setMicPermissionError(null);
 
           const AudioCtx = window.AudioContext || window.webkitAudioContext;
           if (AudioCtx) {
-            const ctx = new AudioCtx();
+            const ctx = audioContextRef.current || new AudioCtx();
             audioContextRef.current = ctx;
+            if (ctx.state === 'suspended') {
+              ctx.resume().catch(() => {});
+            }
             const analyser = ctx.createAnalyser();
             analyser.fftSize = 256;
             analyser.smoothingTimeConstant = 0.8;
@@ -377,32 +431,31 @@ export default function ImmersiveInterviewRoom({
       recognition.onstart = () => {
         setIsVoiceListening(true);
         isRecognitionActiveRef.current = true;
+        setMicPermissionError(null);
       };
 
       recognition.onresult = (event) => {
-        let interimText = '';
-        for (let i = event.resultIndex; i < event.results.length; i++) {
-          const chunk = event.results[i][0].transcript;
-          if (event.results[i].isFinal) {
-            const trimmed = chunk.trim();
-            if (trimmed) {
-              finalTranscriptRef.current = (
-                finalTranscriptRef.current
-                  ? finalTranscriptRef.current + ' ' + trimmed
-                  : trimmed
-              ).trim();
+        let currentSessionFinal = '';
+        let currentSessionInterim = '';
+
+        for (let i = 0; i < event.results.length; i++) {
+          const res = event.results[i];
+          if (res && res[0]) {
+            if (res.isFinal) {
+              currentSessionFinal += res[0].transcript + ' ';
+            } else {
+              currentSessionInterim += res[0].transcript;
             }
-          } else {
-            interimText += chunk;
           }
         }
 
-        const fullAnswer = (
-          finalTranscriptRef.current + (interimText ? ' ' + interimText : '')
-        ).trim();
+        const base = finalTranscriptRef.current ? finalTranscriptRef.current.trim() : '';
+        const combinedFinal = (base ? base + ' ' : '') + currentSessionFinal.trim();
+        const fullAnswer = (combinedFinal + (currentSessionInterim ? ' ' + currentSessionInterim : '')).trim();
 
+        currentRecognitionFinalRef.current = combinedFinal;
         setCandidateAnswer(fullAnswer);
-        setInterimTranscript(interimText);
+        setInterimTranscript(currentSessionInterim);
         if (fullAnswer) {
           setIsCandidateSpeaking(true);
         }
@@ -412,17 +465,24 @@ export default function ImmersiveInterviewRoom({
         if (err.error !== 'no-speech' && err.error !== 'aborted') {
           console.warn('Speech recognition status:', err.error);
         }
+        if (err.error === 'not-allowed' || err.error === 'service-not-allowed') {
+          setMicPermissionError('Microphone or Speech Recognition access was blocked by the browser. Please allow microphone access in your browser address bar.');
+        } else if (err.error === 'language-not-supported' && selectedSpeechLang !== 'en-US') {
+          setSelectedSpeechLang('en-US');
+        }
       };
 
       recognition.onend = () => {
         setIsVoiceListening(false);
         recognitionRef.current = null;
+        if (currentRecognitionFinalRef.current) {
+          finalTranscriptRef.current = currentRecognitionFinalRef.current;
+        }
 
         // Automatically restart speech recognition while session is active and mic is not muted
         if (
           sessionPhaseRef.current === 'active' &&
-          !isMicMutedRef.current &&
-          isRecognitionActiveRef.current
+          !isMicMutedRef.current
         ) {
           restartTimeoutRef.current = setTimeout(() => {
             startSpeechRecognition();
@@ -433,9 +493,11 @@ export default function ImmersiveInterviewRoom({
       recognitionRef.current = recognition;
       recognition.start();
       isRecognitionActiveRef.current = true;
+      setIsVoiceListening(true);
     } catch (err) {
-      console.warn('Could not start speech recognition:', err);
-      setIsVoiceListening(false);
+      if (err.name !== 'InvalidStateError') {
+        console.warn('Could not start speech recognition:', err);
+      }
     }
   }, [selectedSpeechLang]);
 
@@ -459,10 +521,15 @@ export default function ImmersiveInterviewRoom({
   const activateMic = useCallback(() => {
     isMicMutedRef.current = false;
     setIsMicMuted(false);
+    if (audioContextRef.current && audioContextRef.current.state === 'suspended') {
+      audioContextRef.current.resume().catch(() => {});
+    }
     if (micStreamRef.current) {
       micStreamRef.current.getAudioTracks().forEach(t => {
         t.enabled = true;
       });
+    } else {
+      startLocalMedia();
     }
     if (analyserRef.current) {
       trackerRef.current?.startAudio(analyserRef.current);
@@ -520,20 +587,22 @@ export default function ImmersiveInterviewRoom({
 
     let safetyTimer = null;
 
+    // Fallback timer: ensure mic is activated even if browser speech ends unexpectedly, hangs, or is blocked
+    safetyTimer = setTimeout(() => {
+      setIsInterviewerSpeaking(false);
+      interviewerFinishedSpeakingAtRef.current = Date.now();
+      activateMic();
+    }, 4500);
+
     utterance.onstart = () => {
       setIsInterviewerSpeaking(true);
-      // Fallback timer: ensure mic is activated even if browser speech ends unexpectedly
-      safetyTimer = setTimeout(() => {
-        setIsInterviewerSpeaking(false);
-        activateMic();
-      }, 10000);
     };
 
     utterance.onend = () => {
       if (safetyTimer) clearTimeout(safetyTimer);
       setIsInterviewerSpeaking(false);
       interviewerFinishedSpeakingAtRef.current = Date.now();
-      // Auto-turn mic ON when model finishes asking the question
+      // Auto-turn mic ON when interviewer finishes asking the question
       activateMic();
     };
 
@@ -544,7 +613,13 @@ export default function ImmersiveInterviewRoom({
       activateMic();
     };
 
-    window.speechSynthesis.speak(utterance);
+    try {
+      window.speechSynthesis.speak(utterance);
+    } catch (e) {
+      if (safetyTimer) clearTimeout(safetyTimer);
+      setIsInterviewerSpeaking(false);
+      activateMic();
+    }
   };
 
   // ─── 5. Start Session Lifecycle ─────────────────────────────────────────────
@@ -625,16 +700,25 @@ export default function ImmersiveInterviewRoom({
     isMicMutedRef.current = newMuted;
     setIsMicMuted(newMuted);
 
-    if (micStreamRef.current) {
-      micStreamRef.current.getAudioTracks().forEach(t => {
-        t.enabled = !newMuted;
-      });
-    }
-
     if (newMuted) {
+      if (micStreamRef.current) {
+        micStreamRef.current.getAudioTracks().forEach(t => {
+          t.enabled = false;
+        });
+      }
       stopSpeechRecognition();
       trackerRef.current?.stopAudio();
     } else {
+      if (audioContextRef.current && audioContextRef.current.state === 'suspended') {
+        audioContextRef.current.resume().catch(() => {});
+      }
+      if (micStreamRef.current) {
+        micStreamRef.current.getAudioTracks().forEach(t => {
+          t.enabled = true;
+        });
+      } else {
+        startLocalMedia();
+      }
       startSpeechRecognition();
       if (analyserRef.current) {
         trackerRef.current?.startAudio(analyserRef.current);
@@ -755,13 +839,11 @@ export default function ImmersiveInterviewRoom({
 
       setSessionPhase('active');
 
+      // Ensure Candidate Mic & speech recognition run actively from session start
+      activateMic();
+
       // Speak opening message out loud
       speakText(openingMsg);
-
-      // Start Speech Recognition for candidate
-      if (!isMicMuted) {
-        startSpeechRecognition();
-      }
     } catch (err) {
       console.warn('[interview room] API start error, utilizing direct simulation fallback:', err);
       // Graceful local fallback if network or backend offline
@@ -775,8 +857,8 @@ export default function ImmersiveInterviewRoom({
       setMessages([{ role: 'interviewer', text: fullText, timestamp: Date.now() }]);
       setCurrentQuestionText(firstQ);
       setSessionPhase('active');
+      activateMic();
       speakText(fullText);
-      if (!isMicMutedRef.current) startSpeechRecognition();
     }
   };
 
@@ -1033,10 +1115,8 @@ export default function ImmersiveInterviewRoom({
       speakText(nextFollowUp);
     } finally {
       setIsSubmittingAnswer(false);
-      // Re-enable speech recognition
-      if (!isMicMuted) {
-        startSpeechRecognition();
-      }
+      // Re-enable candidate mic and speech recognition for the next question
+      activateMic();
     }
   };
 
@@ -2715,6 +2795,50 @@ export default function ImmersiveInterviewRoom({
               </div>
             </div>
           </div>
+
+          {/* Permission / Device Warning Banner */}
+          {micPermissionError && (
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: '0.65rem',
+                backgroundColor: 'rgba(239, 68, 68, 0.15)',
+                border: '1px solid rgba(239, 68, 68, 0.4)',
+                borderRadius: '8px',
+                padding: '0.35rem 0.65rem',
+                fontSize: '0.74rem',
+                color: '#FCA5A5',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <AlertCircle size={14} color="#EF4444" />
+                <span>{micPermissionError}</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setMicPermissionError(null);
+                  startLocalMedia();
+                  activateMic();
+                }}
+                style={{
+                  backgroundColor: '#EF4444',
+                  border: 'none',
+                  borderRadius: '5px',
+                  color: '#FFFFFF',
+                  fontWeight: 700,
+                  fontSize: '0.7rem',
+                  padding: '3px 10px',
+                  cursor: 'pointer',
+                  flexShrink: 0,
+                }}
+              >
+                Allow Mic Access
+              </button>
+            </div>
+          )}
 
           {/* Response Textarea (Auto-syncs with speech recognition & manual edits) */}
           <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'flex-start' }}>
