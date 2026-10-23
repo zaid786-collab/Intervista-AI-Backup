@@ -26,6 +26,8 @@ import {
   Maximize2,
   Minimize2,
   Zap,
+  Languages,
+  Trash2,
 } from 'lucide-react';
 
 import { apiStartInterview, apiSendMessage, apiEndInterview, apiSaveReport } from '../utils/api';
@@ -81,8 +83,11 @@ export default function ImmersiveInterviewRoom({
   const [questionIndex, setQuestionIndex] = useState(1);
   const [totalQuestions, setTotalQuestions] = useState(5);
 
-  // Candidate Answer State & Evaluated Marks
+  // Candidate Answer State & Voice Input Transcriptions
   const [candidateAnswer, setCandidateAnswer] = useState('');
+  const [interimTranscript, setInterimTranscript] = useState('');
+  const [isVoiceListening, setIsVoiceListening] = useState(false);
+  const [selectedSpeechLang, setSelectedSpeechLang] = useState('en-IN');
   const [isSubmittingAnswer, setIsSubmittingAnswer] = useState(false);
   const [isInterviewerSpeaking, setIsInterviewerSpeaking] = useState(false);
   const [isCandidateSpeaking, setIsCandidateSpeaking] = useState(false);
@@ -179,13 +184,22 @@ export default function ImmersiveInterviewRoom({
   const analyserRef = useRef(null);
   const animFrameRef = useRef(null);
   const recognitionRef = useRef(null);
+  const finalTranscriptRef = useRef('');
+  const isRecognitionActiveRef = useRef(false);
+  const restartTimeoutRef = useRef(null);
   const transcriptScrollRef = useRef(null);
   const interviewerFinishedSpeakingAtRef = useRef(Date.now());
   const isMicMutedRef = useRef(isMicMuted);
+  const sessionPhaseRef = useRef(sessionPhase);
   const textareaRef = useRef(null);
+
   useEffect(() => {
     isMicMutedRef.current = isMicMuted;
   }, [isMicMuted]);
+
+  useEffect(() => {
+    sessionPhaseRef.current = sessionPhase;
+  }, [sessionPhase]);
 
   const trackerRef = useRef(null);
   const proctorRef = useRef(null);
@@ -341,50 +355,105 @@ export default function ImmersiveInterviewRoom({
       return;
     }
 
+    if (restartTimeoutRef.current) {
+      clearTimeout(restartTimeoutRef.current);
+      restartTimeoutRef.current = null;
+    }
+
     if (recognitionRef.current) {
-      try { recognitionRef.current.stop(); } catch (e) {}
+      try {
+        recognitionRef.current.onend = null;
+        recognitionRef.current.stop();
+      } catch (e) {}
+      recognitionRef.current = null;
     }
 
     try {
       const recognition = new SpeechRecognition();
       recognition.continuous = true;
       recognition.interimResults = true;
-      recognition.lang = 'en-US';
+      recognition.lang = selectedSpeechLang || 'en-IN';
+
+      recognition.onstart = () => {
+        setIsVoiceListening(true);
+        isRecognitionActiveRef.current = true;
+      };
 
       recognition.onresult = (event) => {
-        let transcript = '';
-        for (let i = 0; i < event.results.length; i++) {
-          transcript += event.results[i][0].transcript + ' ';
+        let interimText = '';
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          const chunk = event.results[i][0].transcript;
+          if (event.results[i].isFinal) {
+            const trimmed = chunk.trim();
+            if (trimmed) {
+              finalTranscriptRef.current = (
+                finalTranscriptRef.current
+                  ? finalTranscriptRef.current + ' ' + trimmed
+                  : trimmed
+              ).trim();
+            }
+          } else {
+            interimText += chunk;
+          }
         }
-        setCandidateAnswer(transcript.trim());
+
+        const fullAnswer = (
+          finalTranscriptRef.current + (interimText ? ' ' + interimText : '')
+        ).trim();
+
+        setCandidateAnswer(fullAnswer);
+        setInterimTranscript(interimText);
+        if (fullAnswer) {
+          setIsCandidateSpeaking(true);
+        }
       };
 
       recognition.onerror = (err) => {
-        console.warn('Speech recognition error:', err);
+        if (err.error !== 'no-speech' && err.error !== 'aborted') {
+          console.warn('Speech recognition status:', err.error);
+        }
       };
 
       recognition.onend = () => {
+        setIsVoiceListening(false);
+        recognitionRef.current = null;
+
         // Automatically restart speech recognition while session is active and mic is not muted
-        if (sessionPhase === 'active' && !isMicMutedRef.current) {
-          try { recognition.start(); } catch (e) {}
+        if (
+          sessionPhaseRef.current === 'active' &&
+          !isMicMutedRef.current &&
+          isRecognitionActiveRef.current
+        ) {
+          restartTimeoutRef.current = setTimeout(() => {
+            startSpeechRecognition();
+          }, 180);
         }
       };
 
       recognitionRef.current = recognition;
       recognition.start();
+      isRecognitionActiveRef.current = true;
     } catch (err) {
       console.warn('Could not start speech recognition:', err);
+      setIsVoiceListening(false);
     }
-  }, [sessionPhase]);
+  }, [selectedSpeechLang]);
 
-  const stopSpeechRecognition = () => {
+  const stopSpeechRecognition = useCallback(() => {
+    isRecognitionActiveRef.current = false;
+    if (restartTimeoutRef.current) {
+      clearTimeout(restartTimeoutRef.current);
+      restartTimeoutRef.current = null;
+    }
     if (recognitionRef.current) {
       try {
+        recognitionRef.current.onend = null;
         recognitionRef.current.stop();
       } catch (e) {}
       recognitionRef.current = null;
     }
-  };
+    setIsVoiceListening(false);
+  }, []);
 
   // ─── Helper: Turn Microphone ON automatically ──────────────────────────────
   const activateMic = useCallback(() => {
@@ -395,8 +464,27 @@ export default function ImmersiveInterviewRoom({
         t.enabled = true;
       });
     }
+    if (analyserRef.current) {
+      trackerRef.current?.startAudio(analyserRef.current);
+    }
     startSpeechRecognition();
   }, [startSpeechRecognition]);
+
+  // ─── Voice Action Helpers ──────────────────────────────────────────────────
+  const handleClearAnswer = () => {
+    finalTranscriptRef.current = '';
+    setCandidateAnswer('');
+    setInterimTranscript('');
+  };
+
+  const handleSwitchLanguage = (langCode) => {
+    setSelectedSpeechLang(langCode);
+    if (!isMicMuted && sessionPhaseRef.current === 'active') {
+      setTimeout(() => {
+        startSpeechRecognition();
+      }, 100);
+    }
+  };
 
   // ─── 4. Speech Synthesis (Interviewer Voice Out Loud) ────────────────────────
   const speakText = (text) => {
@@ -783,7 +871,10 @@ export default function ImmersiveInterviewRoom({
       { role: 'candidate', text: answerText, timestamp: Date.now(), questionId: currentQId },
     ];
     setMessages(updatedMessages);
+    finalTranscriptRef.current = '';
+    setInterimTranscript('');
     setCandidateAnswer('');
+    setIsCandidateSpeaking(false);
 
     try {
       const latencyMs = Math.max(300, Date.now() - (interviewerFinishedSpeakingAtRef.current || Date.now()));
@@ -2413,95 +2504,350 @@ export default function ImmersiveInterviewRoom({
           pointerEvents: 'none',
         }}
       >
-        {/* Candidate Live Speech & Text Response Input Bar */}
+        {/* Candidate Live Voice-to-Text & Response Input Console */}
         <div
           style={{
-            maxWidth: '740px',
+            maxWidth: '820px',
             width: '100%',
-            backgroundColor: 'rgba(10, 12, 18, 0.94)',
-            border: '1px solid rgba(255, 255, 255, 0.16)',
-            borderRadius: '16px',
-            padding: '0.65rem 1rem',
-            backdropFilter: 'blur(20px)',
-            boxShadow: '0 12px 36px rgba(0, 0, 0, 0.7)',
+            backgroundColor: 'rgba(9, 12, 19, 0.95)',
+            border: !isMicMuted
+              ? '1px solid rgba(217, 183, 122, 0.45)'
+              : '1px solid rgba(255, 255, 255, 0.16)',
+            borderRadius: '18px',
+            padding: '0.75rem 1rem 0.65rem 1rem',
+            backdropFilter: 'blur(24px)',
+            boxShadow: !isMicMuted
+              ? '0 12px 40px rgba(0, 0, 0, 0.75), 0 0 20px rgba(217, 183, 122, 0.15)'
+              : '0 12px 36px rgba(0, 0, 0, 0.7)',
             display: 'flex',
-            alignItems: 'center',
-            gap: '0.75rem',
+            flexDirection: 'column',
+            gap: '0.55rem',
             pointerEvents: 'auto',
+            transition: 'border-color 0.2s ease, box-shadow 0.2s ease',
           }}
         >
-          {/* Active Voice Input Mic indicator */}
+          {/* Top Voice Telemetry & Status Header */}
           <div
-            onClick={toggleMicrophone}
             style={{
-              width: '36px',
-              height: '36px',
-              borderRadius: '10px',
-              backgroundColor: !isMicMuted ? 'rgba(34, 197, 94, 0.15)' : 'rgba(239, 68, 68, 0.12)',
-              border: !isMicMuted ? '1px solid rgba(34, 197, 94, 0.3)' : '1px solid rgba(239, 68, 68, 0.25)',
               display: 'flex',
               alignItems: 'center',
-              justifyContent: 'center',
-              color: !isMicMuted ? '#22C55E' : '#EF4444',
-              flexShrink: 0,
-              cursor: 'pointer',
+              justifyContent: 'space-between',
+              gap: '0.75rem',
+              paddingBottom: '0.45rem',
+              borderBottom: '1px solid rgba(255, 255, 255, 0.08)',
+              fontSize: '0.76rem',
             }}
-            title={!isMicMuted ? 'Microphone is ON (Listening). Click to mute' : 'Microphone is MUTED. Click to turn ON'}
           >
-            {!isMicMuted ? <Mic size={18} /> : <MicOff size={18} />}
+            {/* Left: Active Voice / Speaker Status */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+              {isInterviewerSpeaking ? (
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '5px',
+                    color: '#60A5FA',
+                    fontWeight: 600,
+                  }}
+                >
+                  <Volume2 size={14} />
+                  <span>Interviewer is speaking... Listen carefully.</span>
+                </div>
+              ) : !isMicMuted ? (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.55rem' }}>
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '5px',
+                      backgroundColor: 'rgba(34, 197, 94, 0.16)',
+                      border: '1px solid rgba(34, 197, 94, 0.35)',
+                      padding: '2px 8px',
+                      borderRadius: '9999px',
+                      color: '#4ADE80',
+                      fontWeight: 700,
+                    }}
+                  >
+                    <span
+                      style={{
+                        width: '7px',
+                        height: '7px',
+                        borderRadius: '50%',
+                        backgroundColor: '#22C55E',
+                        boxShadow: '0 0 8px #22C55E',
+                      }}
+                    />
+                    <span>Live Voice Active · Speak to Answer</span>
+                  </div>
+
+                  {/* Dynamic Equalizer Bars */}
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '2.5px',
+                      height: '16px',
+                      padding: '0 4px',
+                    }}
+                    title={`Microphone Volume: ${micVolume}%`}
+                  >
+                    {[0.6, 1.0, 1.4, 0.8, 1.2, 0.9, 1.5, 0.7].map((factor, idx) => {
+                      const computedHeight = Math.max(
+                        3,
+                        Math.min(16, Math.round((micVolume / 100) * 16 * factor))
+                      );
+                      return (
+                        <div
+                          key={idx}
+                          style={{
+                            width: '2.5px',
+                            height: `${computedHeight}px`,
+                            borderRadius: '1px',
+                            backgroundColor:
+                              micVolume > 15
+                                ? '#22C55E'
+                                : 'rgba(217, 183, 122, 0.7)',
+                            transition: 'height 0.08s ease',
+                          }}
+                        />
+                      );
+                    })}
+                  </div>
+
+                  {isCandidateSpeaking && (
+                    <span
+                      style={{
+                        color: '#FBBF24',
+                        fontWeight: 600,
+                        fontSize: '0.72rem',
+                      }}
+                    >
+                      Hearing your voice...
+                    </span>
+                  )}
+                </div>
+              ) : (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '5px',
+                      backgroundColor: 'rgba(239, 68, 68, 0.16)',
+                      border: '1px solid rgba(239, 68, 68, 0.35)',
+                      padding: '2px 8px',
+                      borderRadius: '9999px',
+                      color: '#F87171',
+                      fontWeight: 700,
+                    }}
+                  >
+                    <MicOff size={12} />
+                    <span>Mic is Muted</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={activateMic}
+                    style={{
+                      background: 'rgba(217, 183, 122, 0.15)',
+                      border: '1px solid rgba(217, 183, 122, 0.35)',
+                      color: '#E5C478',
+                      padding: '2px 8px',
+                      borderRadius: '6px',
+                      fontSize: '0.7rem',
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Turn ON Mic
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* Right: Word Count & Speech Language Selector */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+              <span style={{ color: '#94A3B8', fontSize: '0.72rem' }}>
+                {candidateAnswer.trim()
+                  ? `${candidateAnswer.trim().split(/\s+/).length} words spoken`
+                  : '0 words'}
+              </span>
+
+              {/* Speech Language Toggle */}
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  backgroundColor: 'rgba(255, 255, 255, 0.06)',
+                  borderRadius: '6px',
+                  border: '1px solid rgba(255, 255, 255, 0.1)',
+                  padding: '1px',
+                }}
+              >
+                {[
+                  { code: 'en-IN', label: 'EN (IN)' },
+                  { code: 'en-US', label: 'EN (US)' },
+                  { code: 'hi-IN', label: 'HI (हिंदी)' },
+                ].map((l) => (
+                  <button
+                    key={l.code}
+                    type="button"
+                    onClick={() => handleSwitchLanguage(l.code)}
+                    title={`Speech recognition language: ${l.label}`}
+                    style={{
+                      background:
+                        selectedSpeechLang === l.code
+                          ? 'rgba(217, 183, 122, 0.25)'
+                          : 'transparent',
+                      border: 'none',
+                      color:
+                        selectedSpeechLang === l.code ? '#F2D795' : '#94A3B8',
+                      fontSize: '0.65rem',
+                      fontWeight: selectedSpeechLang === l.code ? 700 : 500,
+                      padding: '2px 6px',
+                      borderRadius: '4px',
+                      cursor: 'pointer',
+                      transition: 'all 0.12s ease',
+                    }}
+                  >
+                    {l.label}
+                  </button>
+                ))}
+              </div>
+            </div>
           </div>
 
-          {/* Response Text Input Area */}
-          <input
-            id="candidate-answer-input"
-            ref={textareaRef}
-            type="text"
-            placeholder={
-              !isMicMuted
-                ? 'Speak your answer, or type here (press Enter to submit)...'
-                : 'Microphone is muted. Type your answer here...'
-            }
-            value={candidateAnswer}
-            onChange={(e) => setCandidateAnswer(e.target.value)}
-            onKeyDown={handleKeyDown}
-            disabled={isSubmittingAnswer}
-            style={{
-              flex: 1,
-              backgroundColor: 'transparent',
-              border: 'none',
-              color: '#FFFFFF',
-              fontSize: '0.94rem',
-              outline: 'none',
-              padding: '0.35rem 0',
-            }}
-          />
+          {/* Response Textarea (Auto-syncs with speech recognition & manual edits) */}
+          <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'flex-start' }}>
+            <textarea
+              id="candidate-answer-input"
+              ref={textareaRef}
+              rows={2}
+              placeholder={
+                !isMicMuted
+                  ? '🎙️ Speak your answer into the microphone... Your words will transcribe here automatically. (You can also type or edit anytime)'
+                  : 'Microphone is muted. Click "Turn ON Mic" above or type your answer here...'
+              }
+              value={candidateAnswer}
+              onChange={(e) => {
+                setCandidateAnswer(e.target.value);
+                finalTranscriptRef.current = e.target.value;
+              }}
+              onKeyDown={handleKeyDown}
+              disabled={isSubmittingAnswer}
+              style={{
+                flex: 1,
+                backgroundColor: 'transparent',
+                border: 'none',
+                color: '#FFFFFF',
+                fontSize: '0.94rem',
+                lineHeight: 1.45,
+                outline: 'none',
+                resize: 'none',
+                padding: '0.2rem 0',
+                fontFamily: 'inherit',
+                minHeight: '44px',
+                maxHeight: '120px',
+              }}
+            />
+          </div>
 
-          {/* Submit Answer Button */}
-          <button
-            id="send-answer-btn"
-            type="button"
-            onClick={handleSubmitAnswer}
-            disabled={!candidateAnswer.trim() || isSubmittingAnswer}
+          {/* Action Row inside Console: Quick Mic, Clear Voice, Submit Button */}
+          <div
             style={{
-              display: 'inline-flex',
+              display: 'flex',
               alignItems: 'center',
-              gap: '0.45rem',
-              padding: '0.55rem 1.25rem',
-              borderRadius: '10px',
-              backgroundColor: candidateAnswer.trim() ? 'var(--accent-gold)' : 'rgba(255, 255, 255, 0.08)',
-              border: 'none',
-              color: candidateAnswer.trim() ? '#080808' : 'var(--text-tertiary)',
-              fontSize: '0.86rem',
-              fontWeight: 700,
-              cursor: candidateAnswer.trim() ? 'pointer' : 'default',
-              transition: 'all 0.15s ease',
-              boxShadow: candidateAnswer.trim() ? '0 4px 16px rgba(217, 183, 122, 0.35)' : 'none',
-              flexShrink: 0,
+              justifyContent: 'space-between',
+              paddingTop: '0.35rem',
+              borderTop: '1px solid rgba(255, 255, 255, 0.06)',
             }}
           >
-            <span>{isSubmittingAnswer ? 'Evaluating...' : 'Send Answer'}</span>
-            <Send size={14} />
-          </button>
+            {/* Left Controls: Mic toggle & Clear Answer */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <button
+                type="button"
+                onClick={toggleMicrophone}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '5px',
+                  backgroundColor: !isMicMuted
+                    ? 'rgba(34, 197, 94, 0.12)'
+                    : 'rgba(239, 68, 68, 0.12)',
+                  border: !isMicMuted
+                    ? '1px solid rgba(34, 197, 94, 0.3)'
+                    : '1px solid rgba(239, 68, 68, 0.3)',
+                  color: !isMicMuted ? '#4ADE80' : '#F87171',
+                  borderRadius: '8px',
+                  padding: '4px 10px',
+                  fontSize: '0.74rem',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                }}
+              >
+                {!isMicMuted ? <Mic size={13} /> : <MicOff size={13} />}
+                <span>{!isMicMuted ? 'Mic Listening' : 'Mic Muted'}</span>
+              </button>
+
+              {candidateAnswer.trim() && (
+                <button
+                  type="button"
+                  onClick={handleClearAnswer}
+                  title="Clear transcribed answer and speak again"
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '4px',
+                    backgroundColor: 'rgba(255, 255, 255, 0.06)',
+                    border: '1px solid rgba(255, 255, 255, 0.12)',
+                    color: '#94A3B8',
+                    borderRadius: '8px',
+                    padding: '4px 9px',
+                    fontSize: '0.72rem',
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                  }}
+                >
+                  <Trash2 size={12} />
+                  <span>Clear & Re-speak</span>
+                </button>
+              )}
+
+              <span style={{ fontSize: '0.7rem', color: '#64748B', marginLeft: '4px' }}>
+                Press Enter ↵ to send (Shift+Enter for newline)
+              </span>
+            </div>
+
+            {/* Right: Submit Button */}
+            <button
+              id="send-answer-btn"
+              type="button"
+              onClick={handleSubmitAnswer}
+              disabled={!candidateAnswer.trim() || isSubmittingAnswer}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '0.45rem',
+                padding: '0.48rem 1.35rem',
+                borderRadius: '10px',
+                backgroundColor: candidateAnswer.trim()
+                  ? 'var(--accent-gold)'
+                  : 'rgba(255, 255, 255, 0.08)',
+                border: 'none',
+                color: candidateAnswer.trim() ? '#080808' : 'var(--text-tertiary)',
+                fontSize: '0.86rem',
+                fontWeight: 700,
+                cursor: candidateAnswer.trim() ? 'pointer' : 'default',
+                transition: 'all 0.15s ease',
+                boxShadow: candidateAnswer.trim()
+                  ? '0 4px 16px rgba(217, 183, 122, 0.35)'
+                  : 'none',
+                flexShrink: 0,
+              }}
+            >
+              <span>{isSubmittingAnswer ? 'Evaluating...' : 'Send Answer'}</span>
+              <Send size={14} />
+            </button>
+          </div>
         </div>
 
         {/* Compact Bottom Control Bar */}
