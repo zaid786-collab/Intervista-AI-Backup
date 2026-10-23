@@ -736,6 +736,15 @@ def save_candidate_answer(
     cleaned_ans = str(payload.candidate_answer or "").strip()
     status = payload.status or ("SKIPPED" if not cleaned_ans else "SUBMITTED")
 
+    # Evaluate the answer in real-time
+    eval_res = evaluate_single_question(
+        question_id=payload.question_id,
+        question=payload.question or f"Question {payload.question_id}",
+        answer=cleaned_ans,
+    )
+    evaluated_score = eval_res.get("score", 0)
+    evaluated_status = eval_res.get("status", status)
+
     # Update in-memory session if active
     if payload.session_id and payload.session_id in ACTIVE_PROCTORING_SESSIONS:
         sess = ACTIVE_PROCTORING_SESSIONS[payload.session_id]
@@ -745,7 +754,10 @@ def save_candidate_answer(
             "question_id": payload.question_id,
             "question": payload.question,
             "candidate_answer": cleaned_ans,
-            "status": status,
+            "status": evaluated_status,
+            "score": evaluated_score,
+            "marks": evaluated_score,
+            "evaluation": eval_res,
             "submitted_at": datetime.now(timezone.utc).isoformat(),
         }
 
@@ -759,7 +771,7 @@ def save_candidate_answer(
 
     if existing:
         existing.candidate_answer = cleaned_ans
-        existing.status = status
+        existing.status = evaluated_status
         existing.submitted_at = datetime.now(timezone.utc)
     else:
         new_ans = models.InterviewAnswer(
@@ -768,7 +780,7 @@ def save_candidate_answer(
             question_id=payload.question_id,
             question=payload.question,
             candidate_answer=cleaned_ans,
-            status=status,
+            status=evaluated_status,
             submitted_at=datetime.now(timezone.utc),
         )
         db.add(new_ans)
@@ -784,15 +796,20 @@ def save_candidate_answer(
                 next_q_text = sess_q[idx + 1].get("question")
                 break
 
+    feedback_msg = eval_res.get("feedback") or "Answer stored and evaluated successfully."
+
     return schemas.SaveAnswerResponse(
         success=True,
         question_id=payload.question_id,
-        status=status,
-        message="Answer stored successfully in database.",
+        status=evaluated_status,
+        score=evaluated_score,
+        marks=evaluated_score,
+        evaluation=eval_res,
+        message="Answer stored and evaluated successfully in database.",
         next_question=next_q_text or "Great! Let's proceed to the next technical topic.",
         nextQuestion=next_q_text or "Great! Let's proceed to the next technical topic.",
-        ai_feedback="Solid explanation. You clearly articulated the core principles.",
-        aiFeedback="Solid explanation. You clearly articulated the core principles.",
+        ai_feedback=feedback_msg,
+        aiFeedback=feedback_msg,
         is_follow_up=False,
         completed=False,
     )
@@ -931,6 +948,9 @@ def interview_turn_interaction(
         "question": current_q.get("question"),
         "candidate_answer": full_ans,
         "status": status,
+        "score": turn_data.get("score"),
+        "marks": turn_data.get("marks", turn_data.get("score")),
+        "evaluation": turn_data.get("evaluation"),
         "submitted_at": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -971,6 +991,10 @@ def interview_turn_interaction(
         adaptive_level_name=adaptive_trans["adaptive_level_name"],
         adaptive_action=adaptive_trans["adaptive_action"],
         adaptive_note=adaptive_trans["adaptive_note"],
+        score=turn_data.get("score"),
+        marks=turn_data.get("marks", turn_data.get("score")),
+        status=turn_data.get("status", status),
+        evaluation=turn_data.get("evaluation"),
     )
 
 
@@ -1338,7 +1362,7 @@ def submit_mock_interview(
 @router.post("/evaluate-question", response_model=schemas.EvaluateQuestionResponse)
 def evaluate_single_question_endpoint(
     payload: schemas.EvaluateQuestionRequest,
-    current_user: models.User = Depends(get_current_user),
+    current_user: Optional[models.User] = Depends(get_current_user_optional),
 ):
     """Evaluates an individual interview question answer in real-time."""
     result = evaluate_single_question(

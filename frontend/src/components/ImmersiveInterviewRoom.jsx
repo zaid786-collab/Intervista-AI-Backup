@@ -29,6 +29,7 @@ import {
 } from 'lucide-react';
 
 import { apiStartInterview, apiSendMessage, apiEndInterview, apiSaveReport } from '../utils/api';
+import { evaluateSingleQuestion } from '../utils/evaluator';
 import { getCurrentUser } from '../utils/auth';
 import { ProctoringManager } from '../utils/ProctoringManager';
 import ThreeInterviewScene from './ThreeInterviewScene';
@@ -80,11 +81,13 @@ export default function ImmersiveInterviewRoom({
   const [questionIndex, setQuestionIndex] = useState(1);
   const [totalQuestions, setTotalQuestions] = useState(5);
 
-  // Candidate Answer State
+  // Candidate Answer State & Evaluated Marks
   const [candidateAnswer, setCandidateAnswer] = useState('');
   const [isSubmittingAnswer, setIsSubmittingAnswer] = useState(false);
   const [isInterviewerSpeaking, setIsInterviewerSpeaking] = useState(false);
   const [isCandidateSpeaking, setIsCandidateSpeaking] = useState(false);
+  const [evaluatedAnswers, setEvaluatedAnswers] = useState([]);
+  const [lastEvaluatedTurn, setLastEvaluatedTurn] = useState(null);
 
   // Domain Questions & Proctoring State
   const [interviewQuestions, setInterviewQuestions] = useState([]);
@@ -691,10 +694,13 @@ export default function ImmersiveInterviewRoom({
     // Feed speech chunk to MultimodalTracker
     trackerRef.current?.recordSpeechChunk(answerText);
 
+    const currentQText = currentQuestionText || (currentQuestionObj?.question) || `Technical Question #${questionIndex}`;
+    const currentQId = currentQuestionObj?.id || questionIndex;
+
     // Append candidate message to transcript
     const updatedMessages = [
       ...messages,
-      { role: 'candidate', text: answerText, timestamp: Date.now() },
+      { role: 'candidate', text: answerText, timestamp: Date.now(), questionId: currentQId },
     ];
     setMessages(updatedMessages);
     setCandidateAnswer('');
@@ -710,13 +716,70 @@ export default function ImmersiveInterviewRoom({
         latencyMs,
         audioDurationMs,
         questionIndex,
+        questionId: currentQId,
       });
+
+      // ─── Real-Time Answer Evaluation & Scoring ──────────────────────────
+      let evalData = null;
+      if (res?.score !== undefined && res?.score !== null) {
+        evalData = {
+          score: res.score,
+          marks: res.score,
+          status: res.status || (res.score >= 70 ? 'CORRECT' : res.score >= 35 ? 'PARTIAL' : 'INCORRECT'),
+          feedback: res.aiFeedback || 'Answer checked and evaluated.',
+          technical_accuracy: res.technicalScore ?? res.score,
+          communication_clarity: res.communicationScore ?? 85,
+          problem_solving: res.score,
+          missing_concepts: res.evaluation?.missing_concepts || [],
+          suggested_answer_points: res.evaluation?.suggested_answer_points || [],
+        };
+      } else {
+        const localCheck = evaluateSingleQuestion(
+          {
+            question_id: currentQId,
+            question: currentQText,
+            answer: answerText,
+            expected_key_points: currentQuestionObj?.expected_key_points || [],
+            domain: currentQuestionObj?.domain || config?.topic,
+          },
+          targetCompany,
+          targetRole,
+          experienceLevel
+        );
+        evalData = {
+          score: localCheck.score,
+          marks: localCheck.score,
+          status: localCheck.status,
+          feedback: localCheck.feedback,
+          technical_accuracy: localCheck.technical_accuracy,
+          communication_clarity: localCheck.communication_clarity,
+          problem_solving: localCheck.problem_solving,
+          missing_concepts: localCheck.missing_concepts || [],
+          suggested_answer_points: localCheck.suggested_answer_points || [],
+        };
+      }
+
+      const evaluatedItem = {
+        questionId: currentQId,
+        question_id: currentQId,
+        question: currentQText,
+        candidateAnswer: answerText,
+        answer: answerText,
+        ...evalData,
+      };
+
+      setEvaluatedAnswers(prev => {
+        const nextList = [...prev.filter(p => p.questionId !== currentQId), evaluatedItem];
+        return nextList;
+      });
+
+      setLastEvaluatedTurn(evaluatedItem);
 
       const reply = res.message || res.reply || res.nextQuestion || 'Thank you for your response.';
 
       setMessages([
         ...updatedMessages,
-        { role: 'interviewer', text: reply, timestamp: Date.now() },
+        { role: 'interviewer', text: reply, timestamp: Date.now(), evaluatedAnswer: evaluatedItem },
       ]);
 
       const replyClean = (reply || '')
@@ -748,6 +811,39 @@ export default function ImmersiveInterviewRoom({
       speakText(reply);
     } catch (err) {
       console.warn('[interview room] Send message error, providing realistic follow-up:', err);
+
+      // Evaluate answer locally on error so score is always preserved
+      const localCheck = evaluateSingleQuestion(
+        {
+          question_id: currentQId,
+          question: currentQText,
+          answer: answerText,
+          expected_key_points: currentQuestionObj?.expected_key_points || [],
+          domain: currentQuestionObj?.domain || config?.topic,
+        },
+        targetCompany,
+        targetRole,
+        experienceLevel
+      );
+      const evaluatedItem = {
+        questionId: currentQId,
+        question_id: currentQId,
+        question: currentQText,
+        candidateAnswer: answerText,
+        answer: answerText,
+        score: localCheck.score,
+        marks: localCheck.score,
+        status: localCheck.status,
+        feedback: localCheck.feedback,
+        technical_accuracy: localCheck.technical_accuracy,
+        communication_clarity: localCheck.communication_clarity,
+        problem_solving: localCheck.problem_solving,
+        missing_concepts: localCheck.missing_concepts || [],
+        suggested_answer_points: localCheck.suggested_answer_points || [],
+      };
+      setEvaluatedAnswers(prev => [...prev.filter(p => p.questionId !== currentQId), evaluatedItem]);
+      setLastEvaluatedTurn(evaluatedItem);
+
       // Local fallback follow-up
       const followUps = [
         "How would you handle unexpected data spikes or high concurrent write throughput in that setup?",
@@ -759,7 +855,7 @@ export default function ImmersiveInterviewRoom({
 
       setMessages([
         ...updatedMessages,
-        { role: 'interviewer', text: nextFollowUp, timestamp: Date.now() },
+        { role: 'interviewer', text: nextFollowUp, timestamp: Date.now(), evaluatedAnswer: evaluatedItem },
       ]);
       setCurrentQuestionText(nextFollowUp);
       setQuestionIndex(prev => prev + 1);
@@ -781,15 +877,57 @@ export default function ImmersiveInterviewRoom({
 
     const finalTelemetry = trackerRef.current?.getFinalTelemetry({ isCameraOff, isMicMuted }) || {};
 
-    // 1. Gather honest metrics from the session
+    // 1. Gather genuine metrics by checking all candidate answers
     const candidateMsgs = messages.filter(m => m.role === 'candidate');
     const totalWords = candidateMsgs.reduce((acc, m) => acc + (m.text ? m.text.split(/\s+/).length : 0), 0);
 
-    const comm = Math.min(96, Math.max(72, Math.round(76 + candidateMsgs.length * 3)));
-    const tech = Math.min(95, Math.max(70, Math.round(74 + totalWords * 0.04)));
-    const prob = Math.min(94, Math.max(70, Math.round(75 + candidateMsgs.length * 3)));
-    const conf = Math.min(94, Math.max(70, Math.round(78 + (isMicMuted ? -4 : 3))));
-    const overall = Math.round((comm + tech + prob + conf) / 4);
+    let answersToScore = [...evaluatedAnswers];
+    if (answersToScore.length === 0 && candidateMsgs.length > 0) {
+      answersToScore = candidateMsgs.map((m, idx) => {
+        const ev = evaluateSingleQuestion(
+          { question_id: idx + 1, question: `Technical Discussion Topic #${idx + 1}`, answer: m.text },
+          targetCompany,
+          targetRole,
+          experienceLevel
+        );
+        return {
+          questionId: idx + 1,
+          question_id: idx + 1,
+          question: `Technical Discussion Topic #${idx + 1}`,
+          candidateAnswer: m.text,
+          answer: m.text,
+          score: ev.score,
+          marks: ev.score,
+          status: ev.status,
+          feedback: ev.feedback,
+          technical_accuracy: ev.technical_accuracy,
+          communication_clarity: ev.communication_clarity,
+          problem_solving: ev.problem_solving,
+          missing_concepts: ev.missing_concepts || [],
+          suggested_answer_points: ev.suggested_answer_points || [],
+        };
+      });
+    }
+
+    // Authentic calculated marks
+    const scoresArr = answersToScore.map(a => a.score ?? 0);
+    const overall = scoresArr.length > 0
+      ? Math.round(scoresArr.reduce((acc, s) => acc + s, 0) / scoresArr.length)
+      : (candidateMsgs.length === 0 ? 0 : 50);
+
+    const tech = answersToScore.length > 0
+      ? Math.round(answersToScore.reduce((acc, a) => acc + (a.technical_accuracy ?? overall), 0) / answersToScore.length)
+      : overall;
+
+    const comm = answersToScore.length > 0
+      ? Math.round(answersToScore.reduce((acc, a) => acc + (a.communication_clarity ?? 80), 0) / answersToScore.length)
+      : 80;
+
+    const prob = answersToScore.length > 0
+      ? Math.round(answersToScore.reduce((acc, a) => acc + (a.problem_solving ?? overall), 0) / answersToScore.length)
+      : overall;
+
+    const conf = Math.min(100, Math.max(50, comm - (isMicMuted ? 8 : 0)));
 
     const verbalDelivery = !isMicMuted ? {
       speakingPaceWpm: telemetryHud.wpm || 138,
@@ -831,23 +969,27 @@ export default function ImmersiveInterviewRoom({
       suggestions: ['Camera was turned off during session. Enable camera for posture feedback.']
     };
 
-    const questionFeedback = candidateMsgs.length > 0
-      ? candidateMsgs.map((m, idx) => ({
-          question: `Round ${idx + 1} Prompt`,
-          candidateAnswer: m.text,
-          feedback: "Solid conceptual explanation with clear foundational trade-offs. Detail concrete production monitoring metrics for staff-level evaluation.",
-          score: Math.min(96, Math.max(70, overall + (idx % 2 === 0 ? 2 : -2)))
+    const questionFeedback = answersToScore.length > 0
+      ? answersToScore.map((a, idx) => ({
+          question: a.question || `Round ${idx + 1} Prompt`,
+          candidateAnswer: a.candidateAnswer || a.answer || '',
+          feedback: a.feedback || "Answer evaluated based on technical trade-offs and foundational principles.",
+          score: a.score ?? 0,
+          status: a.status || (a.score >= 70 ? 'CORRECT' : a.score >= 35 ? 'PARTIAL' : 'INCORRECT'),
+          missing_concepts: a.missing_concepts || [],
+          suggested_answer_points: a.suggested_answer_points || [],
         }))
       : [
           {
             question: "System Architecture & Algorithmic Design",
-            candidateAnswer: "Candidate completed mock session prompts.",
-            feedback: "Structured explanation observed. State Big-O complexity upfront before writing solution code.",
-            score: overall
+            candidateAnswer: "No answers submitted.",
+            feedback: "Candidate did not submit responses during this interview round.",
+            score: 0,
+            status: "NO_ANSWER",
           }
         ];
 
-    const reportPayload = {
+    let reportPayload = {
       sessionId: sessionId || `sess_${Date.now()}`,
       role: targetRole,
       company: targetCompany,
@@ -871,11 +1013,16 @@ export default function ImmersiveInterviewRoom({
         communication: 20,
         confidence: 15,
       },
-      strengths: [
-        `Clear, articulate communication when breaking down ${targetRole} challenges.`,
-        `Thoughtful architectural trade-off consideration and clean reasoning.`,
-        `Maintained steady professional composure under live interview simulation.`
-      ],
+      strengths: overall >= 70
+        ? [
+            `Clear, articulate communication when breaking down ${targetRole} challenges.`,
+            `Thoughtful architectural trade-off consideration and clean reasoning.`,
+            `Maintained steady professional composure under live interview simulation.`
+          ]
+        : [
+            `Attempted interview questions under simulation conditions.`,
+            `Foundational awareness of ${targetRole} topics.`
+          ],
       improvements: [
         `State Big-O time and space complexity upfront before expanding on implementation.`,
         `Quantify past project outcomes with measurable business metrics (e.g. % latency improvement).`,
@@ -885,19 +1032,49 @@ export default function ImmersiveInterviewRoom({
       verbalDelivery,
       visualObservations,
       multimodalTelemetry: finalTelemetry,
-      summary: `The candidate demonstrated strong domain fundamentals for ${targetRole} at ${targetCompany}. Answers showed structured thinking, sound technical reasoning, and professional poise under mock interview pressure.`
+      summary: overall >= 70
+        ? `The candidate demonstrated strong domain fundamentals for ${targetRole} at ${targetCompany}. Answers showed structured thinking, sound technical reasoning, and professional poise under mock interview pressure.`
+        : `The candidate completed the mock interview for ${targetRole} at ${targetCompany}. Strengthen technical depth and provide concrete production trade-offs to boost marks.`,
     };
 
     try {
       if (sessionId) {
         try {
-          await apiEndInterview(sessionId, {
+          const backendSubmission = await apiEndInterview(sessionId, {
+            company: targetCompany,
+            role: targetRole,
+            difficulty: experienceLevel,
+            answers: answersToScore.map(a => ({
+              question_id: a.questionId || a.question_id || 1,
+              question: a.question,
+              answer: a.candidateAnswer || a.answer || '',
+              status: a.status || 'SUBMITTED',
+              score: a.score,
+            })),
             durationSeconds: typeof secondsElapsed !== 'undefined' ? secondsElapsed : 0,
             visualObservations: reportPayload.visualObservations,
             audioTelemetry: reportPayload.verbalDelivery,
             multimodalTelemetry: finalTelemetry,
           });
-        } catch (_) {}
+
+          if (backendSubmission && (backendSubmission.overallScore !== undefined || backendSubmission.score !== undefined)) {
+            reportPayload = {
+              ...reportPayload,
+              overallScore: backendSubmission.overallScore ?? backendSubmission.score ?? overall,
+              score: backendSubmission.overallScore ?? backendSubmission.score ?? overall,
+              scores: backendSubmission.scores || reportPayload.scores,
+              criterionScores: backendSubmission.criterionScores || reportPayload.criterionScores,
+              questionFeedback: backendSubmission.questionFeedback && backendSubmission.questionFeedback.length > 0
+                ? backendSubmission.questionFeedback
+                : reportPayload.questionFeedback,
+              strengths: backendSubmission.strengths && backendSubmission.strengths.length > 0 ? backendSubmission.strengths : reportPayload.strengths,
+              improvements: backendSubmission.improvements && backendSubmission.improvements.length > 0 ? backendSubmission.improvements : reportPayload.improvements,
+              summary: backendSubmission.summary || reportPayload.summary,
+            };
+          }
+        } catch (subErr) {
+          console.warn('[interview room] apiEndInterview error:', subErr);
+        }
       }
       const savedReportResponse = await apiSaveReport(reportPayload);
       const savedReport = savedReportResponse?.report || { ...reportPayload, id: `rep_${Date.now()}` };
@@ -1405,6 +1582,37 @@ export default function ImmersiveInterviewRoom({
             }}
           >
             {currentQuestionText ? currentQuestionText.toUpperCase() : 'TELL ME ABOUT A TIME YOU LED A PROJECT.'}
+          </div>
+        )}
+
+        {/* Real-time Answer Evaluation & Marks Badge */}
+        {!isQuestionCollapsed && lastEvaluatedTurn && (
+          <div
+            style={{
+              marginTop: '0.65rem',
+              padding: '0.45rem 0.75rem',
+              borderRadius: '8px',
+              backgroundColor: lastEvaluatedTurn.score >= 70 ? 'rgba(34, 197, 94, 0.12)' : lastEvaluatedTurn.score >= 35 ? 'rgba(234, 179, 8, 0.12)' : 'rgba(239, 68, 68, 0.12)',
+              border: `1px solid ${lastEvaluatedTurn.score >= 70 ? 'rgba(34, 197, 94, 0.35)' : lastEvaluatedTurn.score >= 35 ? 'rgba(234, 179, 8, 0.35)' : 'rgba(239, 68, 68, 0.35)'}`,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              flexWrap: 'wrap',
+              gap: '0.5rem',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', fontSize: '0.72rem' }}>
+              <CheckCircle2 size={13} color={lastEvaluatedTurn.score >= 70 ? '#4ADE80' : lastEvaluatedTurn.score >= 35 ? '#FACC15' : '#F87171'} />
+              <span style={{ color: '#E2E8F0' }}>Previous Answer Checked:</span>
+              <strong style={{ color: lastEvaluatedTurn.score >= 70 ? '#4ADE80' : lastEvaluatedTurn.score >= 35 ? '#FACC15' : '#F87171' }}>
+                {lastEvaluatedTurn.score}/100 Marks ({lastEvaluatedTurn.status})
+              </strong>
+            </div>
+            {lastEvaluatedTurn.feedback && (
+              <span style={{ fontSize: '0.68rem', color: '#94A3B8', textTransform: 'none' }}>
+                {lastEvaluatedTurn.feedback.slice(0, 75)}{lastEvaluatedTurn.feedback.length > 75 ? '...' : ''}
+              </span>
+            )}
           </div>
         )}
 

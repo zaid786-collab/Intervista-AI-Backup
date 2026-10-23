@@ -1000,11 +1000,35 @@ export default function SampleReportModal({ isOpen, onClose, reportData, onRetak
                     <div style={{ fontSize: '0.86rem', fontWeight: 600, color: '#FFFFFF' }}>
                       {qf.question || `Prompt #${i + 1}`}
                     </div>
-                    {qf.score && (
-                      <span style={{ fontSize: '0.78rem', fontWeight: 700, color: 'var(--accent-gold)', backgroundColor: 'rgba(217, 183, 122, 0.12)', padding: '2px 8px', borderRadius: '6px' }}>
-                        {qf.score}%
-                      </span>
-                    )}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      {qf.status && (
+                        <span style={{
+                          fontSize: '0.68rem',
+                          fontWeight: 700,
+                          padding: '2px 6px',
+                          borderRadius: '4px',
+                          backgroundColor: qf.score >= 70 ? 'rgba(34, 197, 94, 0.15)' : qf.score >= 35 ? 'rgba(234, 179, 8, 0.15)' : 'rgba(239, 68, 68, 0.15)',
+                          color: qf.score >= 70 ? '#4ADE80' : qf.score >= 35 ? '#FACC15' : '#F87171',
+                          border: `1px solid ${qf.score >= 70 ? 'rgba(34, 197, 94, 0.3)' : qf.score >= 35 ? 'rgba(234, 179, 8, 0.3)' : 'rgba(239, 68, 68, 0.3)'}`,
+                          textTransform: 'uppercase',
+                        }}>
+                          {qf.status}
+                        </span>
+                      )}
+                      {(qf.score !== undefined && qf.score !== null) && (
+                        <span style={{
+                          fontSize: '0.78rem',
+                          fontWeight: 700,
+                          color: qf.score >= 70 ? '#4ADE80' : qf.score >= 35 ? 'var(--accent-gold)' : '#F87171',
+                          backgroundColor: qf.score >= 70 ? 'rgba(34, 197, 94, 0.12)' : qf.score >= 35 ? 'rgba(217, 183, 122, 0.12)' : 'rgba(239, 68, 68, 0.12)',
+                          padding: '2px 8px',
+                          borderRadius: '6px',
+                          border: `1px solid ${qf.score >= 70 ? 'rgba(34, 197, 94, 0.25)' : qf.score >= 35 ? 'rgba(217, 183, 122, 0.25)' : 'rgba(239, 68, 68, 0.25)'}`,
+                        }}>
+                          {qf.score}% Marks
+                        </span>
+                      )}
+                    </div>
                   </div>
                   {qf.candidateAnswer && (
                     <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', marginBottom: '0.5rem', fontStyle: 'italic', backgroundColor: 'rgba(0,0,0,0.25)', padding: '0.5rem 0.75rem', borderRadius: '6px' }}>

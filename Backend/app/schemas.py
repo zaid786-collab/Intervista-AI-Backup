@@ -376,6 +376,9 @@ class SaveAnswerResponse(BaseModel):
     aiFeedback: Optional[str] = None
     is_follow_up: Optional[bool] = False
     completed: Optional[bool] = False
+    score: Optional[int] = None
+    marks: Optional[int] = None
+    evaluation: Optional[dict] = None
 
 
 class InterviewTurnRequest(BaseModel):
@@ -413,7 +416,10 @@ class InterviewTurnResponse(BaseModel):
     adaptive_level_name: Optional[str] = "Practical Scenario"
     adaptive_action: Optional[str] = None
     adaptive_note: Optional[str] = None
-
+    score: Optional[int] = None
+    marks: Optional[int] = None
+    status: Optional[str] = None
+    evaluation: Optional[dict] = None
 
 
 class SubmitInterviewRequest(BaseModel):

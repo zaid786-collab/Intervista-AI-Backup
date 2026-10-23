@@ -5,6 +5,7 @@
  */
 
 import { generateInterviewPDF } from './pdfGenerator';
+import { evaluateSingleQuestion } from './evaluator';
 import {
   getApiBaseUrl,
   getToken as getRootToken,
@@ -316,6 +317,7 @@ export async function apiSendMessage({ sessionId, content, latencyMs, audioDurat
       duration_ms: audioDurationMs,
     });
     if (res && res.message) {
+      const score = res.score ?? res.marks ?? res.technical_score ?? null;
       return {
         success: true,
         message: res.message,
@@ -331,6 +333,12 @@ export async function apiSendMessage({ sessionId, content, latencyMs, audioDurat
         adaptiveAction: res.adaptive_action,
         adaptiveNote: res.adaptive_note,
         geminiInteractionId: geminiInteractionId,
+        score,
+        marks: score,
+        status: res.status || (score !== null ? (score >= 70 ? 'CORRECT' : score >= 35 ? 'PARTIAL' : 'INCORRECT') : 'SUBMITTED'),
+        evaluation: res.evaluation || null,
+        technicalScore: res.technical_score,
+        communicationScore: res.communication_score,
       };
     }
   } catch (err) {
@@ -348,27 +356,49 @@ export async function apiSendMessage({ sessionId, content, latencyMs, audioDurat
     });
     if (saveRes && saveRes.message) {
       const nq = saveRes.next_question || "Understood. Let's move on to the next technical topic.";
+      const score = saveRes.score ?? saveRes.marks ?? null;
       return {
         success: true,
         message: nq,
         reply: nq,
-        aiFeedback: saveRes.ai_feedback || "Answer stored successfully.",
+        aiFeedback: saveRes.ai_feedback || "Answer stored and evaluated successfully.",
         nextQuestion: saveRes.next_question,
         isFollowUp: false,
+        score,
+        marks: score,
+        status: saveRes.status || 'SUBMITTED',
+        evaluation: saveRes.evaluation || null,
       };
     }
   } catch (_) {}
 
-  // 3. Fallback response
-  const fallbackReply = 'Solid explanation. You clearly articulated the core principles and trade-offs. Let us take it one step deeper: How would you test this approach in a high-concurrency production setting?';
+  // 3. Fallback response - check answer client-side with full rubric
+  const localEval = evaluateSingleQuestion(
+    { question_id: qId, question: `Technical Question #${qId}`, answer: answerText },
+    'Google',
+    'Software Engineer',
+    'Medium'
+  );
+  const fallbackReply = localEval.score >= 70
+    ? 'Solid explanation! You clearly articulated the core principles and trade-offs. Let us take it one step deeper: How would you test this approach in a high-concurrency production setting?'
+    : localEval.score >= 35
+    ? 'I see your initial thought process. How would you handle asymptotic complexity, race conditions, or failover scenarios?'
+    : 'Understood. In a staff-level interview, addressing edge cases, algorithmic bounds, and system resilience is crucial. Let us proceed to the next topic.';
+
   return {
     success: true,
     message: fallbackReply,
     reply: fallbackReply,
-    aiFeedback: 'Solid explanation. You clearly articulated the core principles and trade-offs.',
+    aiFeedback: localEval.feedback || 'Answer evaluated.',
     nextQuestion: 'Great! Let us take it one step deeper: How would you validate and monitor this approach under production load?',
     questionIndex: (questionIndex || 0) + 1,
     isFollowUp: true,
+    score: localEval.score,
+    marks: localEval.score,
+    status: localEval.status,
+    evaluation: localEval,
+    technicalScore: localEval.technical_accuracy,
+    communicationScore: localEval.communication_clarity,
   };
 }
 
@@ -415,64 +445,144 @@ export async function apiEndInterview(sessionId, metrics = null) {
       metrics: metrics || {},
     });
     if (res && (res.score !== undefined || res.overallScore !== undefined || res.interview_id)) {
+      const overall = res.score_num !== undefined ? res.score_num : (res.score ?? 80);
+      const tech = res.technical_score ?? overall;
+      const comm = res.communication_score ?? overall;
+      const prob = res.problem_solving_score ?? overall;
+      const conf = Math.max(60, comm - 4);
+
+      const questionFeedback = (res.detailed_feedback || []).map((qf, i) => ({
+        question: qf.question || `Prompt #${i + 1}`,
+        candidateAnswer: qf.candidate_answer || '',
+        feedback: qf.feedback || '',
+        score: qf.score ?? 0,
+        status: qf.status || 'CORRECT',
+        suggested_answer_points: qf.suggested_answer_points || [],
+        missing_concepts: qf.missing_concepts || [],
+        identified_keywords: qf.identified_keywords || [],
+        technical_accuracy: qf.technical_accuracy ?? qf.score,
+        communication_clarity: qf.communication_clarity ?? 80,
+        problem_solving: qf.problem_solving ?? qf.score,
+      }));
+
       return {
         ...res,
-        overallScore: res.score_num !== undefined ? res.score_num : (res.score ?? 85),
+        id: res.interview_id ? `int_${res.interview_id}` : (sessionId || `rep_${Date.now()}`),
+        sessionId: sessionId,
+        overallScore: overall,
+        score: overall,
         scores: {
-          communication: res.communication_score ?? 88,
-          technicalDepth: res.technical_score ?? 85,
-          problemSolving: res.problem_solving_score ?? 86,
-          confidence: 84,
+          communication: comm,
+          technicalDepth: tech,
+          problemSolving: prob,
+          confidence: conf,
         },
+        criterionScores: {
+          technicalKnowledge: tech,
+          problemSolving: prob,
+          communication: comm,
+          confidence: conf,
+        },
+        questionFeedback,
+        detailedFeedback: res.detailed_feedback || [],
+        strengths: res.strengths && res.strengths.length > 0 ? res.strengths : [
+          'Demonstrated clear architectural awareness and modular thinking.',
+          'Solid breakdown of engineering constraints and trade-offs.',
+        ],
+        improvements: res.improvements && res.improvements.length > 0 ? res.improvements : [
+          'State asymptotic Big-O runtime and space complexity upfront.',
+          'Detail automated rollback strategies and production telemetry.',
+        ],
+        missing_concepts: res.missing_concepts || [],
+        summary: res.overall_summary || 'Interview completed and evaluated against technical rubrics.',
       };
     }
   } catch (err) {
     console.warn('[apiEndInterview] Backend submit fallback:', err.message);
   }
 
-  // Derive scores
-  const scoreNum = Math.floor(Math.random() * 12) + 84; // 84 - 96
-  const commScore = Math.min(100, scoreNum + 2);
-  const techScore = Math.min(100, scoreNum);
-  const probScore = Math.min(100, scoreNum + 1);
+  // Derive scores from actual evaluated answers provided in metrics!
+  const rawAnswers = metrics?.answers || [];
+  let evaluatedList = [];
+  if (rawAnswers.length > 0) {
+    evaluatedList = rawAnswers.map((a, idx) => {
+      if (a.score !== undefined && a.feedback) return a;
+      const singleEval = evaluateSingleQuestion(
+        {
+          question_id: a.question_id || a.questionId || idx + 1,
+          question: a.question || `Technical Question #${idx + 1}`,
+          answer: a.answer || a.candidate_answer || a.candidateAnswer || '',
+        },
+        metrics?.company || 'Google',
+        metrics?.role || 'Software Engineer',
+        metrics?.difficulty || 'Medium'
+      );
+      return {
+        question: a.question || `Technical Question #${idx + 1}`,
+        candidateAnswer: a.answer || a.candidate_answer || a.candidateAnswer || '',
+        feedback: singleEval.feedback,
+        score: singleEval.score,
+        status: singleEval.status,
+        suggested_answer_points: singleEval.suggested_answer_points || [],
+        missing_concepts: singleEval.missing_concepts || [],
+        technical_accuracy: singleEval.technical_accuracy,
+        communication_clarity: singleEval.communication_clarity,
+        problem_solving: singleEval.problem_solving,
+      };
+    });
+  }
+
+  const validScores = evaluatedList.map(e => e.score ?? 0);
+  const avgScore = validScores.length > 0
+    ? Math.round(validScores.reduce((a, b) => a + b, 0) / validScores.length)
+    : 0;
+  const commScore = evaluatedList.length > 0
+    ? Math.round(evaluatedList.reduce((acc, e) => acc + (e.communication_clarity || avgScore), 0) / evaluatedList.length)
+    : 80;
+  const techScore = evaluatedList.length > 0
+    ? Math.round(evaluatedList.reduce((acc, e) => acc + (e.technical_accuracy || avgScore), 0) / evaluatedList.length)
+    : avgScore;
+  const probScore = evaluatedList.length > 0
+    ? Math.round(evaluatedList.reduce((acc, e) => acc + (e.problem_solving || avgScore), 0) / evaluatedList.length)
+    : avgScore;
 
   const report = {
     id: sessionId || 'rep_' + Date.now(),
     role: metrics?.role || 'Software Engineer',
     company: metrics?.company || 'Google',
-    level: metrics?.level || 'Mid Level',
-    overallScore: scoreNum,
-    score: scoreNum,
+    level: metrics?.level || metrics?.difficulty || 'Mid Level',
+    overallScore: avgScore,
+    score: avgScore,
     scores: {
       communication: commScore,
       technicalDepth: techScore,
       problemSolving: probScore,
-      confidence: Math.min(100, commScore - 2),
+      confidence: Math.max(50, commScore - 4),
     },
-    strengths: [
-      'Strong grasp of modular system decomposition and clean API design.',
-      'Clear, structured explanations following the STAR methodology.',
-      'Proactive mention of edge cases and performance bottlenecks.',
-    ],
+    criterionScores: {
+      technicalKnowledge: techScore,
+      problemSolving: probScore,
+      communication: commScore,
+      confidence: Math.max(50, commScore - 4),
+    },
+    strengths: avgScore >= 70
+      ? [
+          'Strong grasp of modular system decomposition and clean API design.',
+          'Clear, structured explanations following the STAR methodology.',
+          'Proactive mention of edge cases and performance bottlenecks.',
+        ]
+      : [
+          'Attempted question prompts with foundational technical awareness.',
+          'Maintained composure during mock interview scenario.',
+        ],
     improvements: [
       'Explicitly quantify Big-O time and space complexities during algorithmic walkthroughs.',
       'Discuss automated integration testing strategies and rollback flags.',
     ],
+    questionFeedback: evaluatedList,
     studyRoadmap: [
       { step: 1, title: 'Distributed Systems & Consistency Models', focus: 'Study Raft consensus, idempotency patterns, and event-driven architecture.' },
       { step: 2, title: 'Performance Profiling & Bottlenecks', focus: 'Deep dive into database indexing, memory leaks, and network latency optimization.' },
-    ],
-    questionFeedback: [
-      {
-        question: 'System Architecture & Concurrency',
-        score: techScore,
-        feedback: 'Excellent structural answer with clear trade-off evaluation.',
-      },
-      {
-        question: 'Algorithmic Optimization',
-        score: probScore,
-        feedback: 'Correct logical derivation, could state auxiliary memory limits earlier.',
-      },
     ],
     verbalDelivery: {
       wpm: 128,
@@ -496,7 +606,7 @@ export async function apiEndInterview(sessionId, metrics = null) {
     technical_score: techScore,
     communication_score: commScore,
     problem_solving_score: probScore,
-    feedback: `Scored ${scoreNum}% overall. Demonstrated exceptional competence.`,
+    feedback: `Scored ${avgScore}% overall. Demonstrated technical competence.`,
   });
 
   return report;
