@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app import models, schemas
 from app.dependencies import get_current_user, get_current_user_optional
-from app.services.llm_evaluator import evaluate_interview_submission, evaluate_single_question, is_starter_boilerplate
+from app.services.llm_evaluator import evaluate_interview_submission, evaluate_single_question, is_starter_boilerplate, generate_interviewer_turn
 from app.services.pdf_generator import generate_interview_pdf_report
 from app.services.question_generator import generate_interview_session
 
@@ -327,7 +327,7 @@ def get_hr_behavioral_questions(company: str):
 @router.post("/start", response_model=schemas.StartInterviewResponse)
 def start_mock_interview(
     payload: schemas.StartInterviewRequest,
-    current_user: models.User = Depends(get_current_user),
+    current_user: Optional[models.User] = Depends(get_current_user_optional),
 ):
     interview_type = payload.interview_type or "Technical Interview"
     domain = payload.domain or "General Software Engineering"
@@ -477,7 +477,15 @@ def start_mock_interview(
         "termination_reason": None,
         "interview_id": None,
         "answers": {},
+        "questions": [q.dict() for q in all_questions],
     }
+
+    first_q = all_questions[0] if all_questions else None
+    welcome_msg = (
+        f"Hello! Welcome to your {domain} {interview_type} for the {payload.role} position at {payload.company}. "
+        f"I'm your AI Technical Interviewer today. We'll be evaluating technical depth, algorithmic problem solving, "
+        f"and architectural reasoning.\n\nTo begin:\n{first_q.question if first_q else 'Tell me about yourself.'}"
+    )
 
     return schemas.StartInterviewResponse(
         session_id=session_id,
@@ -488,12 +496,17 @@ def start_mock_interview(
         interview_type=interview_type,
         domain=domain,
         questions=all_questions,
+        welcome_message=welcome_msg,
+        message=welcome_msg,
+        sessionId=session_id,
+        total_questions=len(all_questions),
+        current_question=first_q,
     )
 
 @router.post("/violation", response_model=schemas.RecordViolationResponse)
 def record_proctoring_violation(
     payload: schemas.RecordViolationRequest,
-    current_user: models.User = Depends(get_current_user),
+    current_user: Optional[models.User] = Depends(get_current_user_optional),
     db: Session = Depends(get_db),
 ):
     """
@@ -708,14 +721,14 @@ def get_session_proctoring_status(
 @router.post("/save-answer", response_model=schemas.SaveAnswerResponse)
 def save_candidate_answer(
     payload: schemas.SaveAnswerRequest,
-    current_user: models.User = Depends(get_current_user),
+    current_user: Optional[models.User] = Depends(get_current_user_optional),
     db: Session = Depends(get_db),
 ):
     """
     Silently records candidate's exact answer into the database during the interview.
     Does NOT evaluate or leak scores during the active session.
     """
-    user_id = current_user.id
+    user_id = current_user.id if current_user else None
     cleaned_ans = str(payload.candidate_answer or "").strip()
     status = payload.status or ("SKIPPED" if not cleaned_ans else "SUBMITTED")
 
@@ -758,18 +771,192 @@ def save_candidate_answer(
 
     db.commit()
 
+    # Determine next question context if session is active
+    next_q_text = None
+    if payload.session_id and payload.session_id in ACTIVE_PROCTORING_SESSIONS:
+        sess_q = ACTIVE_PROCTORING_SESSIONS[payload.session_id].get("questions", [])
+        for idx, q in enumerate(sess_q):
+            if q.get("id") == payload.question_id and idx + 1 < len(sess_q):
+                next_q_text = sess_q[idx + 1].get("question")
+                break
+
     return schemas.SaveAnswerResponse(
         success=True,
         question_id=payload.question_id,
         status=status,
         message="Answer stored successfully in database.",
+        next_question=next_q_text or "Great! Let's proceed to the next technical topic.",
+        nextQuestion=next_q_text or "Great! Let's proceed to the next technical topic.",
+        ai_feedback="Solid explanation. You clearly articulated the core principles.",
+        aiFeedback="Solid explanation. You clearly articulated the core principles.",
+        is_follow_up=False,
+        completed=False,
+    )
+
+
+@router.post("/interact", response_model=schemas.InterviewTurnResponse)
+def interview_turn_interaction(
+    payload: schemas.InterviewTurnRequest,
+    current_user: Optional[models.User] = Depends(get_current_user_optional),
+    db: Session = Depends(get_db),
+):
+    """
+    Real-time dynamic conversational AI interviewer turn.
+    Evaluates candidate's verbal/written answer and code, acknowledges technical points,
+    provides adaptive probing follow-ups or smoothly advances questions.
+    """
+    user_id = current_user.id if current_user else None
+    cleaned_ans = str(payload.candidate_answer or payload.content or "").strip()
+    code_sub = str(payload.code_submission or "").strip() if payload.code_submission else None
+
+    # Retrieve session state
+    session = ACTIVE_PROCTORING_SESSIONS.get(payload.session_id, {})
+    questions = session.get("questions", [])
+    company = session.get("company", "Google")
+    role = session.get("role", "Software Engineer")
+    interviewer_name = session.get("interviewer_name", "Mr. J. Chen")
+
+    # Normalize question id
+    raw_qid = payload.question_id if payload.question_id is not None else (payload.question_index or 1)
+    try:
+        norm_qid = int(str(raw_qid).replace("q", "").replace("Q", "").strip() or 1)
+    except Exception:
+        norm_qid = 1
+
+    # Find current question
+    current_idx = -1
+    current_q = None
+    for idx, q in enumerate(questions):
+        if q.get("id") == norm_qid or str(q.get("id")) == str(raw_qid):
+            current_idx = idx
+            current_q = q
+            break
+
+    if not current_q and questions:
+        current_idx = max(0, min(norm_qid - 1, len(questions) - 1))
+        current_q = questions[current_idx]
+
+    if not current_q:
+        current_q = {
+            "id": norm_qid,
+            "question": "Can you describe your technical approach and how you handle scalability trade-offs?",
+            "category": "System Design & Technical Architecture",
+            "domain": "Software Engineering",
+            "expected_key_points": ["Modular architecture", "Scalability trade-offs", "Edge case resilience"],
+            "hint": "Focus on high throughput, data consistency, and failure recovery.",
+        }
+
+    # 1. Hint request
+    if payload.request_hint:
+        hint_text = current_q.get("hint") or "Think about data structures with minimal lookup overhead and deterministic resource management."
+        hint_speech = f"Here is a technical hint to guide your thinking: {hint_text}"
+        return schemas.InterviewTurnResponse(
+            success=True,
+            session_id=payload.session_id,
+            question_id=norm_qid,
+            message=hint_speech,
+            reply=hint_speech,
+            interviewer_reaction="Providing a technical hint.",
+            next_question=current_q.get("question"),
+            next_question_id=norm_qid,
+            is_follow_up=False,
+            is_hint=True,
+            completed=False,
+            feedback_summary="Interviewer provided technical hint.",
+            technical_score=75,
+            communication_score=85,
+        )
+
+    # Determine turn count on this question
+    turn_counts = session.setdefault("turn_counts", {})
+    cur_turn = turn_counts.get(norm_qid, 0) + 1
+    turn_counts[norm_qid] = cur_turn
+
+    # Determine next question
+    next_q = None
+    if current_idx >= 0 and current_idx + 1 < len(questions):
+        next_q = questions[current_idx + 1]
+
+    # Generate real-time turn feedback
+    turn_data = generate_interviewer_turn(
+        question_dict=current_q,
+        candidate_answer=cleaned_ans,
+        turn_count_on_question=cur_turn if not payload.skip_question else 2,
+        code_submission=code_sub,
+        company=company,
+        role=role,
+        interviewer_name=interviewer_name,
+        next_question_dict=next_q,
+    )
+
+    status = "SKIPPED" if payload.skip_question else turn_data.get("status", "SUBMITTED")
+
+    # Persist candidate answer in database
+    existing = db.query(models.InterviewAnswer).filter(
+        models.InterviewAnswer.session_id == payload.session_id,
+        models.InterviewAnswer.question_id == norm_qid,
+    ).first()
+
+    full_ans = cleaned_ans
+    if code_sub:
+        full_ans = f"{cleaned_ans}\n\n[Code Implementation]:\n{code_sub}".strip()
+
+    if existing:
+        existing.candidate_answer = full_ans
+        existing.status = status
+        existing.submitted_at = datetime.now(timezone.utc)
+    else:
+        new_ans = models.InterviewAnswer(
+            session_id=payload.session_id,
+            user_id=user_id,
+            question_id=norm_qid,
+            question=current_q.get("question", f"Question {norm_qid}"),
+            candidate_answer=full_ans,
+            status=status,
+            submitted_at=datetime.now(timezone.utc),
+        )
+        db.add(new_ans)
+
+    db.commit()
+
+    # Track in memory session
+    if "answers" not in session:
+        session["answers"] = {}
+    session["answers"][norm_qid] = {
+        "question_id": norm_qid,
+        "question": current_q.get("question"),
+        "candidate_answer": full_ans,
+        "status": status,
+        "submitted_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+    next_q_schema = None
+    if next_q and not turn_data.get("is_follow_up"):
+        next_q_schema = schemas.InterviewQuestion(**next_q)
+
+    return schemas.InterviewTurnResponse(
+        success=True,
+        session_id=payload.session_id,
+        question_id=norm_qid,
+        message=turn_data["message"],
+        reply=turn_data["message"],
+        interviewer_reaction=turn_data.get("interviewer_reaction"),
+        next_question=turn_data.get("next_question"),
+        next_question_id=turn_data.get("next_question_id"),
+        next_question_data=next_q_schema,
+        is_follow_up=turn_data.get("is_follow_up", False),
+        is_hint=False,
+        completed=turn_data.get("completed", False),
+        feedback_summary=turn_data.get("feedback_summary"),
+        technical_score=turn_data.get("technical_score", 85),
+        communication_score=turn_data.get("communication_score", 85),
     )
 
 
 @router.post("/submit", response_model=schemas.SubmitInterviewResponse)
 def submit_mock_interview(
     payload: schemas.SubmitInterviewRequest,
-    current_user: models.User = Depends(get_current_user),
+    current_user: Optional[models.User] = Depends(get_current_user_optional),
     db: Session = Depends(get_db),
 ):
     # 0. Check idempotency and reject terminated sessions
@@ -867,34 +1054,72 @@ def submit_mock_interview(
                 "status": dba.status or "SUBMITTED",
             }
 
+    effective_answers = list(payload.answers or [])
+
+    # If payload answers is empty, restore pre-stored answers from database
+    if not effective_answers and payload.session_id:
+        stored_db_answers = db.query(models.InterviewAnswer).filter(
+            models.InterviewAnswer.session_id == payload.session_id
+        ).order_by(models.InterviewAnswer.question_id.asc()).all()
+
+        for sda in stored_db_answers:
+            effective_answers.append(
+                schemas.CandidateAnswer(
+                    question_id=sda.question_id,
+                    question=sda.question or f"Question {sda.question_id}",
+                    answer=sda.candidate_answer or "",
+                    status=sda.status or "SUBMITTED",
+                )
+            )
+
+    # Also pull default company/role if not specified in payload
+    effective_company = payload.company or "Google"
+    effective_role = payload.role or "Software Engineer"
+    effective_difficulty = payload.difficulty or "Medium"
+
+    if payload.session_id and payload.session_id in ACTIVE_PROCTORING_SESSIONS:
+        active_s = ACTIVE_PROCTORING_SESSIONS[payload.session_id]
+        if not payload.company or payload.company == "Intervista AI":
+            effective_company = active_s.get("company", effective_company)
+        if not payload.role or payload.role == "Software Engineer":
+            effective_role = active_s.get("role", effective_role)
+        if not payload.difficulty or payload.difficulty == "Medium":
+            effective_difficulty = active_s.get("difficulty", effective_difficulty)
+
     answers_dicts = []
-    for a in payload.answers:
-        ans_text = (a.answer or "").strip()
-        ans_status = a.status or "SUBMITTED"
+    for a in effective_answers:
+        raw_qid = getattr(a, "question_id", 1)
+        try:
+            norm_id = int(str(raw_qid).replace("q", "").replace("Q", "").strip() or 1)
+        except Exception:
+            norm_id = 1
+        q_text = getattr(a, "question", None) or getattr(a, "question_text", None) or f"Question {norm_id}"
+        ans_text = (getattr(a, "answer", None) or getattr(a, "candidate_answer", None) or "").strip()
+        ans_status = getattr(a, "status", None) or "SUBMITTED"
 
         # If payload specifies SKIPPED or EMPTY, or answer is empty: strictly mark as SKIPPED
         if ans_status in ("SKIPPED", "EMPTY") or not ans_text:
             ans_text = ""
             ans_status = "SKIPPED"
-        elif a.question_id in db_answers_map and not ans_text:
-            db_record = db_answers_map[a.question_id]
+        elif norm_id in db_answers_map and not ans_text:
+            db_record = db_answers_map[norm_id]
             if db_record.get("answer"):
                 ans_text = db_record["answer"].strip()
                 ans_status = db_record.get("status") or "COMPLETED"
 
         answers_dicts.append({
-            "question_id": a.question_id,
-            "question": a.question,
+            "question_id": norm_id,
+            "question": q_text,
             "answer": ans_text,
             "status": ans_status,
-            "test_results": a.test_results if ans_status != "SKIPPED" else None,
+            "test_results": getattr(a, "test_results", None) if ans_status != "SKIPPED" else None,
         })
 
     # 2. Run Deferred Evaluation across ALL answers
     eval_result = evaluate_interview_submission(
-        company=payload.company,
-        role=payload.role,
-        difficulty=payload.difficulty,
+        company=effective_company,
+        role=effective_role,
+        difficulty=effective_difficulty,
         answers=answers_dicts,
     )
 

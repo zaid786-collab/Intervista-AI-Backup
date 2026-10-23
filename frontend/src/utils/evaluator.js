@@ -875,7 +875,7 @@ export function evaluateSingleQuestion(questionObj, company = "Google", role = "
  * Execute evaluation via FastAPI backend or fallback to local evaluator.
  */
 export async function evaluateQuestionAPI(payload) {
-  const candidateBases = ["http://127.0.0.1:8000", "http://localhost:8000", ""];
+  const candidateBases = ["http://127.0.0.1:8001", "http://localhost:8001", "http://127.0.0.1:8000", "http://localhost:8000", ""];
   for (const base of candidateBases) {
     try {
       const url = base ? `${base}/api/interviews/evaluate-question` : `/api/interviews/evaluate-question`;

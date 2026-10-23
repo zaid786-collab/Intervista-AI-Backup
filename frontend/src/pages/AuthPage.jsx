@@ -58,16 +58,13 @@ export default function AuthPage({ mode = 'login' }) {
         setSuccessMsg(`Welcome back, ${authenticatedUser.name || 'Candidate'}! Redirecting to Dashboard...`);
       }
 
-      if (updateUser) updateUser(authenticatedUser);
-      if (authContextLogin) {
-        try {
-          await authContextLogin({ email: cleanEmail, password });
-        } catch (_) {}
+      if (updateUser) {
+        updateUser(authenticatedUser);
       }
 
       setTimeout(() => {
         navigate(redirectDest, { replace: true });
-      }, 700);
+      }, 600);
     } catch (err) {
       setError(err.message || 'Authentication failed. Please verify your credentials.');
     } finally {
@@ -278,6 +275,31 @@ export default function AuthPage({ mode = 'login' }) {
             <span>{loading ? 'Authenticating...' : currentMode === 'login' ? 'Sign In to Dashboard' : 'Create Account & Enter'}</span>
             {!loading && <ArrowRight size={16} />}
           </button>
+
+          {currentMode === 'login' && (
+            <div style={{ marginTop: '0.25rem', textAlign: 'center' }}>
+              <button
+                type="button"
+                onClick={() => {
+                  setEmail('demo@intervista.ai');
+                  setPassword('demo123');
+                  setError('');
+                }}
+                style={{
+                  background: 'rgba(217, 183, 122, 0.08)',
+                  border: '1px solid rgba(217, 183, 122, 0.22)',
+                  borderRadius: '6px',
+                  color: 'var(--accent-gold)',
+                  fontSize: '0.78rem',
+                  padding: '0.35rem 0.75rem',
+                  cursor: 'pointer',
+                  transition: 'all 0.2s ease',
+                }}
+              >
+                ⚡ Fill Demo Account (demo@intervista.ai)
+              </button>
+            </div>
+          )}
         </form>
 
         <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginTop: '1.5rem', textAlign: 'center' }}>
