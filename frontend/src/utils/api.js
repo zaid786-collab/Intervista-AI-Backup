@@ -213,18 +213,26 @@ export async function apiGetMe() {
   return raw ? JSON.parse(raw) : null;
 }
 
-export async function apiUpdateProfile({ name, skills, picture }) {
+export async function apiUpdateProfile({ name, skills, picture, bio, target_role }) {
   try {
-    const data = await request('PATCH', '/api/users/me/progress', { name, skills, picture });
-    if (data?.user) {
-      localStorage.setItem('intervista_current_user', JSON.stringify(data.user));
-      return data.user;
+    const data = await request('PATCH', '/api/users/me', { name, skills, picture, bio, target_role });
+    const user = data?.user || (data?.id ? data : null);
+    if (user) {
+      localStorage.setItem('intervista_current_user', JSON.stringify(user));
+      return user;
     }
   } catch (err) {
     console.warn('[apiUpdateProfile] fallback:', err.message);
   }
   const current = (await apiGetMe()) || { name: 'Candidate', email: 'candidate@example.com' };
-  const updated = { ...current, ...(name ? { name } : {}), ...(skills ? { skills } : {}), ...(picture ? { picture } : {}) };
+  const updated = {
+    ...current,
+    ...(name ? { name } : {}),
+    ...(skills ? { skills } : {}),
+    ...(picture ? { picture } : {}),
+    ...(bio ? { bio } : {}),
+    ...(target_role ? { target_role } : {}),
+  };
   localStorage.setItem('intervista_current_user', JSON.stringify(updated));
   return updated;
 }

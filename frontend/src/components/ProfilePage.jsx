@@ -31,6 +31,7 @@ export default function ProfilePage({
   onNavigate,
   onViewReport,
   onLogout,
+  onBackToOverview,
 }) {
   const [profileUser, setProfileUser] = useState(currentUser || getCurrentUser() || null);
   const [loadingProfile, setLoadingProfile] = useState(false);
@@ -48,8 +49,12 @@ export default function ProfilePage({
 
   // Load custom skills from user profile or defaults
   const [skills, setSkills] = useState(() => {
-    if (user?.skills && Array.isArray(user.skills) && user.skills.length > 0) {
-      return user.skills;
+    if (user?.skills) {
+      if (Array.isArray(user.skills) && user.skills.length > 0) return user.skills;
+      if (typeof user.skills === 'string') {
+        const parsed = user.skills.split(',').map((s) => s.trim()).filter(Boolean);
+        if (parsed.length > 0) return parsed;
+      }
     }
     try {
       const saved = localStorage.getItem('intervista_user_skills');
@@ -69,7 +74,7 @@ export default function ProfilePage({
   const [editedName, setEditedName] = useState(name);
   const [nameSaveNotice, setNameSaveNotice] = useState('');
 
-  // Fetch real profile from MongoDB on mount
+  // Fetch real profile from backend on mount
   useEffect(() => {
     let active = true;
     async function loadLatestProfile() {
@@ -78,9 +83,16 @@ export default function ProfilePage({
         const me = await apiGetMe();
         if (active && me) {
           setProfileUser(me);
-          setEditedName(me.name);
-          if (me.skills && me.skills.length > 0) {
-            setSkills(me.skills);
+          if (me.name) setEditedName(me.name);
+          if (me.skills) {
+            const parsed = Array.isArray(me.skills)
+              ? me.skills
+              : typeof me.skills === 'string'
+              ? me.skills.split(',').map((s) => s.trim()).filter(Boolean)
+              : [];
+            if (parsed.length > 0) {
+              setSkills(parsed);
+            }
           }
         }
       } catch (err) {
@@ -183,7 +195,7 @@ export default function ProfilePage({
     }
   };
 
-  // Save profile name to MongoDB Atlas
+  // Save profile name to database
   const handleSaveName = async (e) => {
     e.preventDefault();
     const cleanName = editedName.trim();
@@ -193,7 +205,7 @@ export default function ProfilePage({
       const updatedUser = await apiUpdateProfile({ name: cleanName });
       setProfileUser(updatedUser);
       setIsEditingName(false);
-      setNameSaveNotice('Profile name saved to MongoDB!');
+      setNameSaveNotice('Profile updated successfully!');
       setTimeout(() => setNameSaveNotice(''), 3000);
 
       // Trigger re-render across navbar
@@ -215,9 +227,9 @@ export default function ProfilePage({
     <main
       className="profile-page"
       style={{
-        minHeight: '100vh',
-        padding: 'calc(var(--nav-height) + 2rem) 1.5rem 5rem 1.5rem',
-        backgroundColor: 'var(--bg-base)',
+        minHeight: onBackToOverview ? 'auto' : '100vh',
+        padding: onBackToOverview ? '0 0 4rem 0' : 'calc(var(--nav-height) + 2rem) 1.5rem 5rem 1.5rem',
+        backgroundColor: onBackToOverview ? 'transparent' : 'var(--bg-base)',
         color: 'var(--text-primary)',
         overflowX: 'hidden',
       }}
@@ -235,7 +247,11 @@ export default function ProfilePage({
           }}
         >
           <button
-            onClick={() => onNavigate && onNavigate('dashboard')}
+            onClick={() => {
+              if (onBackToOverview) onBackToOverview();
+              else if (onNavigate) onNavigate('dashboard');
+              else window.location.href = '/dashboard';
+            }}
             style={{
               display: 'inline-flex',
               alignItems: 'center',

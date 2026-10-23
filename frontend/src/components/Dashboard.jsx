@@ -5,11 +5,13 @@ import HistoryPage from './HistoryPage';
 import InterviewDNAView from './InterviewDNAView';
 import ResumeRealityCheckView from './ResumeRealityCheckView';
 import CareerReadinessMapView from './CareerReadinessMapView';
+import ProfilePage from './ProfilePage';
 import AICoachWidget from './AICoachWidget';
 import { useAuth } from '../context/useAuth';
 import { apiGetSessions, apiGetReport } from '../utils/api';
 import {
   Home,
+  User,
   Mic,
   BarChart2,
   Calendar,
@@ -164,6 +166,7 @@ export default function Dashboard({
   const [activeNav, setActiveNav] = useState(() => {
     if (typeof window !== 'undefined') {
       const h = window.location.hash.toLowerCase();
+      if (h.includes('profile')) return 'My Profile';
       if (h.includes('dna')) return 'Interview DNA';
       if (h.includes('reality') || h.includes('check')) return 'Resume Reality Check';
       if (h.includes('readiness') || h.includes('map')) return 'Career Readiness Map';
@@ -218,7 +221,9 @@ export default function Dashboard({
   useEffect(() => {
     const handleHash = () => {
       const h = window.location.hash.toLowerCase();
-      if (h.includes('dna')) {
+      if (h.includes('profile')) {
+        setActiveNav('My Profile');
+      } else if (h.includes('dna')) {
         setActiveNav('Interview DNA');
       } else if (h.includes('reality') || h.includes('check')) {
         setActiveNav('Resume Reality Check');
@@ -472,6 +477,16 @@ export default function Dashboard({
         window.scrollTo({ top: 0, behavior: 'smooth' });
       },
     },
+    {
+      label: 'My Profile',
+      icon: User,
+      id: 'my-profile',
+      action: () => {
+        setActiveNav('My Profile');
+        window.location.hash = '#dashboard/profile';
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      },
+    },
   ];
 
 
@@ -698,7 +713,19 @@ export default function Dashboard({
         </div>
 
         <main style={{ padding: '2.5rem 3rem', maxWidth: '1360px', width: '100%', margin: '0 auto' }} className="dashboard-main-content">
-          {activeNav === 'Interview DNA' ? (
+          {activeNav === 'My Profile' ? (
+            <ProfilePage
+              currentUser={user}
+              onBackToOverview={() => {
+                setActiveNav('Overview');
+                window.location.hash = '#dashboard';
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+              }}
+              onStartInterview={onStartInterview}
+              onViewReport={onViewReport}
+              onNavigateToCompanies={onNavigateToCompanies}
+            />
+          ) : activeNav === 'Interview DNA' ? (
             <InterviewDNAView
               onStartInterview={(role) => {
                 if (onLaunchSession) {

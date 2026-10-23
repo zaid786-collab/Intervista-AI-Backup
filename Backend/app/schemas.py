@@ -82,7 +82,10 @@ class UserProfileUpdate(BaseModel):
     name: Optional[str] = None
     bio: Optional[str] = None
     target_role: Optional[str] = None
-    skills: Optional[str] = None
+    skills: Optional[Union[str, List[str]]] = None
+    avatar: Optional[str] = None
+    picture: Optional[str] = None
+    progress: Optional[int] = None
 
 
 class UserUpdateByAdmin(BaseModel):
