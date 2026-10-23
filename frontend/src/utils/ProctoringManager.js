@@ -391,7 +391,7 @@ export class ProctoringManager {
   async syncViolationWithBackend(violation, currentWarning) {
     let serverData = null;
     try {
-      const candidateBases = ["http://127.0.0.1:8000", "http://localhost:8000", ""];
+      const candidateBases = ["http://127.0.0.1:8001", "http://localhost:8001", "http://127.0.0.1:8000", "http://localhost:8000", ""];
       const token = getToken();
 
       for (const base of candidateBases) {

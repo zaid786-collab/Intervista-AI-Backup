@@ -28,6 +28,7 @@ import {
 } from 'lucide-react';
 import { apiStartInterview, apiSendMessage, apiEndInterview, apiSaveReport } from '../utils/api';
 import { getCurrentUser } from '../utils/auth';
+import { ProctoringManager } from '../utils/ProctoringManager';
 import ThreeInterviewScene from './ThreeInterviewScene';
 import DeskCodingLaptop from './DeskCodingLaptop';
 import CandidatePOVHands from './CandidatePOVHands';
@@ -83,6 +84,12 @@ export default function ImmersiveInterviewRoom({
   const [isInterviewerSpeaking, setIsInterviewerSpeaking] = useState(false);
   const [isCandidateSpeaking, setIsCandidateSpeaking] = useState(false);
 
+  // Domain Questions & Proctoring State
+  const [interviewQuestions, setInterviewQuestions] = useState([]);
+  const [currentQuestionObj, setCurrentQuestionObj] = useState(null);
+  const [warningCount, setWarningCount] = useState(0);
+  const [activeWarning, setActiveWarning] = useState(null);
+
   // ─── Hardware & Device Controls ─────────────────────────────────────────────
   const [isMicMuted, setIsMicMuted] = useState(!config?.isMicActive);
   const [isCameraOff, setIsCameraOff] = useState(!config?.isCameraActive);
@@ -121,6 +128,8 @@ export default function ImmersiveInterviewRoom({
   }, [isMicMuted]);
 
   const trackerRef = useRef(null);
+  const textareaRef = useRef(null);
+  const proctorRef = useRef(null);
 
   const [telemetryHud, setTelemetryHud] = useState({
     posture: 'Upright & Centered',
@@ -413,6 +422,49 @@ export default function ImmersiveInterviewRoom({
     return () => clearInterval(interval);
   }, [sessionPhase]);
 
+  // Proctoring lifecycle & anti-cheating warning system
+  useEffect(() => {
+    if (sessionPhase !== 'active') return;
+
+    const proctor = new ProctoringManager({
+      sessionId: sessionId || `intv_${Date.now()}`,
+      company: targetCompany,
+      role: targetRole,
+      config: {
+        detectTabSwitch: true,
+        detectWindowBlur: false,
+        incidentDebounceMs: 2500,
+      },
+      onWarning: (violation, currentCount, maxAllowed) => {
+        setWarningCount(currentCount);
+        setActiveWarning({
+          type: violation.type,
+          message: violation.message,
+          count: currentCount,
+          max: maxAllowed,
+        });
+        setTimeout(() => {
+          setActiveWarning(prev => (prev?.count === currentCount ? null : prev));
+        }, 6000);
+      },
+      onTerminate: (reason) => {
+        console.warn('[PROCTORING] Terminated by proctoring engine:', reason);
+        alert(`Interview Session Terminated: Maximum proctoring violations reached (${reason}). Finalizing evaluation...`);
+        handleEndInterview();
+      },
+    });
+
+    proctor.start();
+    proctorRef.current = proctor;
+
+    return () => {
+      if (proctorRef.current) {
+        proctorRef.current.stop();
+        proctorRef.current = null;
+      }
+    };
+  }, [sessionPhase, sessionId]);
+
   // Handle Mute/Unmute toggle
   const toggleMicrophone = () => {
     const newMuted = !isMicMuted;
@@ -501,11 +553,19 @@ export default function ImmersiveInterviewRoom({
       setGeminiInteractionId(response.geminiInteractionId);
       setIsDemoMode(!!response.isDemoMode);
 
-      const openingMsg = response.message;
+      if (response.questions && Array.isArray(response.questions)) {
+        setInterviewQuestions(response.questions);
+        if (response.questions.length > 0) {
+          setCurrentQuestionObj(response.questions[0]);
+          setTotalQuestions(response.questions.length);
+        }
+      }
+
+      const openingMsg = response.message || response.welcomeMessage || 'Welcome to your interview!';
       setMessages([{ role: 'interviewer', text: openingMsg, timestamp: Date.now() }]);
 
       // Extract question part for the floating question card
-      const questionClean = openingMsg
+      const questionClean = (openingMsg || '')
         .replace(/Hello!.*?\n\n/s, '')
         .replace(/^To begin:\s*/i, '')
         .trim();
@@ -564,10 +624,18 @@ export default function ImmersiveInterviewRoom({
       setGeminiInteractionId(response.geminiInteractionId);
       setIsDemoMode(!!response.isDemoMode);
 
-      const openingMsg = response.message;
+      if (response.questions && Array.isArray(response.questions)) {
+        setInterviewQuestions(response.questions);
+        if (response.questions.length > 0) {
+          setCurrentQuestionObj(response.questions[0]);
+          setTotalQuestions(response.questions.length);
+        }
+      }
+
+      const openingMsg = response.message || response.welcomeMessage || 'Welcome to your interview!';
       setMessages([{ role: 'interviewer', text: openingMsg, timestamp: Date.now() }]);
 
-      const questionClean = openingMsg
+      const questionClean = (openingMsg || '')
         .replace(/Hello!.*?\n\n/s, '')
         .replace(/^To begin:\s*/i, '')
         .trim();
@@ -634,14 +702,14 @@ export default function ImmersiveInterviewRoom({
         questionIndex,
       });
 
-      const reply = res.message;
+      const reply = res.message || res.reply || res.nextQuestion || 'Thank you for your response.';
 
       setMessages([
         ...updatedMessages,
         { role: 'interviewer', text: reply, timestamp: Date.now() },
       ]);
 
-      const replyClean = reply
+      const replyClean = (reply || '')
         .replace(/^Thank you.*?\.\s*(Now,\s*let's explore this:\s*)?/i, '')
         .replace(/^Understood.*?\.\s*(Now,\s*let's explore this:\s*)?/i, '')
         .replace(/^That's a very clear.*?\.\s*(Now,\s*let's explore this:\s*)?/i, '')
@@ -650,6 +718,12 @@ export default function ImmersiveInterviewRoom({
         .trim();
       setCurrentQuestionText(replyClean || reply);
       setQuestionIndex(prev => prev + 1);
+
+      if (res.nextQuestionData) {
+        setCurrentQuestionObj(res.nextQuestionData);
+      } else if (interviewQuestions && interviewQuestions[questionIndex]) {
+        setCurrentQuestionObj(interviewQuestions[questionIndex]);
+      }
 
       // Speak out response
       speakText(reply);
@@ -946,6 +1020,26 @@ export default function ImmersiveInterviewRoom({
               Screen Sharing Active
             </span>
           )}
+
+          {/* Proctoring Status Badge */}
+          <span
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '0.35rem',
+              backgroundColor: warningCount > 0 ? 'rgba(239, 68, 68, 0.15)' : 'rgba(56, 189, 248, 0.12)',
+              border: warningCount > 0 ? '1px solid rgba(239, 68, 68, 0.4)' : '1px solid rgba(56, 189, 248, 0.28)',
+              padding: '0.35rem 0.75rem',
+              borderRadius: '9999px',
+              color: warningCount > 0 ? '#F87171' : '#38BDF8',
+              fontSize: '0.72rem',
+              fontWeight: 600,
+              backdropFilter: 'blur(12px)',
+            }}
+          >
+            <ShieldCheck size={12} />
+            Proctoring Active {warningCount > 0 ? `(${warningCount}/5 Warnings)` : ''}
+          </span>
         </div>
 
         {/* Right: Interviewer Badge & Quick Exit Action */}
@@ -1042,6 +1136,58 @@ export default function ImmersiveInterviewRoom({
           </button>
         </div>
       </header>
+
+      {/* Proctoring Warning Notification Banner */}
+      {activeWarning && (
+        <div
+          id="proctoring-warning-toast"
+          style={{
+            position: 'fixed',
+            top: '5.2rem',
+            left: '50%',
+            transform: 'translateX(-50%)',
+            zIndex: 99999,
+            display: 'flex',
+            alignItems: 'center',
+            gap: '0.85rem',
+            backgroundColor: 'rgba(24, 12, 12, 0.95)',
+            border: '1px solid #EF4444',
+            boxShadow: '0 12px 36px rgba(239, 68, 68, 0.35)',
+            backdropFilter: 'blur(16px)',
+            padding: '0.85rem 1.4rem',
+            borderRadius: '14px',
+            color: '#FFFFFF',
+            maxWidth: '90vw',
+            animation: 'fadeIn 0.3s ease-out',
+          }}
+        >
+          <AlertCircle size={22} color="#EF4444" style={{ flexShrink: 0 }} />
+          <div>
+            <div style={{ fontWeight: 700, fontSize: '0.9rem', color: '#FCA5A5' }}>
+              Proctoring Warning ({activeWarning.count}/5)
+            </div>
+            <div style={{ fontSize: '0.8rem', color: '#E2E8F0', marginTop: '2px' }}>
+              {activeWarning.message || 'Window blur or tab switch detected. Please remain focused on the interview room.'}
+            </div>
+          </div>
+          <button
+            onClick={() => setActiveWarning(null)}
+            style={{
+              marginLeft: '0.8rem',
+              backgroundColor: 'rgba(239, 68, 68, 0.25)',
+              border: '1px solid #EF4444',
+              color: '#FFFFFF',
+              padding: '0.3rem 0.75rem',
+              borderRadius: '8px',
+              fontSize: '0.75rem',
+              fontWeight: 600,
+              cursor: 'pointer',
+            }}
+          >
+            Acknowledge
+          </button>
+        </div>
+      )}
 
       {/* =========================================================================
           LAYER 3: TOP-LEFT FLOATING SPEECH BUBBLE (MATCHING REFERENCE IMAGE)
@@ -1424,6 +1570,7 @@ export default function ImmersiveInterviewRoom({
         timer={formatTimer(secondsElapsed)}
         isExpanded={laptopExpanded}
         onToggleExpand={() => setLaptopExpanded(!laptopExpanded)}
+        currentQuestion={currentQuestionObj}
       />
 
       {/* =========================================================================

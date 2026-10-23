@@ -2,7 +2,7 @@
 // Supports automatic fallback across 127.0.0.1, localhost, and Vite proxy.
 
 export const PRODUCTION_API_URL = "https://intervista-ai.onrender.com";
-export const LOCAL_API_URL = "http://127.0.0.1:8000";
+export const LOCAL_API_URL = "http://127.0.0.1:8001";
 
 export function getApiBaseUrl() {
   if (typeof import.meta !== "undefined" && import.meta.env && import.meta.env.VITE_API_URL) {

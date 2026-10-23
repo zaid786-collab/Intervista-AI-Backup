@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import List, Optional
+from typing import List, Optional, Union, Any
 from pydantic import BaseModel, EmailStr, Field
 
 
@@ -335,47 +335,99 @@ class StartInterviewResponse(BaseModel):
     interview_type: Optional[str] = "Technical Interview"
     domain: Optional[str] = "General Software Engineering"
     questions: List[InterviewQuestion]
+    welcome_message: Optional[str] = None
+    message: Optional[str] = None
+    sessionId: Optional[str] = None
+    total_questions: Optional[int] = 0
+    current_question: Optional[InterviewQuestion] = None
 
 
 class CandidateAnswer(BaseModel):
-    question_id: int
-    question: str
+    question_id: Optional[Union[int, str]] = 1
+    question: Optional[str] = ""
+    question_text: Optional[str] = None
+    candidate_answer: Optional[str] = None
     answer: Optional[str] = ""
     status: Optional[str] = "SUBMITTED"  # SUBMITTED, SKIPPED, NO_ANSWER
     test_results: Optional[dict] = None
+    score: Optional[int] = None
+    technical_depth: Optional[int] = None
+    communication: Optional[int] = None
 
 
 class SaveAnswerRequest(BaseModel):
     session_id: Optional[str] = None
-    question_id: int
-    question: str
+    question_id: Optional[Union[int, str]] = 1
+    question: Optional[str] = ""
     candidate_answer: Optional[str] = ""
     status: Optional[str] = "SUBMITTED"  # SUBMITTED, SKIPPED, NO_ANSWER
+    latency_ms: Optional[int] = None
+    duration_ms: Optional[int] = None
 
 
 class SaveAnswerResponse(BaseModel):
     success: bool
-    question_id: int
+    question_id: Optional[Union[int, str]] = 1
     status: str
     message: str
+    next_question: Optional[str] = None
+    nextQuestion: Optional[str] = None
+    ai_feedback: Optional[str] = None
+    aiFeedback: Optional[str] = None
+    is_follow_up: Optional[bool] = False
+    completed: Optional[bool] = False
+
+
+class InterviewTurnRequest(BaseModel):
+    session_id: str
+    question_id: Optional[Union[int, str]] = 1
+    question_index: Optional[int] = None
+    candidate_answer: Optional[str] = ""
+    content: Optional[str] = None
+    code_submission: Optional[str] = None
+    language: Optional[str] = None
+    test_results: Optional[dict] = None
+    latency_ms: Optional[int] = None
+    duration_ms: Optional[int] = None
+    request_hint: Optional[bool] = False
+    skip_question: Optional[bool] = False
+
+
+class InterviewTurnResponse(BaseModel):
+    success: bool
+    session_id: str
+    question_id: Optional[Union[int, str]] = 1
+    message: str
+    reply: Optional[str] = None
+    interviewer_reaction: Optional[str] = None
+    next_question: Optional[str] = None
+    next_question_id: Optional[int] = None
+    next_question_data: Optional[InterviewQuestion] = None
+    is_follow_up: bool = False
+    is_hint: bool = False
+    completed: bool = False
+    feedback_summary: Optional[str] = None
+    technical_score: Optional[int] = 85
+    communication_score: Optional[int] = 85
 
 
 class SubmitInterviewRequest(BaseModel):
     session_id: Optional[str] = None
-    company: str
-    role: str
-    difficulty: str
-    duration_minutes: int = 45
+    company: Optional[str] = "Intervista AI"
+    role: Optional[str] = "Software Engineer"
+    difficulty: Optional[str] = "Medium"
+    duration_minutes: Optional[int] = 45
     interview_type: Optional[str] = "Technical Interview"
     domain: Optional[str] = "General Software Engineering"
-    answers: List[CandidateAnswer]
+    answers: Optional[List[CandidateAnswer]] = []
     warning_count: Optional[int] = 0
     proctoring_data: Optional[dict] = None
     vision_data: Optional[dict] = None
+    metrics: Optional[dict] = None
 
 
 class QuestionFeedback(BaseModel):
-    question_id: int
+    question_id: Optional[Union[int, str]] = 1
     question: str
     candidate_answer: Optional[str] = ""
     status: Optional[str] = "CORRECT"  # CORRECT, PARTIAL, INCORRECT, SKIPPED, IRRELEVANT, NO_ANSWER, EMPTY
@@ -438,7 +490,8 @@ class RecordViolationRequest(BaseModel):
     difficulty: Optional[str] = "Medium"
     duration_minutes: Optional[int] = 45
     violation_type: str
-    message: str
+    message: Optional[str] = "Proctoring violation detected"
+    details: Optional[str] = None
     timestamp: Optional[str] = None
     severity: Optional[str] = "HIGH"
 

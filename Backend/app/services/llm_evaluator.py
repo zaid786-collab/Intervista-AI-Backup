@@ -1451,3 +1451,151 @@ def evaluate_interview_submission(
             return result
 
     return evaluate_with_local_rubric(company, role, difficulty, answers)
+
+
+def generate_interviewer_turn(
+    question_dict: Dict[str, Any],
+    candidate_answer: str,
+    turn_count_on_question: int = 1,
+    code_submission: Optional[str] = None,
+    company: str = "Google",
+    role: str = "Software Engineer",
+    interviewer_name: str = "Mr. J. Chen",
+    next_question_dict: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """
+    Generates real-time conversational commentary, probing follow-ups, and smooth transitions
+    during live interview sessions.
+    """
+    q_text = question_dict.get("question", "")
+    q_id = question_dict.get("id", question_dict.get("question_id", 1))
+    q_cat = question_dict.get("category", "")
+    q_domain = question_dict.get("domain", "")
+    q_exp = question_dict.get("expected_key_points", [])
+    
+    cleaned_ans = str(candidate_answer or "").strip()
+    is_skipped = is_skipped_answer(cleaned_ans) or not cleaned_ans
+
+    # 1. Skipped / Pass handling
+    if is_skipped:
+        if next_question_dict:
+            next_q = next_question_dict.get("question", "")
+            return {
+                "success": True,
+                "question_id": q_id,
+                "status": "SKIPPED",
+                "score": 0,
+                "interviewer_reaction": "Understood, let's keep moving.",
+                "message": f"Understood, no problem at all. Let's move ahead to the next topic:\n\n{next_q}",
+                "next_question": next_q,
+                "next_question_id": next_question_dict.get("id"),
+                "is_follow_up": False,
+                "is_hint": False,
+                "completed": False,
+                "feedback_summary": "Question was skipped by candidate.",
+            }
+        else:
+            return {
+                "success": True,
+                "question_id": q_id,
+                "status": "SKIPPED",
+                "score": 0,
+                "interviewer_reaction": "Understood.",
+                "message": "Understood. That concludes all our interview questions for today! I am compiling your final assessment now.",
+                "next_question": None,
+                "next_question_id": None,
+                "is_follow_up": False,
+                "is_hint": False,
+                "completed": True,
+                "feedback_summary": "Question was skipped by candidate.",
+            }
+
+    # 2. Evaluate current answer
+    eval_res = evaluate_single_question(
+        question_id=q_id,
+        question=q_text,
+        answer=cleaned_ans + (f"\n[Code Implementation]:\n{code_submission}" if code_submission else ""),
+        category=q_cat,
+        company=company,
+        role=role,
+        domain=q_domain,
+        expected_key_points=q_exp,
+    )
+
+    score = eval_res.get("score", 75)
+    identified = eval_res.get("identified_keywords", [])
+    missing = eval_res.get("missing_concepts", [])
+    status = eval_res.get("status", "CORRECT")
+
+    # 3. Dynamic probing follow-up (if partial score and first turn on this question)
+    if turn_count_on_question == 1 and 25 <= score < 75 and missing:
+        target_point = missing[0]
+        # Clean target point
+        target_clean = re.sub(r'^[0-9\.\-\s]+', '', target_point).strip()
+        follow_up = f"You touched on the initial mechanics. How would you specifically address {target_clean} or handle failure modes under heavy load?"
+        speech = f"Good start on the initial approach. Let's dig one layer deeper: {follow_up}"
+
+        return {
+            "success": True,
+            "question_id": q_id,
+            "status": status,
+            "score": score,
+            "interviewer_reaction": "Good start on the initial approach.",
+            "message": speech,
+            "next_question": follow_up,
+            "next_question_id": q_id,
+            "is_follow_up": True,
+            "is_hint": False,
+            "completed": False,
+            "feedback_summary": eval_res.get("feedback", "Partial answer provided; follow-up asked."),
+            "technical_score": eval_res.get("technical_accuracy", 75),
+            "communication_score": eval_res.get("communication_clarity", 80),
+        }
+
+    # 4. Advance to Next Question or Conclude
+    if score >= 75:
+        reaction = "Excellent explanation! You clearly articulated the core principles and trade-offs."
+        if identified:
+            reaction = f"Great insights on {identified[0]}. You clearly articulated the core design and trade-offs."
+    elif score >= 50:
+        reaction = "Solid breakdown. You covered the foundational requirements."
+    else:
+        reaction = "I see your line of reasoning. In a high-scale production setting, edge-case resilience is key."
+
+    if next_question_dict:
+        next_q = next_question_dict.get("question", "")
+        speech = f"{reaction}\n\nLet's move on to our next question:\n{next_q}"
+        return {
+            "success": True,
+            "question_id": q_id,
+            "status": status,
+            "score": score,
+            "interviewer_reaction": reaction,
+            "message": speech,
+            "next_question": next_q,
+            "next_question_id": next_question_dict.get("id"),
+            "is_follow_up": False,
+            "is_hint": False,
+            "completed": False,
+            "feedback_summary": eval_res.get("feedback", reaction),
+            "technical_score": eval_res.get("technical_accuracy", 80),
+            "communication_score": eval_res.get("communication_clarity", 80),
+        }
+    else:
+        speech = f"{reaction}\n\nThank you for sharing your technical thought process! That concludes our interview questions today. I am compiling your granular assessment report now."
+        return {
+            "success": True,
+            "question_id": q_id,
+            "status": status,
+            "score": score,
+            "interviewer_reaction": reaction,
+            "message": speech,
+            "next_question": None,
+            "next_question_id": None,
+            "is_follow_up": False,
+            "is_hint": False,
+            "completed": True,
+            "feedback_summary": eval_res.get("feedback", reaction),
+            "technical_score": eval_res.get("technical_accuracy", 80),
+            "communication_score": eval_res.get("communication_clarity", 80),
+        }
