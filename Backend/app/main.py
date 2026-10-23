@@ -18,6 +18,7 @@ from app.routers import (
     leaderboard_jobs,
     payments,
     feedback,
+    coach,
 )
 from app.seed import seed_db
 
@@ -146,6 +147,7 @@ app.include_router(interviews.router)
 app.include_router(leaderboard_jobs.router)
 app.include_router(payments.router)
 app.include_router(feedback.router)
+app.include_router(coach.router)
 
 
 @app.get("/")

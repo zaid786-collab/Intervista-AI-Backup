@@ -2,6 +2,10 @@ import React, { useState, useMemo, useEffect } from 'react';
 import MockInterviewSetupPage from './MockInterviewSetupPage';
 import CareerPrepDSAPage from './CareerPrepDSAPage';
 import HistoryPage from './HistoryPage';
+import InterviewDNAView from './InterviewDNAView';
+import ResumeRealityCheckView from './ResumeRealityCheckView';
+import CareerReadinessMapView from './CareerReadinessMapView';
+import AICoachWidget from './AICoachWidget';
 import { useAuth } from '../context/useAuth';
 import { apiGetSessions, apiGetReport } from '../utils/api';
 import {
@@ -11,6 +15,9 @@ import {
   Calendar,
   Briefcase,
   Settings,
+  Dna,
+  Compass,
+
   ChevronLeft,
   ChevronRight,
   Plus,
@@ -157,6 +164,9 @@ export default function Dashboard({
   const [activeNav, setActiveNav] = useState(() => {
     if (typeof window !== 'undefined') {
       const h = window.location.hash.toLowerCase();
+      if (h.includes('dna')) return 'Interview DNA';
+      if (h.includes('reality') || h.includes('check')) return 'Resume Reality Check';
+      if (h.includes('readiness') || h.includes('map')) return 'Career Readiness Map';
       if (h.includes('history')) return 'History';
       if (h.includes('mock')) return 'Mock Interview';
       if (h.includes('prep') || h.includes('career')) return 'Career Prep';
@@ -208,7 +218,13 @@ export default function Dashboard({
   useEffect(() => {
     const handleHash = () => {
       const h = window.location.hash.toLowerCase();
-      if (h.includes('history')) {
+      if (h.includes('dna')) {
+        setActiveNav('Interview DNA');
+      } else if (h.includes('reality') || h.includes('check')) {
+        setActiveNav('Resume Reality Check');
+      } else if (h.includes('readiness') || h.includes('map')) {
+        setActiveNav('Career Readiness Map');
+      } else if (h.includes('history')) {
         setActiveNav('History');
       } else if (h.includes('mock')) {
         setActiveNav('Mock Interview');
@@ -397,6 +413,36 @@ export default function Dashboard({
       },
     },
     {
+      label: 'Interview DNA',
+      icon: Dna,
+      id: 'interview-dna',
+      action: () => {
+        setActiveNav('Interview DNA');
+        window.location.hash = '#dashboard/dna';
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      },
+    },
+    {
+      label: 'Resume Reality Check',
+      icon: FileText,
+      id: 'resume-reality-check',
+      action: () => {
+        setActiveNav('Resume Reality Check');
+        window.location.hash = '#dashboard/reality-check';
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      },
+    },
+    {
+      label: 'Career Readiness Map',
+      icon: Compass,
+      id: 'career-readiness-map',
+      action: () => {
+        setActiveNav('Career Readiness Map');
+        window.location.hash = '#dashboard/readiness-map';
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      },
+    },
+    {
       label: 'Mock Interview',
       icon: Mic,
       id: 'mock-interview',
@@ -427,6 +473,7 @@ export default function Dashboard({
       },
     },
   ];
+
 
   return (
     <div
@@ -651,7 +698,55 @@ export default function Dashboard({
         </div>
 
         <main style={{ padding: '2.5rem 3rem', maxWidth: '1360px', width: '100%', margin: '0 auto' }} className="dashboard-main-content">
-          {activeNav === 'Mock Interview' ? (
+          {activeNav === 'Interview DNA' ? (
+            <InterviewDNAView
+              onStartInterview={(role) => {
+                if (onLaunchSession) {
+                  onLaunchSession({
+                    role: role || 'Software Engineer',
+                    company: 'Google',
+                    level: 'Mid Level',
+                    interviewType: 'Interview DNA Diagnostic',
+                    duration: '30 min',
+                  });
+                } else if (onStartInterview) {
+                  onStartInterview(role || 'Software Engineer');
+                }
+              }}
+            />
+          ) : activeNav === 'Resume Reality Check' ? (
+            <ResumeRealityCheckView
+              onStartInterview={(role) => {
+                if (onLaunchSession) {
+                  onLaunchSession({
+                    role: role || 'Software Engineer',
+                    company: 'Tech Company',
+                    level: 'Mid Level',
+                    interviewType: 'Resume-to-Interview Reality Check',
+                    duration: '30 min',
+                  });
+                } else if (onStartInterview) {
+                  onStartInterview(role || 'Software Engineer');
+                }
+              }}
+            />
+          ) : activeNav === 'Career Readiness Map' ? (
+            <CareerReadinessMapView
+              onStartInterview={(role) => {
+                if (onLaunchSession) {
+                  onLaunchSession({
+                    role: role || 'Software Development Engineer',
+                    company: 'Target Company',
+                    level: 'Mid Level',
+                    interviewType: 'Career Readiness Verification',
+                    duration: '30 min',
+                  });
+                } else if (onStartInterview) {
+                  onStartInterview(role || 'Software Development Engineer');
+                }
+              }}
+            />
+          ) : activeNav === 'Mock Interview' ? (
             <MockInterviewSetupPage
               onLaunchSession={(config) => {
                 if (onLaunchSession) onLaunchSession(config);
@@ -688,6 +783,7 @@ export default function Dashboard({
             />
           ) : (
             <>
+
               {/* =========================================================================
                   B. WELCOME HEADER & MOTIVATIONAL CARD
                   ========================================================================= */}
@@ -754,9 +850,20 @@ export default function Dashboard({
                 </div>
               </div>
 
+              {/* Feature 1: AI Coach (Weakness Memory & Trajectory Tracker) */}
+              <div style={{ marginBottom: '2.5rem' }}>
+                <AICoachWidget
+                  onStartInterview={(role) => {
+                    setActiveNav('Mock Interview');
+                    window.scrollTo({ top: 0, behavior: 'smooth' });
+                  }}
+                />
+              </div>
+
           {/* =========================================================================
               C. YEARLY PRACTICE ACTIVITY HEATMAP
               ========================================================================= */}
+
           <section
             style={{
               backgroundColor: '#111111',

@@ -276,3 +276,47 @@ class LoginEvent(Base):
     created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
 
 
+class CandidateWeakness(Base):
+    __tablename__ = "candidate_weaknesses"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, index=True, nullable=False)
+    category = Column(String(50), nullable=False)  # technical, communication, problem_solving, answer_structure
+    weakness_key = Column(String(100), index=True, nullable=False)
+    title = Column(String(200), nullable=False)
+    description = Column(Text, nullable=False)
+    recurrence_count = Column(Integer, default=1, nullable=False)
+    last_detected_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+    status = Column(String(30), default="active", nullable=False)  # active, practicing, resolved
+    suggested_exercise = Column(String(255), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
+class CareerReadinessRecord(Base):
+    __tablename__ = "career_readiness_records"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, index=True, nullable=True)
+    target_role = Column(String(120), nullable=False)
+    company = Column(String(120), nullable=True)
+    readiness_score = Column(Integer, nullable=False)
+    job_description_snippet = Column(Text, nullable=True)
+    matched_skills = Column(Text, nullable=True)
+    missing_skills = Column(Text, nullable=True)
+    roadmap_data = Column(Text, nullable=True)  # JSON string
+    created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
+class ResumeRealityCheckRecord(Base):
+    __tablename__ = "resume_reality_checks"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, index=True, nullable=True)
+    target_role = Column(String(120), nullable=False)
+    extracted_projects = Column(Text, nullable=True)  # JSON string
+    questions_generated = Column(Text, nullable=True)  # JSON string
+    incomplete_areas = Column(Text, nullable=True)  # JSON string
+    created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
+

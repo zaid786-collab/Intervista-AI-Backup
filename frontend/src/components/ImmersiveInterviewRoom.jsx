@@ -24,8 +24,10 @@ import {
   HelpCircle,
   ShieldCheck,
   Maximize2,
-  Minimize2
+  Minimize2,
+  Zap,
 } from 'lucide-react';
+
 import { apiStartInterview, apiSendMessage, apiEndInterview, apiSaveReport } from '../utils/api';
 import { getCurrentUser } from '../utils/auth';
 import { ProctoringManager } from '../utils/ProctoringManager';
@@ -88,7 +90,13 @@ export default function ImmersiveInterviewRoom({
   const [interviewQuestions, setInterviewQuestions] = useState([]);
   const [currentQuestionObj, setCurrentQuestionObj] = useState(null);
   const [warningCount, setWarningCount] = useState(0);
-  const [activeWarning, setActiveWarning] = useState(null);
+  // Adaptive Difficulty Engine Live HUD State
+  const [adaptiveState, setAdaptiveState] = useState({
+    level: 2,
+    levelName: 'Level 2: Practical Scenario',
+    note: 'Evaluating baseline architectural and coding competence.',
+    action: 'maintain',
+  });
 
   // ─── Hardware & Device Controls ─────────────────────────────────────────────
   const [isMicMuted, setIsMicMuted] = useState(!config?.isMicActive);
@@ -721,6 +729,15 @@ export default function ImmersiveInterviewRoom({
       setCurrentQuestionText(replyClean || reply);
       setQuestionIndex(prev => prev + 1);
 
+      if (res.adaptiveLevel) {
+        setAdaptiveState({
+          level: res.adaptiveLevel,
+          levelName: res.adaptiveLevelName || `Level ${res.adaptiveLevel}`,
+          note: res.adaptiveNote || 'Adaptive engine adjusted to demonstrated answer depth.',
+          action: res.adaptiveAction || 'maintain',
+        });
+      }
+
       if (res.nextQuestionData) {
         setCurrentQuestionObj(res.nextQuestionData);
       } else if (interviewQuestions && interviewQuestions[questionIndex]) {
@@ -1042,7 +1059,55 @@ export default function ImmersiveInterviewRoom({
             <ShieldCheck size={12} />
             Proctoring Active {warningCount > 0 ? `(${warningCount}/5 Warnings)` : ''}
           </span>
+
+          {/* Adaptive Difficulty Engine Live HUD */}
+          <div
+            title={`Adaptive Engine: ${adaptiveState.note}`}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.45rem',
+              backgroundColor:
+                adaptiveState.level === 3
+                  ? 'rgba(217, 183, 122, 0.18)'
+                  : adaptiveState.level === 1
+                  ? 'rgba(56, 189, 248, 0.15)'
+                  : 'rgba(16, 185, 129, 0.15)',
+              border:
+                adaptiveState.level === 3
+                  ? '1px solid rgba(217, 183, 122, 0.5)'
+                  : adaptiveState.level === 1
+                  ? '1px solid rgba(56, 189, 248, 0.4)'
+                  : '1px solid rgba(16, 185, 129, 0.4)',
+              padding: '0.35rem 0.85rem',
+              borderRadius: '9999px',
+              color:
+                adaptiveState.level === 3
+                  ? 'var(--accent-gold)'
+                  : adaptiveState.level === 1
+                  ? '#38BDF8'
+                  : '#10B981',
+              fontSize: '0.72rem',
+              fontWeight: 700,
+              backdropFilter: 'blur(12px)',
+              cursor: 'help',
+            }}
+          >
+            <Zap size={12} fill="currentColor" />
+            <span>Adaptive Engine: {adaptiveState.levelName}</span>
+            {adaptiveState.action === 'escalate' && (
+              <span style={{ fontSize: '0.62rem', background: 'rgba(217, 183, 122, 0.3)', padding: '1px 5px', borderRadius: '4px' }}>
+                ▲ Escalated
+              </span>
+            )}
+            {adaptiveState.action === 'scaffold' && (
+              <span style={{ fontSize: '0.62rem', background: 'rgba(56, 189, 248, 0.3)', padding: '1px 5px', borderRadius: '4px' }}>
+                ▼ Scaffolding
+              </span>
+            )}
+          </div>
         </div>
+
 
         {/* Right: Interviewer Badge & Quick Exit Action */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.85rem' }}>

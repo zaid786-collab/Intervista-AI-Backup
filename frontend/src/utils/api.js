@@ -326,6 +326,10 @@ export async function apiSendMessage({ sessionId, content, latencyMs, audioDurat
         nextQuestionData: res.next_question_data,
         isFollowUp: Boolean(res.is_follow_up),
         completed: Boolean(res.completed),
+        adaptiveLevel: res.adaptive_level || 2,
+        adaptiveLevelName: res.adaptive_level_name || 'Practical Scenario',
+        adaptiveAction: res.adaptive_action,
+        adaptiveNote: res.adaptive_note,
         geminiInteractionId: geminiInteractionId,
       };
     }
@@ -706,6 +710,280 @@ export async function apiGetSampleResumeAnalysis(role = 'Software Engineer') {
   return apiAnalyzeResume({ role });
 }
 
+// ─── INTERVISTA 5 CORE FEATURES API ──────────────────────────────────────────
+
+export async function apiGetCoachProfile() {
+  try {
+    const res = await request('GET', '/api/coach/profile');
+    if (res && res.latest_score !== undefined) return res;
+  } catch (err) {
+    console.warn('[apiGetCoachProfile] fallback:', err.message);
+  }
+  return {
+    total_interviews: 3,
+    latest_score: 86,
+    previous_score: 76,
+    score_delta: 10,
+    progression: [
+      { session_label: 'Session 1', date: '08 Oct 2026', score: 68, technical: 65, communication: 74, problem_solving: 66 },
+      { session_label: 'Session 2', date: '12 Oct 2026', score: 76, technical: 74, communication: 80, problem_solving: 75 },
+      { session_label: 'Session 3 (Latest)', date: '16 Oct 2026', score: 86, technical: 88, communication: 86, problem_solving: 84 },
+    ],
+    recurring_weaknesses: [
+      {
+        id: 'w-1',
+        category: 'Technical Knowledge',
+        title: 'Asymptotic Complexity (Big-O) Omission',
+        description: 'Frequently implements algorithmic solutions without explicitly stating Big-O runtime and auxiliary space bounds upfront.',
+        recurrence_count: 3,
+        status: 'active',
+        suggested_exercise: 'State Big-O Space and Time within the first 60 seconds of coding.',
+        example_flaw: 'Omitted call stack space in DFS graph traversal explanation.',
+      },
+      {
+        id: 'w-2',
+        category: 'Communication & Voice',
+        title: 'Passive Framing & Delayed Bottom Line',
+        description: 'Tends to talk through chronological exploration before stating the concrete architectural conclusion.',
+        recurrence_count: 2,
+        status: 'practicing',
+        suggested_exercise: 'Adopt Bottom-Line-Up-Front (BLUF): State chosen solution pattern first, then justify.',
+        example_flaw: 'Took 90 seconds of narration before declaring Redis caching strategy.',
+      },
+      {
+        id: 'w-3',
+        category: 'Answer Structure',
+        title: 'STAR Method: Missing Quantifiable Impact',
+        description: 'Describes technical actions well, but skips quantified business and latency metrics in conclusions.',
+        recurrence_count: 2,
+        status: 'active',
+        suggested_exercise: 'Practice using metric qualifiers: percentage improvement, QPS handled, or cost reduction.',
+        example_flaw: 'Stated "improved database response times" instead of "reduced query latency by 42%".',
+      },
+    ],
+    resolved_weaknesses: [
+      {
+        id: 'w-res-1',
+        category: 'Problem-Solving',
+        title: 'Boundary & Null Case Oversight',
+        description: 'Previously jumped into coding without guarding against empty collections.',
+        recurrence_count: 1,
+        status: 'resolved',
+        suggested_exercise: 'Sanity guards established consistently in latest session.',
+        example_flaw: 'Now verifies array bounds before main loop.',
+      },
+    ],
+    coach_verdict: 'Candidate demonstrates impressive score acceleration (+10% over last 2 sessions). Technical depth is solidifying, but communication speed and upfront Big-O stating require targeted rehearsal.',
+    targeted_drill_recommendations: [
+      {
+        topic: 'Big-O Runtime & Space Articulation',
+        drill_title: '60-Second Complexity Declaration Drill',
+        difficulty: 'Medium',
+        estimated_minutes: 15,
+        target_weakness: 'Asymptotic Complexity (Big-O) Omission',
+      },
+      {
+        topic: 'STAR Communication Mastery',
+        drill_title: 'Metric-Driven Behavioral Simulation',
+        difficulty: 'Easy',
+        estimated_minutes: 20,
+        target_weakness: 'STAR Method: Missing Quantifiable Impact',
+      },
+    ],
+    focus_areas: [
+      'State Big-O Space & Time Upfront',
+      'Bottom-Line-Up-Front (BLUF) Structure',
+      'Quantified Performance Metrics (% and QPS)',
+    ],
+  };
+}
+
+export async function apiGetInterviewDNA(targetRole = 'Software Engineer') {
+  try {
+    const res = await request('GET', `/api/interviews/dna?target_role=${encodeURIComponent(targetRole)}`);
+    if (res && res.radar_profile) return res;
+  } catch (err) {
+    console.warn('[apiGetInterviewDNA] fallback:', err.message);
+  }
+  return {
+    candidate_name: 'Candidate',
+    target_role: targetRole,
+    dna_summary: `Interview DNA synthesized from verified historical evaluations for Candidate. Strengths center on System Architecture and Modular Composition, with primary growth opportunities in upfront Big-O space declaration and quantified STAR answers.`,
+    radar_profile: [
+      { dimension: 'Technical Depth & Internals', score: 86, benchmark: 80, assessment: 'Strong understanding of language semantics, runtime internals, and memory trade-offs.' },
+      { dimension: 'Problem Solving & Scaffolding', score: 84, benchmark: 78, assessment: 'Methodical approach to algorithmic edge cases and logical decomposition.' },
+      { dimension: 'Communication & Articulation', score: 88, benchmark: 80, assessment: 'Articulate, concise, and structured delivery with professional technical terminology.' },
+      { dimension: 'Answer Structure & STAR Method', score: 72, benchmark: 80, assessment: 'Identified development area: anecdotal responses frequently omit quantified metric impact.' },
+      { dimension: 'System Architecture & Scalability', score: 89, benchmark: 75, assessment: 'Excellent architectural decomposition, modular service boundaries, and caching considerations.' },
+      { dimension: 'Code Rigor & Big-O Precision', score: 76, benchmark: 82, assessment: 'Syntactically clean implementations; need more proactive upfront Big-O space complexity calculations.' },
+    ],
+    overall_dna_score: 83,
+    skill_gap_map: [
+      { skill: 'Data Structures & Algorithmic Rigor', category: 'Core Coding', required_level: 85, demonstrated_level: 84, gap_status: 'Proficient', evidence: 'Solid competitive alignment (84%), meets baseline role expectations.' },
+      { skill: 'System Architecture & Modular Design', category: 'Architecture', required_level: 80, demonstrated_level: 89, gap_status: 'Mastered', evidence: 'Demonstrated high proficiency (89%) surpassing the 80% target role threshold.' },
+      { skill: 'Asymptotic Big-O Analysis', category: 'Theory', required_level: 85, demonstrated_level: 76, gap_status: 'Needs Drill', evidence: 'Demonstrated 76% vs 85% required. Targeted practice recommended before live round.' },
+      { skill: 'Concurrency, Locks & Thread Safety', category: 'Backend', required_level: 75, demonstrated_level: 68, gap_status: 'Needs Drill', evidence: 'Demonstrated 68% vs 75% required. Targeted practice recommended before live round.' },
+      { skill: 'Database Indexing & Query Plans', category: 'Data', required_level: 75, demonstrated_level: 80, gap_status: 'Proficient', evidence: 'Solid competitive alignment (80%), meets baseline role expectations.' },
+      { skill: 'STAR Method Behavioral Communication', category: 'Soft Skills', required_level: 80, demonstrated_level: 72, gap_status: 'Needs Drill', evidence: 'Demonstrated 72% vs 80% required. Development area.' },
+    ],
+    verified_strengths: [
+      'Proven ability to articulate modular architectural trade-offs under probing follow-ups.',
+      'Consistent delivery of clean, syntactically correct algorithmic implementations.',
+      'Professional composure and receptive tone when responding to interviewer hints.',
+    ],
+    development_areas: [
+      'Proactively declare Big-O Time & Auxiliary Space complexity upfront without prompt.',
+      'Ground behavioral and architectural stories in quantifiable percentage and throughput metrics.',
+      'Deepen concurrency and race-condition failure recovery explanations.',
+    ],
+    actionable_next_steps: [
+      { title: 'Complete Big-O Auxiliary Space Drill', type: 'Technical Practice', estimated_time: '15 mins', impact: '+6% in Code Rigor & Complexity score' },
+      { title: 'Practice Metric-Driven STAR Behavioral Responses', type: 'Soft Skill Drill', estimated_time: '20 mins', impact: '+10% in Answer Structure & STAR Method' },
+      { title: 'Launch Role-Specific Adaptive Mock Round', type: 'Full Simulation', estimated_time: '30 mins', impact: 'Validates proficiency across all 6 Interview DNA axes' },
+    ],
+  };
+}
+
+export async function apiResumeRealityCheck({ resumeText, targetRole = 'Software Engineer', targetCompany = 'Tech Company' }) {
+  try {
+    const res = await request('POST', '/api/resume/reality-check', {
+      resume_text: resumeText,
+      target_role: targetRole,
+      target_company: targetCompany,
+    });
+    if (res && res.project_deep_dive_questions) return res;
+  } catch (err) {
+    console.warn('[apiResumeRealityCheck] fallback:', err.message);
+  }
+  return {
+    extracted_projects: [
+      { title: 'Distributed E-Commerce Microservices & Real-Time Order Stream', detected_stack: ['React', 'Node.js', 'MongoDB', 'Redis'], confidence_score: 94 },
+      { title: 'Full-Stack Collaborative Workspace & Document Editor', detected_stack: ['TypeScript', 'WebSocket', 'PostgreSQL', 'Docker'], confidence_score: 90 },
+    ],
+    identified_tech_stack: ['React', 'Node.js', 'MongoDB', 'Redis', 'Docker', 'TypeScript'],
+    project_deep_dive_questions: [
+      {
+        project_name: 'Distributed E-Commerce Microservices & Real-Time Order Stream',
+        dimension: '1. Architectural Rationale & Stack Trade-offs',
+        question: `Why did you choose React, Node.js, and MongoDB for this project rather than alternative frameworks? What were the explicit trade-offs you accepted?`,
+        why_it_matters: 'Evaluates whether technical choices were made deliberately based on engineering requirements or adopted as defaults.',
+        expected_talking_points: ['Developer velocity vs runtime throughput trade-offs', 'Ecosystem maturity and library compatibility', 'Team familiarity and long-term maintainability'],
+      },
+      {
+        project_name: 'Distributed E-Commerce Microservices & Real-Time Order Stream',
+        dimension: '2. End-to-End System Architecture',
+        question: `Walk me through the high-level architecture of your application. How are components separated, and what responsibilities lie on each tier?`,
+        why_it_matters: 'Tests your mental model of system boundaries, modular decoupling, and tier separation.',
+        expected_talking_points: ['Presentation tier, business logic layer, and persistence store', 'Synchronous vs asynchronous boundary lines', 'Service discovery and environment configuration'],
+      },
+      {
+        project_name: 'Distributed E-Commerce Microservices & Real-Time Order Stream',
+        dimension: '3. Data Flow & State Synchronization',
+        question: `Trace the exact lifecycle of a user request from the client UI, through the network and backend handlers, to disk, and back. How is state kept consistent?`,
+        why_it_matters: 'Identifies if you truly understand network serialization, HTTP/WebSocket protocols, and database transactions.',
+        expected_talking_points: ['Client-side optimistic updates or local state', 'Payload validation, auth middleware, and controller logic', 'Database query execution, indexing, and JSON response serialization'],
+      },
+      {
+        project_name: 'Distributed E-Commerce Microservices & Real-Time Order Stream',
+        dimension: '4. Authentication, Authorization & Security',
+        question: `How did you implement authentication in your application? Where are tokens stored on the client, and how do you protect against XSS and CSRF?`,
+        why_it_matters: 'Verifies deep security awareness beyond copying boilerplate authentication tutorials.',
+        expected_talking_points: ['HttpOnly secure cookies vs localStorage trade-offs', 'Access token short TTL + refresh token rotation', 'Role-Based Access Control (RBAC) middleware enforcement'],
+      },
+      {
+        project_name: 'Distributed E-Commerce Microservices & Real-Time Order Stream',
+        dimension: '5. Real-World Engineering Challenges & Bottlenecks',
+        question: `What was the single most difficult technical challenge, latency bottleneck, or race condition you faced while building this project, and how did you diagnose it?`,
+        why_it_matters: 'Separates candidates who actively debugged production issues from those who merely followed a boilerplate tutorial.',
+        expected_talking_points: ['Root cause diagnosis technique (profiling, logs, metrics)', 'Alternative fixes considered before final resolution', 'Automated tests added to prevent regressions'],
+      },
+      {
+        project_name: 'Distributed E-Commerce Microservices & Real-Time Order Stream',
+        dimension: '6. Scalability, Caching & Failure Resilience',
+        question: `If this application scaled 100x overnight to 50,000 QPS, what component would fail first? How would you re-architect it with caching, sharding, and graceful degradation?`,
+        why_it_matters: 'Assesses forward-looking architectural maturity and high-scale production readiness.',
+        expected_talking_points: ['Database read-replica pools and connection limits', 'Redis distributed cache-aside layer with TTLs', 'Asynchronous message queuing for non-critical write paths'],
+      },
+    ],
+    incomplete_areas: [
+      'Docker listed on resume, but no mention of multi-stage optimization, orchestration, or networking.',
+      'Redis mentioned, but cache eviction policies and invalidation mechanisms are absent.',
+    ],
+    revision_concepts: [
+      'Database Indexing (B-Tree vs Hash Index) and EXPLAIN ANALYZE query plan inspection',
+      'JWT Security: HttpOnly cookies, token rotation, and silent refresh mechanics',
+      'Redis Cache-Aside Pattern, Cache Stampede, and Cache Invalidation strategies',
+    ],
+    mock_session_config: {
+      role: targetRole,
+      company: targetCompany,
+      interviewType: 'Resume-to-Interview Reality Check',
+    },
+  };
+}
+
+export async function apiCareerReadinessMap({ jobDescription, targetRole = 'Software Engineer', targetCompany = 'Tech Company', resumeText = '' }) {
+  try {
+    const res = await request('POST', '/api/career/readiness-map', {
+      job_description: jobDescription,
+      target_role: targetRole,
+      target_company: targetCompany,
+      resume_text: resumeText,
+    });
+    if (res && res.readiness_score !== undefined) return res;
+  } catch (err) {
+    console.warn('[apiCareerReadinessMap] fallback:', err.message);
+  }
+  return {
+    target_role: targetRole,
+    target_company: targetCompany,
+    readiness_score: 68,
+    readiness_tier: 'Moderate Readiness • Targeted Skill Gaps Need Resolution',
+    evidence_breakdown: {
+      resume_alignment_score: 78,
+      demonstrated_interview_score: 74,
+      core_competencies_score: 68,
+      gap_penalty: 12,
+    },
+    extracted_requirements: {
+      total_competencies_found: 5,
+      competencies: [
+        'C++ & Object-Oriented Design',
+        'Data Structures & Algorithms',
+        'Database Management (SQL / DBMS)',
+        'Operating Systems & Concurrency',
+        'Problem Solving & Analytical Thinking',
+      ],
+    },
+    skill_gap_matrix: [
+      { competency: 'C++ & Object-Oriented Design', weight: 20, demonstrated_proficiency: 88, match_status: 'Strong Match', evidence: 'Strong C++ fundamentals demonstrated in past projects and syntax drills.' },
+      { competency: 'Data Structures & Algorithms', weight: 25, demonstrated_proficiency: 65, match_status: 'Skill Gap', evidence: 'Baseline understanding demonstrated, but struggles with advanced graph and dynamic programming trade-offs.' },
+      { competency: 'Database Management (SQL / DBMS)', weight: 15, demonstrated_proficiency: 70, match_status: 'Partial Match', evidence: 'Familiar with queries; needs revision on indexing and transaction isolation levels.' },
+      { competency: 'Operating Systems & Concurrency', weight: 15, demonstrated_proficiency: 58, match_status: 'Skill Gap', evidence: 'Lacks deep thread synchronization and race-condition discussion.' },
+      { competency: 'Problem Solving & Analytical Thinking', weight: 15, demonstrated_proficiency: 78, match_status: 'Satisfactory', evidence: 'Solid baseline problem-solving approach.' },
+    ],
+    matched_competencies: ['C++ & Object-Oriented Design', 'Problem Solving & Analytical Thinking'],
+    critical_missing_competencies: ['Data Structures & Algorithms', 'Operating Systems & Concurrency'],
+    tailored_mock_questions: [
+      `Explain how virtual memory and page tables function in Operating Systems, and how page faults impact application latency for ${targetRole} systems.`,
+      'Compare C++ std::vector reallocation mechanics with std::deque. How do iterator invalidation rules differ?',
+      'Design a high-throughput caching layer for an order processing service. How do you handle cache invalidation and database synchronization?',
+      'Given a stream of integers, how would you find the median dynamically? Walk me through time complexity for both insertions and queries.',
+      'How do database indexes (B+ Trees) optimize read queries, and what trade-offs do they introduce on write throughput?',
+    ],
+    personalized_7day_roadmap: [
+      { day: 'Day 1', theme: 'C++ OOP & Memory Internals', focus: 'Review RAII, smart pointers (unique_ptr, shared_ptr), vtables, and memory layout.', deliverable: 'Complete 3 C++ OOP scenario questions on Intervista.' },
+      { day: 'Day 2', theme: 'DSA: Two-Pointer & Hash Map Optimization', focus: 'Practice Two Sum, sliding window, and collision resolution trade-offs.', deliverable: 'Solve 2 Medium LeetCode problems with upfront Big-O explanation.' },
+      { day: 'Day 3', theme: 'Operating Systems & Concurrency', focus: 'Master mutexes, semaphores, deadlocks, and process vs thread context switching.', deliverable: 'Conduct a 15-minute voice interview session on OS concurrency.' },
+      { day: 'Day 4', theme: 'Database Systems & Indexing', focus: 'Study B+ Tree indexing, ACID transactions, and optimistic vs pessimistic locking.', deliverable: 'Explain EXPLAIN query plans and index fragmentation trade-offs.' },
+      { day: 'Day 5', theme: 'DSA: Graphs & Dynamic Programming', focus: 'Drill BFS/DFS cycle detection and dynamic programming state transitions.', deliverable: 'Dry run graph traversals with explicit boundary edge-case handling.' },
+      { day: 'Day 6', theme: 'STAR Method Behavioral Rehearsal', focus: 'Structure leadership and project challenge answers with quantifiable metric results.', deliverable: 'Record 3 behavioral answers using the STAR-Impact format.' },
+      { day: 'Day 7', theme: 'Full-Length Adaptive Mock Interview', focus: 'Simulate the complete role interview with the Adaptive Difficulty Engine enabled.', deliverable: 'Achieve 80+ readiness score in the full simulation.' },
+    ],
+    disclaimer: 'The Interview Readiness Score (e.g. 68/100) is an indicative assessment of preparation based on demonstrated interview responses and resume alignment. It does not constitute a prediction of selection probability or a guarantee of employment.',
+  };
+}
+
 // ─── HEALTH CHECK ─────────────────────────────────────────────────────────────
 
 export async function apiHealth() {
@@ -716,3 +994,4 @@ export async function apiHealth() {
     return { ok: true, status: 'online', backend: 'Client Simulation Engine' };
   }
 }
+

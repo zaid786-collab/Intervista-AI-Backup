@@ -409,6 +409,11 @@ class InterviewTurnResponse(BaseModel):
     feedback_summary: Optional[str] = None
     technical_score: Optional[int] = 85
     communication_score: Optional[int] = 85
+    adaptive_level: Optional[int] = 2
+    adaptive_level_name: Optional[str] = "Practical Scenario"
+    adaptive_action: Optional[str] = None
+    adaptive_note: Optional[str] = None
+
 
 
 class SubmitInterviewRequest(BaseModel):
@@ -789,5 +794,132 @@ class InterviewAnalysisResponse(BaseModel):
     message: Optional[str] = None
 
 
+# ==============================================================================
+# INTERVISTA CORE FEATURES SCHEMAS
+# ==============================================================================
+
+# 1. AI Personalized Coach (Weakness Memory)
+class WeaknessItem(BaseModel):
+    id: Union[int, str]
+    category: str  # Technical Knowledge, Communication & Voice, Problem-Solving, Answer Structure
+    title: str
+    description: str
+    recurrence_count: int = 1
+    status: str = "active"  # active, practicing, resolved
+    suggested_exercise: Optional[str] = None
+    example_flaw: Optional[str] = None
+
+
+class ScoreProgressionPoint(BaseModel):
+    session_id: Optional[str] = None
+    session_label: str
+    date: str
+    score: int
+    technical: int
+    communication: int
+    problem_solving: int
+
+
+class CoachProfileResponse(BaseModel):
+    total_interviews: int
+    latest_score: int
+    previous_score: Optional[int] = None
+    score_delta: int = 0
+    progression: List[ScoreProgressionPoint] = []
+    recurring_weaknesses: List[WeaknessItem] = []
+    resolved_weaknesses: List[WeaknessItem] = []
+    coach_verdict: str
+    targeted_drill_recommendations: List[dict] = []
+    focus_areas: List[str] = []
+
+
+# 2. Interview DNA
+class RadarDimension(BaseModel):
+    dimension: str
+    score: int
+    benchmark: int = 75
+    assessment: str
+
+
+class SkillGapItem(BaseModel):
+    skill: str
+    category: str
+    required_level: int
+    demonstrated_level: int
+    gap_status: str  # Mastered, Proficient, Needs Drill, Unverified Gap
+    evidence: str
+
+
+class InterviewDNAResponse(BaseModel):
+    candidate_name: str
+    target_role: str
+    dna_summary: str
+    radar_profile: List[RadarDimension]
+    overall_dna_score: int
+    skill_gap_map: List[SkillGapItem]
+    verified_strengths: List[str]
+    development_areas: List[str]
+    actionable_next_steps: List[dict]
+
+
+# 3. Resume-to-Interview Reality Check
+class ResumeProjectQuestion(BaseModel):
+    project_name: str
+    dimension: str
+    question: str
+    why_it_matters: str
+    expected_talking_points: List[str]
+
+
+class ResumeRealityCheckRequest(BaseModel):
+    resume_text: str
+    target_role: Optional[str] = "Software Engineer"
+    target_company: Optional[str] = "Tech Company"
+
+
+class ResumeRealityCheckResponse(BaseModel):
+    extracted_projects: List[dict]
+    identified_tech_stack: List[str]
+    project_deep_dive_questions: List[ResumeProjectQuestion]
+    incomplete_areas: List[str]
+    revision_concepts: List[str]
+    mock_session_config: dict
+
+
+# 4. Job Description to Career Readiness Map
+class ReadinessEvidenceBreakdown(BaseModel):
+    resume_alignment_score: int
+    demonstrated_interview_score: int
+    core_competencies_score: int
+    gap_penalty: int
+
+
+class CareerReadinessRequest(BaseModel):
+    job_description: str
+    target_role: Optional[str] = "Software Engineer"
+    target_company: Optional[str] = "Tech Company"
+    resume_text: Optional[str] = ""
+
+
+class CareerReadinessResponse(BaseModel):
+    target_role: str
+    target_company: str
+    readiness_score: int
+    readiness_tier: str
+    evidence_breakdown: ReadinessEvidenceBreakdown
+    extracted_requirements: dict
+    skill_gap_matrix: List[dict]
+    matched_competencies: List[str]
+    critical_missing_competencies: List[str]
+    tailored_mock_questions: List[str]
+    personalized_7day_roadmap: List[dict]
+    disclaimer: str = "Indicative assessment of preparation, not a prediction of hiring guarantee."
+
+
 TokenResponse.model_rebuild()
+CoachProfileResponse.model_rebuild()
+InterviewDNAResponse.model_rebuild()
+ResumeRealityCheckResponse.model_rebuild()
+CareerReadinessResponse.model_rebuild()
+
 

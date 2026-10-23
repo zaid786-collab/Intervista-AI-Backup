@@ -12,6 +12,7 @@ from app.dependencies import get_current_user, get_current_user_optional
 from app.services.llm_evaluator import evaluate_interview_submission, evaluate_single_question, is_starter_boilerplate, generate_interviewer_turn
 from app.services.pdf_generator import generate_interview_pdf_report
 from app.services.question_generator import generate_interview_session
+from app.services.coach_service import compute_adaptive_turn_transition
 
 router = APIRouter(prefix="/api/interviews", tags=["Mock Interviews & AI Evaluation"])
 
@@ -478,6 +479,9 @@ def start_mock_interview(
         "interview_id": None,
         "answers": {},
         "questions": [q.dict() for q in all_questions],
+        "adaptive_level": 2,
+        "adaptive_level_name": "Level 2: Practical Scenario",
+        "score_history": [],
     }
 
     first_q = all_questions[0] if all_questions else None
@@ -930,6 +934,19 @@ def interview_turn_interaction(
         "submitted_at": datetime.now(timezone.utc).isoformat(),
     }
 
+    # Compute Adaptive Difficulty Transition
+    cur_adaptive_level = session.get("adaptive_level", 2)
+    eval_score = turn_data.get("score", 75)
+    score_hist = session.setdefault("score_history", [])
+    adaptive_trans = compute_adaptive_turn_transition(
+        current_level=cur_adaptive_level,
+        question_score=eval_score,
+        session_history=score_hist,
+    )
+    session["adaptive_level"] = adaptive_trans["adaptive_level"]
+    session["adaptive_level_name"] = adaptive_trans["adaptive_level_name"]
+    score_hist.append(eval_score)
+
     next_q_schema = None
     if next_q and not turn_data.get("is_follow_up"):
         next_q_schema = schemas.InterviewQuestion(**next_q)
@@ -950,7 +967,12 @@ def interview_turn_interaction(
         feedback_summary=turn_data.get("feedback_summary"),
         technical_score=turn_data.get("technical_score", 85),
         communication_score=turn_data.get("communication_score", 85),
+        adaptive_level=adaptive_trans["adaptive_level"],
+        adaptive_level_name=adaptive_trans["adaptive_level_name"],
+        adaptive_action=adaptive_trans["adaptive_action"],
+        adaptive_note=adaptive_trans["adaptive_note"],
     )
+
 
 
 @router.post("/submit", response_model=schemas.SubmitInterviewResponse)
