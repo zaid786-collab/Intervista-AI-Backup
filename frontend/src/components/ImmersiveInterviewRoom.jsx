@@ -109,9 +109,9 @@ export default function ImmersiveInterviewRoom({
     },
   });
 
-  // Sync candidateAnswer whenever speech recognition generates final text
+  // Live synchronization of candidate answer with real-time speech recognition
   useEffect(() => {
-    if (speech.transcript) {
+    if (speech.transcript !== undefined) {
       setCandidateAnswer(speech.transcript);
     }
   }, [speech.transcript]);
@@ -369,126 +369,14 @@ export default function ImmersiveInterviewRoom({
     setIsInterviewerSpeaking(false);
   };
 
-  // ─── 3. Speech Recognition (Candidate Voice-to-Text) ─────────────────────────
+  // ─── 3. Speech Recognition (Unified through useSpeechRecognition) ───────────
   const startSpeechRecognition = useCallback(() => {
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SpeechRecognition) {
-      setIsSpeechRecognitionSupported(false);
-      return;
-    }
-
-    if (restartTimeoutRef.current) {
-      clearTimeout(restartTimeoutRef.current);
-      restartTimeoutRef.current = null;
-    }
-
-    if (recognitionRef.current) {
-      try {
-        recognitionRef.current.onend = null;
-        recognitionRef.current.stop();
-      } catch (e) {}
-      recognitionRef.current = null;
-    }
-
-    try {
-      const recognition = new SpeechRecognition();
-      recognition.continuous = true;
-      recognition.interimResults = true;
-      recognition.lang = selectedSpeechLang || 'en-IN';
-
-      recognition.onstart = () => {
-        setIsVoiceListening(true);
-        isRecognitionActiveRef.current = true;
-        setMicPermissionError(null);
-        lastSpeechErrorRef.current = null;
-      };
-
-      recognition.onresult = (event) => {
-        lastSpeechErrorRef.current = null;
-        let currentSessionFinal = '';
-        let currentSessionInterim = '';
-
-        for (let i = 0; i < event.results.length; i++) {
-          const res = event.results[i];
-          if (res && res[0]) {
-            if (res.isFinal) {
-              currentSessionFinal += res[0].transcript + ' ';
-            } else {
-              currentSessionInterim += res[0].transcript;
-            }
-          }
-        }
-
-        const base = finalTranscriptRef.current ? finalTranscriptRef.current.trim() : '';
-        const combinedFinal = (base ? base + ' ' : '') + currentSessionFinal.trim();
-        const fullAnswer = (combinedFinal + (currentSessionInterim ? ' ' + currentSessionInterim : '')).trim();
-
-        currentRecognitionFinalRef.current = combinedFinal;
-        setCandidateAnswer(fullAnswer);
-        setInterimTranscript(currentSessionInterim);
-        if (fullAnswer) {
-          setIsCandidateSpeaking(true);
-        }
-      };
-
-      recognition.onerror = (err) => {
-        lastSpeechErrorRef.current = err.error;
-        if (err.error !== 'no-speech' && err.error !== 'aborted') {
-          console.warn('Speech recognition status:', err.error);
-        }
-        if (err.error === 'not-allowed' || err.error === 'service-not-allowed') {
-          setMicPermissionError('Microphone or Speech Recognition access was blocked by the browser. Please allow microphone access in your browser address bar.');
-        } else if (err.error === 'language-not-supported' && selectedSpeechLang !== 'en-US') {
-          setSelectedSpeechLang('en-US');
-        }
-      };
-
-      recognition.onend = () => {
-        setIsVoiceListening(false);
-        recognitionRef.current = null;
-        if (currentRecognitionFinalRef.current) {
-          finalTranscriptRef.current = currentRecognitionFinalRef.current;
-        }
-
-        // Automatically restart speech recognition while session is active and mic is not muted
-        if (
-          sessionPhaseRef.current === 'active' &&
-          !isMicMutedRef.current
-        ) {
-          // If the last error was 'network' or blocked, use exponential backoff (2.5s) to prevent spamming
-          const restartDelay = lastSpeechErrorRef.current === 'network' ? 2500 : 200;
-          restartTimeoutRef.current = setTimeout(() => {
-            startSpeechRecognition();
-          }, restartDelay);
-        }
-      };
-
-      recognitionRef.current = recognition;
-      recognition.start();
-      isRecognitionActiveRef.current = true;
-      setIsVoiceListening(true);
-    } catch (err) {
-      if (err.name !== 'InvalidStateError') {
-        console.warn('Could not start speech recognition:', err);
-      }
-    }
-  }, [selectedSpeechLang]);
+    speech.startRecording();
+  }, [speech]);
 
   const stopSpeechRecognition = useCallback(() => {
-    isRecognitionActiveRef.current = false;
-    if (restartTimeoutRef.current) {
-      clearTimeout(restartTimeoutRef.current);
-      restartTimeoutRef.current = null;
-    }
-    if (recognitionRef.current) {
-      try {
-        recognitionRef.current.onend = null;
-        recognitionRef.current.stop();
-      } catch (e) {}
-      recognitionRef.current = null;
-    }
-    setIsVoiceListening(false);
-  }, []);
+    speech.stopRecording();
+  }, [speech]);
 
   // ─── Helper: Turn Microphone ON automatically ──────────────────────────────
   const activateMic = useCallback(() => {
