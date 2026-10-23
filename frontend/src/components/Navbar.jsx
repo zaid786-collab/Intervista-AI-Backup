@@ -56,6 +56,7 @@ export default function Navbar({
     { label: 'COMPANIES', page: 'companies', id: 'companies', path: '/companies' },
     { label: 'RESOURCES', page: 'resources', id: 'resources', path: '/resources' },
     { label: 'PLANS', page: 'plans', id: 'plans', path: '/plans' },
+    ...(currentUser ? [{ label: 'MY PROFILE', page: 'profile', id: 'profile', path: '/profile' }] : []),
     ...(currentUser?.is_admin ? [{ label: 'ADMIN', page: 'admin', id: 'admin', path: '/admin' }] : []),
     { label: 'CONTACT', id: 'contact', isContact: true },
   ];
@@ -449,6 +450,9 @@ export default function Navbar({
                 (item.page === 'companies' && activePage === 'companies') ||
                 (item.page === 'dashboard' && activePage === 'dashboard') ||
                 (item.page === 'plans' && activePage === 'plans') ||
+                (item.page === 'resources' && activePage === 'resources') ||
+                (item.page === 'profile' && activePage === 'profile') ||
+                (item.page === 'admin' && activePage === 'admin') ||
                 (item.page === 'home' && item.id === 'hero' && activePage === 'home' && !scrolled);
 
               return (
@@ -906,6 +910,9 @@ export default function Navbar({
             (item.page === 'companies' && activePage === 'companies') ||
             (item.page === 'dashboard' && activePage === 'dashboard') ||
             (item.page === 'plans' && activePage === 'plans') ||
+            (item.page === 'resources' && activePage === 'resources') ||
+            (item.page === 'profile' && activePage === 'profile') ||
+            (item.page === 'admin' && activePage === 'admin') ||
             (item.page === 'home' && item.id === 'hero' && activePage === 'home' && !scrolled);
 
           return (
