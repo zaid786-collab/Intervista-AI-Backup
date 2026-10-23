@@ -303,7 +303,7 @@ export async function apiStartInterview(payload) {
 }
 
 export async function apiSendMessage({ sessionId, content, latencyMs, audioDurationMs, questionId, questionIndex, geminiInteractionId }) {
-  const qId = questionId || (questionIndex ? questionIndex : 1);
+  const qId = questionId !== undefined ? questionId : ((questionIndex || 0) + 1);
   const answerText = content || '';
 
   // 1. Try real-time interact endpoint
@@ -321,6 +321,14 @@ export async function apiSendMessage({ sessionId, content, latencyMs, audioDurat
         message: res.message,
         reply: res.message,
         aiFeedback: res.feedback_summary || res.interviewer_reaction,
+        interviewerReaction: res.interviewer_reaction,
+        score: res.score,
+        verdict: res.verdict,
+        technicalScore: res.technical_score,
+        communicationScore: res.communication_score,
+        strengths: res.strengths || [],
+        improvements: res.improvements || [],
+        missingConcepts: res.missing_concepts || [],
         nextQuestion: res.next_question,
         nextQuestionId: res.next_question_id,
         nextQuestionData: res.next_question_data,
@@ -346,25 +354,38 @@ export async function apiSendMessage({ sessionId, content, latencyMs, audioDurat
       const nq = saveRes.next_question || "Understood. Let's move on to the next technical topic.";
       return {
         success: true,
-        message: nq,
-        reply: nq,
-        aiFeedback: saveRes.ai_feedback || "Answer stored successfully.",
+        message: saveRes.message || nq,
+        reply: saveRes.message || nq,
+        aiFeedback: saveRes.ai_feedback || saveRes.message,
+        interviewerReaction: saveRes.interviewer_reaction,
+        score: saveRes.score,
+        verdict: saveRes.verdict,
+        technicalScore: saveRes.technical_score,
+        communicationScore: saveRes.communication_score,
+        strengths: saveRes.strengths || [],
+        improvements: saveRes.improvements || [],
+        missingConcepts: saveRes.missing_concepts || [],
         nextQuestion: saveRes.next_question,
-        isFollowUp: false,
+        isFollowUp: Boolean(saveRes.is_follow_up),
+        completed: Boolean(saveRes.completed),
       };
     }
   } catch (_) {}
 
-  // 3. Fallback response
-  const fallbackReply = 'Solid explanation. You clearly articulated the core principles and trade-offs. Let us take it one step deeper: How would you test this approach in a high-concurrency production setting?';
+  // 3. Honest fallback response without fabricated praise
+  const fallbackReply = answerText.trim()
+    ? "Thank you for sharing your answer. Let's proceed to the next technical topic."
+    : "No answer was recorded. Let's move on to the next question.";
   return {
     success: true,
     message: fallbackReply,
     reply: fallbackReply,
-    aiFeedback: 'Solid explanation. You clearly articulated the core principles and trade-offs.',
-    nextQuestion: 'Great! Let us take it one step deeper: How would you validate and monitor this approach under production load?',
+    aiFeedback: answerText.trim() ? "Answer recorded. Continuing to next technical topic." : "Question was skipped.",
+    score: answerText.trim() ? undefined : 0,
+    verdict: answerText.trim() ? "partially_correct" : "no_answer",
+    nextQuestion: 'Please describe your technical approach for the next problem.',
     questionIndex: (questionIndex || 0) + 1,
-    isFollowUp: true,
+    isFollowUp: false,
   };
 }
 
@@ -411,26 +432,60 @@ export async function apiEndInterview(sessionId, metrics = null) {
       metrics: metrics || {},
     });
     if (res && (res.score !== undefined || res.overallScore !== undefined || res.interview_id)) {
+      const finalScore = res.score_num !== undefined ? res.score_num : (res.score !== undefined ? Number(String(res.score).replace('%', '')) : 0);
+      const techScore = res.technical_score !== undefined ? res.technical_score : finalScore;
+      const commScore = res.communication_score !== undefined ? res.communication_score : finalScore;
+      const probScore = res.problem_solving_score !== undefined ? res.problem_solving_score : finalScore;
+      const confScore = Math.max(0, Math.min(100, Math.round((finalScore + commScore) / 2)));
+
+      const qFeedback = (res.detailed_feedback || []).map((df, idx) => ({
+        question: df.question || `Prompt #${idx + 1}`,
+        candidateAnswer: df.candidate_answer || '',
+        score: df.score !== undefined ? df.score : finalScore,
+        status: df.status || 'SUBMITTED',
+        feedback: df.feedback || 'Answer recorded.',
+        technicalAccuracy: df.technical_accuracy,
+        communicationClarity: df.communication_clarity,
+      }));
+
       return {
         ...res,
-        overallScore: res.score_num !== undefined ? res.score_num : (res.score ?? 85),
+        id: sessionId || 'rep_' + Date.now(),
+        overallScore: finalScore,
+        score: finalScore,
         scores: {
-          communication: res.communication_score ?? 88,
-          technicalDepth: res.technical_score ?? 85,
-          problemSolving: res.problem_solving_score ?? 86,
-          confidence: 84,
+          communication: commScore,
+          technicalDepth: techScore,
+          problemSolving: probScore,
+          confidence: confScore,
         },
+        strengths: res.strengths || [],
+        improvements: res.improvements || [],
+        missing_concepts: res.missing_concepts || [],
+        questionFeedback: qFeedback,
+        summary: res.overall_summary || `Candidate completed interview with final score ${finalScore}/100 (${res.grade || ''}).`,
       };
     }
   } catch (err) {
     console.warn('[apiEndInterview] Backend submit fallback:', err.message);
   }
 
-  // Derive scores
-  const scoreNum = Math.floor(Math.random() * 12) + 84; // 84 - 96
-  const commScore = Math.min(100, scoreNum + 2);
-  const techScore = Math.min(100, scoreNum);
-  const probScore = Math.min(100, scoreNum + 1);
+  // Derive honest scores from candidate answer data (NO RANDOM 84-96 FABRICATION)
+  const answersList = metrics?.answers || [];
+  let scoreNum = 0;
+  if (answersList.length > 0) {
+    const validAttempts = answersList.filter(a => a.answer && a.status !== 'SKIPPED');
+    if (validAttempts.length > 0) {
+      const avgWordCount = validAttempts.reduce((acc, a) => acc + (a.answer ? a.answer.split(/\s+/).length : 0), 0) / validAttempts.length;
+      scoreNum = Math.min(90, Math.max(20, Math.round((validAttempts.length / answersList.length) * (avgWordCount >= 30 ? 75 : 50))));
+    } else {
+      scoreNum = 0;
+    }
+  }
+
+  const commScore = scoreNum > 0 ? Math.min(100, scoreNum) : 0;
+  const techScore = scoreNum > 0 ? Math.min(100, scoreNum) : 0;
+  const probScore = scoreNum > 0 ? Math.min(100, scoreNum) : 0;
 
   const report = {
     id: sessionId || 'rep_' + Date.now(),
@@ -443,45 +498,33 @@ export async function apiEndInterview(sessionId, metrics = null) {
       communication: commScore,
       technicalDepth: techScore,
       problemSolving: probScore,
-      confidence: Math.min(100, commScore - 2),
+      confidence: commScore,
     },
-    strengths: [
-      'Strong grasp of modular system decomposition and clean API design.',
-      'Clear, structured explanations following the STAR methodology.',
-      'Proactive mention of edge cases and performance bottlenecks.',
-    ],
+    strengths: scoreNum >= 70 ? [
+      'Articulated conceptual design principles clearly.',
+      'Addressed core technical aspects of the prompts.',
+    ] : [],
     improvements: [
-      'Explicitly quantify Big-O time and space complexities during algorithmic walkthroughs.',
-      'Discuss automated integration testing strategies and rollback flags.',
+      'Provide more concrete technical detail, code examples, and explicit trade-off analyses.',
+      'State Big-O time and space complexities upfront before expanding on implementation.',
     ],
-    studyRoadmap: [
-      { step: 1, title: 'Distributed Systems & Consistency Models', focus: 'Study Raft consensus, idempotency patterns, and event-driven architecture.' },
-      { step: 2, title: 'Performance Profiling & Bottlenecks', focus: 'Deep dive into database indexing, memory leaks, and network latency optimization.' },
-    ],
-    questionFeedback: [
-      {
-        question: 'System Architecture & Concurrency',
-        score: techScore,
-        feedback: 'Excellent structural answer with clear trade-off evaluation.',
-      },
-      {
-        question: 'Algorithmic Optimization',
-        score: probScore,
-        feedback: 'Correct logical derivation, could state auxiliary memory limits earlier.',
-      },
-    ],
-    verbalDelivery: {
+    questionFeedback: (metrics?.answers || []).map((a, idx) => ({
+      question: a.question || `Prompt #${idx + 1}`,
+      candidateAnswer: a.answer || '',
+      score: a.status === 'SKIPPED' ? 0 : scoreNum,
+      feedback: a.status === 'SKIPPED' ? 'Question was skipped by candidate. Zero credit assigned.' : 'Answer recorded for evaluation.',
+    })),
+    verbalDelivery: metrics?.audioTelemetry || {
       wpm: 128,
-      fillerCount: 3,
-      tone: 'Confident & Professional',
+      fillerCount: 0,
+      tone: 'Professional',
     },
-    visualObservations: {
-      eyeContactScore: 92,
-      postureStability: 'Upright & Engaged',
+    visualObservations: metrics?.visualObservations || {
+      eyeContactScore: 85,
+      postureStability: 'Upright',
     },
   };
 
-  // Record into local dashboard
   recordLocalInterviewSession({
     id: report.id,
     role: report.role,
@@ -492,7 +535,7 @@ export async function apiEndInterview(sessionId, metrics = null) {
     technical_score: techScore,
     communication_score: commScore,
     problem_solving_score: probScore,
-    feedback: `Scored ${scoreNum}% overall. Demonstrated exceptional competence.`,
+    feedback: `Final score ${scoreNum}%.`,
   });
 
   return report;

@@ -1,5 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 import * as THREE from 'three';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 
 /**
  * ThreeInterviewScene
@@ -620,7 +621,59 @@ export default function ThreeInterviewScene({
     headPivot.add(jawHinge);
     humanGroup.add(headPivot);
     interviewerGroup.add(humanGroup);
+
+    // The original low-poly figure is retained only as an animation fallback.
+    // The textured, rigged employee below is the character displayed in the room.
+    humanGroup.visible = false;
+
+    const employeeRoot = new THREE.Group();
+    interviewerGroup.add(employeeRoot);
     scene.add(interviewerGroup);
+
+    let disposed = false;
+    let employeeModel = null;
+    let employeeHead = null;
+    let employeeSpine = null;
+    let employeeLeftForearm = null;
+    let employeeRightForearm = null;
+    let headRestRotation = null;
+    let spineRestRotation = null;
+    let leftForearmRestRotation = null;
+    let rightForearmRestRotation = null;
+
+    // Load the project’s textured office employee. The source has a baked seated
+    // pose, detailed face, hair, glasses, hands, shirt, tie, trousers, and shoes.
+    new GLTFLoader().load(
+      '/assets/interviewer/office-worker-seated.glb',
+      (gltf) => {
+        if (disposed) return;
+
+        employeeModel = gltf.scene;
+        employeeModel.position.set(0, 0.02, 0.28);
+        employeeModel.traverse((node) => {
+          if (node.isMesh) {
+            node.castShadow = true;
+            node.receiveShadow = true;
+            if (node.material) node.material.envMapIntensity = 0.8;
+          }
+        });
+
+        employeeHead = employeeModel.getObjectByName('Head');
+        employeeSpine = employeeModel.getObjectByName('Spine2');
+        employeeLeftForearm = employeeModel.getObjectByName('LeftForeArm');
+        employeeRightForearm = employeeModel.getObjectByName('RightForeArm');
+        headRestRotation = employeeHead?.rotation.clone();
+        spineRestRotation = employeeSpine?.rotation.clone();
+        leftForearmRestRotation = employeeLeftForearm?.rotation.clone();
+        rightForearmRestRotation = employeeRightForearm?.rotation.clone();
+        employeeRoot.add(employeeModel);
+      },
+      undefined,
+      (error) => {
+        console.warn('Could not load interviewer model:', error);
+        humanGroup.visible = true;
+      }
+    );
 
     // ─── 7. Atmospheric Daylight Sunbeam Particles ───────────────────────────
     const particleCount = 80;
@@ -772,6 +825,44 @@ export default function ThreeInterviewScene({
       chest.position.y = 1.05 + breathe;
       headPivot.position.y = 1.48 + breathe * 0.85;
 
+      // Give the rigged employee the same responsive presence as the room:
+      // calm breathing at rest, attentive gaze while listening, and restrained
+      // upper-body gestures when speaking.
+      if (employeeModel) {
+        employeeRoot.position.y = Math.sin(time * 1.5) * 0.009;
+        const speakingNod = isInterviewerSpeaking ? Math.sin(time * 2.7) * 0.035 + 0.015 : 0;
+        const attentiveTilt = isCandidateSpeaking ? -0.035 : 0;
+
+        if (employeeHead && headRestRotation) {
+          employeeHead.rotation.set(
+            headRestRotation.x + speakingNod + currentMouseY * 0.04,
+            headRestRotation.y + currentMouseX * 0.07,
+            headRestRotation.z + attentiveTilt
+          );
+        }
+        if (employeeSpine && spineRestRotation) {
+          employeeSpine.rotation.set(
+            spineRestRotation.x + Math.sin(time * 1.5) * 0.012,
+            spineRestRotation.y,
+            spineRestRotation.z
+          );
+        }
+        if (employeeLeftForearm && leftForearmRestRotation) {
+          employeeLeftForearm.rotation.set(
+            leftForearmRestRotation.x + (isInterviewerSpeaking ? Math.sin(time * 2.2) * 0.08 : 0),
+            leftForearmRestRotation.y,
+            leftForearmRestRotation.z
+          );
+        }
+        if (employeeRightForearm && rightForearmRestRotation) {
+          employeeRightForearm.rotation.set(
+            rightForearmRestRotation.x + (isInterviewerSpeaking ? Math.cos(time * 2.2) * 0.08 : 0),
+            rightForearmRestRotation.y,
+            rightForearmRestRotation.z
+          );
+        }
+      }
+
       // ── D. FIRST-PERSON NATURAL CAMERA BREATHING DRIFT ──
       camera.position.x = Math.sin(time * 0.35) * 0.01 + currentMouseX * 0.03;
       camera.position.y = 1.34 + Math.sin(time * 0.7) * 0.005 - currentMouseY * 0.02;
@@ -795,6 +886,7 @@ export default function ThreeInterviewScene({
 
     // ─── 11. Cleanup & Teardown ──────────────────────────────────────────────
     return () => {
+      disposed = true;
       cancelAnimationFrame(reqId);
       window.removeEventListener('resize', handleResize);
       window.removeEventListener('mousemove', onMouseMove);

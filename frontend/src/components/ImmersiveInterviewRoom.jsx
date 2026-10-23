@@ -77,6 +77,8 @@ export default function ImmersiveInterviewRoom({
   const [currentQuestionText, setCurrentQuestionText] = useState('');
   const [questionIndex, setQuestionIndex] = useState(1);
   const [totalQuestions, setTotalQuestions] = useState(5);
+  const [latestEvaluation, setLatestEvaluation] = useState(null);
+  const [evaluationsHistory, setEvaluationsHistory] = useState([]);
 
   // Candidate Answer State
   const [candidateAnswer, setCandidateAnswer] = useState('');
@@ -704,9 +706,37 @@ export default function ImmersiveInterviewRoom({
 
       const reply = res.message || res.reply || res.nextQuestion || 'Thank you for your response.';
 
+      // Store real-time evaluation feedback grounded in what the user said
+      if (res.aiFeedback || res.score !== undefined || res.verdict) {
+        const evalItem = {
+          questionId: questionIndex,
+          question: currentQuestionText || `Question ${questionIndex}`,
+          candidateAnswer: answerText,
+          score: res.score,
+          verdict: res.verdict,
+          feedback: res.aiFeedback || res.message,
+          interviewerReaction: res.interviewerReaction,
+          technicalScore: res.technicalScore,
+          communicationScore: res.communicationScore,
+          strengths: res.strengths || [],
+          improvements: res.improvements || [],
+          missingConcepts: res.missingConcepts || [],
+          isFollowUp: res.isFollowUp,
+        };
+        setLatestEvaluation(evalItem);
+        setEvaluationsHistory(prev => [...prev, evalItem]);
+      }
+
       setMessages([
         ...updatedMessages,
-        { role: 'interviewer', text: reply, timestamp: Date.now() },
+        {
+          role: 'interviewer',
+          text: reply,
+          timestamp: Date.now(),
+          score: res.score,
+          verdict: res.verdict,
+          feedback: res.aiFeedback,
+        },
       ]);
 
       const replyClean = (reply || '')
@@ -766,11 +796,23 @@ export default function ImmersiveInterviewRoom({
     const candidateMsgs = messages.filter(m => m.role === 'candidate');
     const totalWords = candidateMsgs.reduce((acc, m) => acc + (m.text ? m.text.split(/\s+/).length : 0), 0);
 
-    const comm = Math.min(96, Math.max(72, Math.round(76 + candidateMsgs.length * 3)));
-    const tech = Math.min(95, Math.max(70, Math.round(74 + totalWords * 0.04)));
-    const prob = Math.min(94, Math.max(70, Math.round(75 + candidateMsgs.length * 3)));
-    const conf = Math.min(94, Math.max(70, Math.round(78 + (isMicMuted ? -4 : 3))));
-    const overall = Math.round((comm + tech + prob + conf) / 4);
+    // Calculate baseline honest scores from evaluationsHistory if available
+    const hasHistory = evaluationsHistory.length > 0;
+    const avgScore = hasHistory
+      ? Math.round(evaluationsHistory.reduce((acc, e) => acc + (e.score || 0), 0) / evaluationsHistory.length)
+      : (candidateMsgs.length > 0 ? (totalWords >= 40 ? 65 : 40) : 0);
+
+    const comm = hasHistory
+      ? Math.round(evaluationsHistory.reduce((acc, e) => acc + (e.communicationScore !== undefined ? e.communicationScore : (e.score || 0)), 0) / evaluationsHistory.length)
+      : avgScore;
+    const tech = hasHistory
+      ? Math.round(evaluationsHistory.reduce((acc, e) => acc + (e.technicalScore !== undefined ? e.technicalScore : (e.score || 0)), 0) / evaluationsHistory.length)
+      : avgScore;
+    const prob = hasHistory
+      ? Math.round(evaluationsHistory.reduce((acc, e) => acc + (e.score || 0), 0) / evaluationsHistory.length)
+      : avgScore;
+    const conf = Math.min(100, Math.max(0, Math.round((comm + avgScore) / 2)));
+    const overall = avgScore;
 
     const verbalDelivery = !isMicMuted ? {
       speakingPaceWpm: telemetryHud.wpm || 138,
@@ -779,7 +821,7 @@ export default function ImmersiveInterviewRoom({
       fillerWordsCount: telemetryHud.fillerCount || Math.max(0, Math.round(totalWords * 0.015)),
       fillerRatioPercent: totalWords > 0 ? Math.round(((telemetryHud.fillerCount || 1) / totalWords) * 1000) / 10 : 1.1,
       pausesOver3s: telemetryHud.pausesOver3s || 0,
-      clarityScore: Math.min(96, Math.max(75, 92 - (telemetryHud.fillerCount > 3 ? 6 : 0))),
+      clarityScore: Math.min(100, Math.max(0, comm)),
       suggestions: [
         'Speaking cadence was well-paced and articulate throughout the technical explanations.',
         'Continue using deliberate 1-second silent pauses to structure architectural thoughts.'
@@ -812,21 +854,40 @@ export default function ImmersiveInterviewRoom({
       suggestions: ['Camera was turned off during session. Enable camera for posture feedback.']
     };
 
-    const questionFeedback = candidateMsgs.length > 0
-      ? candidateMsgs.map((m, idx) => ({
-          question: `Round ${idx + 1} Prompt`,
-          candidateAnswer: m.text,
-          feedback: "Solid conceptual explanation with clear foundational trade-offs. Detail concrete production monitoring metrics for staff-level evaluation.",
-          score: Math.min(96, Math.max(70, overall + (idx % 2 === 0 ? 2 : -2)))
+    const questionFeedback = hasHistory
+      ? evaluationsHistory.map((e, idx) => ({
+          question: e.question || `Prompt #${idx + 1}`,
+          candidateAnswer: e.candidateAnswer || '',
+          feedback: e.feedback || 'Answer evaluated.',
+          score: e.score !== undefined ? e.score : 0,
+          status: e.verdict?.toUpperCase() || 'SUBMITTED',
+          technicalAccuracy: e.technicalScore,
+          communicationClarity: e.communicationScore,
         }))
-      : [
-          {
-            question: "System Architecture & Algorithmic Design",
-            candidateAnswer: "Candidate completed mock session prompts.",
-            feedback: "Structured explanation observed. State Big-O complexity upfront before writing solution code.",
-            score: overall
-          }
-        ];
+      : (candidateMsgs.length > 0
+          ? candidateMsgs.map((m, idx) => ({
+              question: `Prompt #${idx + 1}`,
+              candidateAnswer: m.text,
+              feedback: "Answer recorded for evaluation.",
+              score: avgScore,
+            }))
+          : [
+              {
+                question: "System Architecture & Algorithmic Design",
+                candidateAnswer: "Candidate completed mock session prompts.",
+                feedback: "No verbal answers recorded.",
+                score: 0
+              }
+            ]);
+
+    let cumulativeStrengths = [];
+    let cumulativeImprovements = [];
+    evaluationsHistory.forEach(e => {
+      if (e.strengths) cumulativeStrengths.push(...e.strengths);
+      if (e.improvements) cumulativeImprovements.push(...e.improvements);
+    });
+    cumulativeStrengths = [...new Set(cumulativeStrengths)];
+    cumulativeImprovements = [...new Set(cumulativeImprovements)];
 
     const reportPayload = {
       sessionId: sessionId || `sess_${Date.now()}`,
@@ -834,6 +895,7 @@ export default function ImmersiveInterviewRoom({
       company: targetCompany,
       level: experienceLevel,
       overallScore: overall,
+      score: overall,
       scores: {
         communication: comm,
         technicalDepth: tech,
@@ -852,43 +914,64 @@ export default function ImmersiveInterviewRoom({
         communication: 20,
         confidence: 15,
       },
-      strengths: [
-        `Clear, articulate communication when breaking down ${targetRole} challenges.`,
-        `Thoughtful architectural trade-off consideration and clean reasoning.`,
-        `Maintained steady professional composure under live interview simulation.`
+      strengths: cumulativeStrengths.length > 0 ? cumulativeStrengths : [
+        `Clear communication when breaking down ${targetRole} challenges.`,
+        `Maintained steady composure throughout interview simulation.`
       ],
-      improvements: [
+      improvements: cumulativeImprovements.length > 0 ? cumulativeImprovements : [
         `State Big-O time and space complexity upfront before expanding on implementation.`,
-        `Quantify past project outcomes with measurable business metrics (e.g. % latency improvement).`,
-        `Use the STAR method more tightly during behavioral and leadership questions.`
+        `Provide more granular technical mechanisms and architectural trade-offs.`
       ],
       questionFeedback,
       verbalDelivery,
       visualObservations,
       multimodalTelemetry: finalTelemetry,
-      summary: `The candidate demonstrated strong domain fundamentals for ${targetRole} at ${targetCompany}. Answers showed structured thinking, sound technical reasoning, and professional poise under mock interview pressure.`
+      summary: `The candidate completed the ${targetRole} interview simulation for ${targetCompany} with an overall score of ${overall}/100.`
     };
 
-    try {
-      if (sessionId) {
-        try {
-          await apiEndInterview(sessionId, {
-            durationSeconds: typeof secondsElapsed !== 'undefined' ? secondsElapsed : 0,
-            visualObservations: reportPayload.visualObservations,
-            audioTelemetry: reportPayload.verbalDelivery,
-            multimodalTelemetry: finalTelemetry,
-          });
-        } catch (_) {}
+    let finalReportData = null;
+    if (sessionId) {
+      try {
+        const backendResult = await apiEndInterview(sessionId, {
+          company: targetCompany,
+          role: targetRole,
+          difficulty: experienceLevel,
+          durationSeconds: typeof secondsElapsed !== 'undefined' ? secondsElapsed : 0,
+          visualObservations: reportPayload.visualObservations,
+          audioTelemetry: reportPayload.verbalDelivery,
+          multimodalTelemetry: finalTelemetry,
+        });
+
+        if (backendResult && (backendResult.overallScore !== undefined || backendResult.score !== undefined)) {
+          finalReportData = {
+            ...reportPayload,
+            ...backendResult,
+            overallScore: backendResult.overallScore !== undefined ? backendResult.overallScore : backendResult.score,
+            score: backendResult.score !== undefined ? backendResult.score : backendResult.overallScore,
+            scores: backendResult.scores || reportPayload.scores,
+            strengths: backendResult.strengths?.length ? backendResult.strengths : reportPayload.strengths,
+            improvements: backendResult.improvements?.length ? backendResult.improvements : reportPayload.improvements,
+            missing_concepts: backendResult.missing_concepts || [],
+            questionFeedback: backendResult.questionFeedback?.length ? backendResult.questionFeedback : reportPayload.questionFeedback,
+            summary: backendResult.overall_summary || backendResult.summary || reportPayload.summary,
+          };
+        }
+      } catch (endErr) {
+        console.warn('[ImmersiveInterviewRoom] apiEndInterview error:', endErr);
       }
-      const savedReportResponse = await apiSaveReport(reportPayload);
-      const savedReport = savedReportResponse?.report || { ...reportPayload, id: `rep_${Date.now()}` };
+    }
+
+    const effectiveReport = finalReportData || reportPayload;
+    try {
+      const savedReportResponse = await apiSaveReport(effectiveReport);
+      const savedReport = savedReportResponse?.report || { ...effectiveReport, id: `rep_${Date.now()}` };
       if (onFinishInterview) {
         onFinishInterview(savedReport);
       }
     } catch (saveErr) {
-      console.warn('Backend saveReport error, using calculated report:', saveErr);
+      console.warn('Backend saveReport error, using effective report:', saveErr);
       if (onFinishInterview) {
-        onFinishInterview({ ...reportPayload, id: `rep_${Date.now()}` });
+        onFinishInterview({ ...effectiveReport, id: `rep_${Date.now()}` });
       }
     }
   };
@@ -1365,6 +1448,73 @@ export default function ImmersiveInterviewRoom({
           />
         </div>
       </div>
+
+      {/* Real-time Adaptive AI Evaluation Pill / Card */}
+      {latestEvaluation && (
+        <div
+          style={{
+            position: 'absolute',
+            top: 'clamp(9.5rem, 16vh, 12rem)',
+            left: 'clamp(1.5rem, 4.5vw, 4.5rem)',
+            zIndex: 22,
+            maxWidth: 'min(580px, 92vw)',
+            backgroundColor: 'rgba(10, 14, 22, 0.94)',
+            border: (latestEvaluation.score ?? 0) >= 70
+              ? '1px solid rgba(74, 222, 128, 0.4)'
+              : ((latestEvaluation.score ?? 0) >= 40
+                ? '1px solid rgba(251, 191, 36, 0.4)'
+                : '1px solid rgba(248, 113, 113, 0.4)'),
+            borderRadius: '12px',
+            padding: '0.6rem 0.9rem',
+            backdropFilter: 'blur(20px)',
+            boxShadow: '0 12px 32px rgba(0, 0, 0, 0.65)',
+            animation: 'fadeIn 0.25s ease',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '0.3rem',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+              <span
+                style={{
+                  fontSize: '0.68rem',
+                  fontWeight: 700,
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.06em',
+                  padding: '2px 8px',
+                  borderRadius: '6px',
+                  backgroundColor: (latestEvaluation.score ?? 0) >= 70
+                    ? 'rgba(74, 222, 128, 0.15)'
+                    : ((latestEvaluation.score ?? 0) >= 40 ? 'rgba(251, 191, 36, 0.15)' : 'rgba(248, 113, 113, 0.15)'),
+                  color: (latestEvaluation.score ?? 0) >= 70
+                    ? '#4ADE80'
+                    : ((latestEvaluation.score ?? 0) >= 40 ? '#FBBF24' : '#F87171'),
+                }}
+              >
+                {latestEvaluation.score !== undefined ? `${latestEvaluation.verdict || 'Evaluation'} • ${latestEvaluation.score}%` : 'Evaluation Recorded'}
+              </span>
+              {latestEvaluation.isFollowUp && (
+                <span style={{ fontSize: '0.66rem', color: '#38BDF8', fontWeight: 600 }}>
+                  • Probing Follow-Up
+                </span>
+              )}
+            </div>
+            <button
+              onClick={() => setLatestEvaluation(null)}
+              style={{ background: 'none', border: 'none', color: 'rgba(255, 255, 255, 0.4)', cursor: 'pointer', padding: 0 }}
+              title="Dismiss"
+            >
+              <X size={13} />
+            </button>
+          </div>
+          {latestEvaluation.feedback && (
+            <div style={{ fontSize: '0.76rem', color: '#E2E8F0', lineHeight: 1.4 }}>
+              {latestEvaluation.feedback}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Attentive Listening Indicator below Speech Bubble */}
       {isCandidateSpeaking && (
@@ -2148,12 +2298,24 @@ export default function ImmersiveInterviewRoom({
                   padding: '0.75rem',
                 }}
               >
-                <div style={{ fontSize: '0.7rem', fontWeight: 700, color: m.role === 'interviewer' ? 'var(--accent-gold)' : '#38BDF8', marginBottom: '3px' }}>
-                  {m.role === 'interviewer' ? interviewerName : 'You (Candidate)'}
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '3px' }}>
+                  <div style={{ fontSize: '0.7rem', fontWeight: 700, color: m.role === 'interviewer' ? 'var(--accent-gold)' : '#38BDF8' }}>
+                    {m.role === 'interviewer' ? interviewerName : 'You (Candidate)'}
+                  </div>
+                  {m.score !== undefined && (
+                    <span style={{ fontSize: '0.68rem', fontWeight: 700, color: m.score >= 70 ? '#4ADE80' : (m.score >= 40 ? '#FBBF24' : '#F87171') }}>
+                      {m.score}%
+                    </span>
+                  )}
                 </div>
                 <div style={{ fontSize: '0.8rem', color: '#FFFFFF', lineHeight: 1.45 }}>
                   {m.text}
                 </div>
+                {m.feedback && m.feedback !== m.text && (
+                  <div style={{ fontSize: '0.72rem', color: 'rgba(255, 255, 255, 0.65)', marginTop: '0.35rem', fontStyle: 'italic', borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: '0.3rem' }}>
+                    Evaluation: {m.feedback}
+                  </div>
+                )}
               </div>
             ))}
           </div>

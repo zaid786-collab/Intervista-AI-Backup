@@ -353,14 +353,39 @@ def is_clearly_irrelevant(
         technical_terms = [
             "algorithm", "function", "variable", "pointer", "memory", "virtual", "class", "object",
             "database", "cache", "thread", "process", "network", "server", "o(n)", "complexity",
-            "ownership", "destructor", "unique_ptr", "shared_ptr", "raii", "reference", "heap", "stack"
+            "ownership", "destructor", "unique_ptr", "shared_ptr", "raii", "reference", "heap", "stack",
+            "protocol", "packet", "tcp", "udp", "socket", "http", "https", "latency", "throughput",
+            "concurrency", "asynchronous", "async", "sync", "system", "architecture", "component",
+            "state", "data", "structure", "query", "api", "client", "request", "response", "stream",
+            "buffer", "cpu", "io", "performance", "handshake", "overhead", "reliable", "connection"
         ]
         has_real_tech = any(tt in lower_a for tt in technical_terms)
-        if not has_real_tech:
+
+        stop_words_check = {
+            "what", "when", "where", "which", "that", "this", "with", "from", "your", "have",
+            "been", "does", "will", "would", "could", "should", "about", "their", "there",
+            "than", "then", "into", "also", "each", "other", "some", "more", "most", "very",
+            "just", "like", "make", "many", "only", "over", "such", "take", "they", "these",
+            "much", "well", "here", "explain", "describe", "discuss", "difference", "between",
+            "how", "why", "given", "using", "implement", "calculate", "design", "and", "the",
+            "to", "of", "in", "on", "for", "is", "are", "was", "were", "it", "its", "as",
+            "at", "by", "be", "so", "if", "or", "but", "my", "me", "had", "has", "went", "got"
+        }
+        q_core_words = set(w for w in re.findall(r'\b[a-z]{3,}\b', lower_q) if w not in stop_words_check)
+        a_core_words = set(w for w in re.findall(r'\b[a-z]{3,}\b', lower_a) if w not in stop_words_check)
+        has_q_overlap = bool(q_core_words and (q_core_words & a_core_words))
+
+        if not has_real_tech and not has_q_overlap:
             return True
-        # Even if they sneaked 1 tech word into an off-topic sentence ("I like cricket and databases")
-        off_topic_phrases = ["i like", "playing", "watching", "nice today", "weather is", "food", "movie", "cricket", "football", "sunny day"]
-        if any(p in lower_a for p in off_topic_phrases) and not any(q_term in lower_a for q_term in ["pointer", "unique_ptr", "shared_ptr", "polymorphism", "virtual", "stack", "heap"]):
+
+        # Check if they sneaked 1 tech word into an obvious off-topic personal chatter sentence
+        off_topic_phrases = [
+            "i like playing", "i love playing", "watching movie", "nice today",
+            "weather is", "food is", "cricket match", "football match", "sunny day",
+            "went to party", "eating pizza", "eating burger", "my girlfriend", "my boyfriend",
+            "had tasty pizza", "delicious pizza", "restaurant and had"
+        ]
+        if any(p in lower_a for p in off_topic_phrases) and not has_q_overlap:
             return True
 
     # 2. Extract significant words from question (excluding common stop words)
@@ -370,19 +395,21 @@ def is_clearly_irrelevant(
         "than", "then", "into", "also", "each", "other", "some", "more", "most", "very",
         "just", "like", "make", "many", "only", "over", "such", "take", "they", "these",
         "much", "well", "here", "explain", "describe", "discuss", "difference", "between",
-        "how", "why", "given", "using", "implement", "calculate", "design"
+        "how", "why", "given", "using", "implement", "calculate", "design", "and", "the",
+        "to", "of", "in", "on", "for", "is", "are", "was", "were", "it", "its", "as",
+        "at", "by", "be", "so", "if", "or", "but", "my", "me", "had", "has", "went", "got"
     }
-    q_words = set(w for w in re.findall(r'[a-z]{3,}', lower_q) if w not in stop_words)
-    a_words = set(re.findall(r'[a-z]{3,}', lower_a))
+    q_words = set(w for w in re.findall(r'\b[a-z]{3,}\b', lower_q) if w not in stop_words)
+    a_words = set(w for w in re.findall(r'\b[a-z]{3,}\b', lower_a) if w not in stop_words)
     
     # Check expected concepts if provided
     expected_words = set()
     if expected_concepts:
         for ec in expected_concepts:
-            expected_words.update(re.findall(r'[a-z]{3,}', ec.lower()))
+            expected_words.update(w for w in re.findall(r'\b[a-z]{3,}\b', ec.lower()) if w not in stop_words)
     
     # Domain concepts
-    domain_words = set(re.findall(r'[a-z]{3,}', (domain or "").lower()))
+    domain_words = set(w for w in re.findall(r'\b[a-z]{3,}\b', (domain or "").lower()) if w not in stop_words)
     
     target_words = q_words | expected_words | domain_words
     overlap = target_words & a_words
@@ -1453,6 +1480,299 @@ def evaluate_interview_submission(
     return evaluate_with_local_rubric(company, role, difficulty, answers)
 
 
+def _gemini_evaluate_turn(
+    question: str,
+    answer: str,
+    company: str,
+    role: str,
+    domain: str,
+    expected_key_points: List[str],
+    category: str,
+    interview_history: Optional[List[Dict[str, Any]]] = None,
+    has_next_question: bool = True,
+) -> Optional[Dict[str, Any]]:
+    """
+    Uses the Gemini API for per-turn adaptive evaluation.
+    Returns a structured evaluation dict, or None if Gemini is unavailable.
+    """
+    gemini_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+    if not gemini_key or len(gemini_key) < 10:
+        return None
+
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={gemini_key}"
+
+    history_context = ""
+    if interview_history:
+        history_entries = []
+        for h in interview_history[-5:]:
+            history_entries.append(
+                f"Q{h.get('question_id', '?')}: {h.get('question', '')[:120]}\n"
+                f"Candidate answered: {h.get('candidate_answer', '')[:200]}\n"
+                f"Verdict: {h.get('verdict', 'N/A')} | Score: {h.get('score', 'N/A')}/10\n"
+                f"Weaknesses noted: {', '.join(h.get('weaknesses_identified', []))}"
+            )
+        history_context = "\n--- Previous Interview History ---\n" + "\n\n".join(history_entries) + "\n--- End History ---\n\n"
+
+    system_prompt = (
+        f"You are a strict, professional Staff Technical Interviewer at {company} evaluating a candidate for the {role} position.\n"
+        f"Domain: {domain}. Category: {category}.\n\n"
+        "CRITICAL: You must EVALUATE the candidate's ACTUAL answer. Do NOT answer the question yourself.\n"
+        "Do NOT praise an incorrect answer. Do NOT invent strengths the candidate did not demonstrate.\n"
+        "Do NOT reveal the ideal answer before evaluating.\n\n"
+        "EVALUATION CRITERIA:\n"
+        "- Relevance: Did the candidate actually answer the question?\n"
+        "- Correctness: Are technical facts accurate?\n"
+        "- Depth: Is the answer sufficiently detailed?\n"
+        "- Clarity: Is the answer well-structured and understandable?\n"
+        "- Examples: Did the candidate provide practical examples when relevant?\n\n"
+        f"Expected key points for this question: {json.dumps(expected_key_points)}\n\n"
+        f"{history_context}"
+        "Return ONLY a valid JSON object (no markdown fences) with this EXACT structure:\n"
+        "{\n"
+        '  "score": <0-10 integer>,\n'
+        '  "verdict": "<correct|partially_correct|incorrect|vague|irrelevant|no_answer>",\n'
+        '  "strengths": ["specific thing candidate said well"],\n'
+        '  "improvements": ["specific thing candidate should improve"],\n'
+        '  "missing_concepts": ["concept candidate did not mention"],\n'
+        '  "feedback": "2-3 sentence feedback that explicitly references what the candidate said. Never generic.",\n'
+        '  "interviewer_reaction": "1 sentence natural interviewer reaction referencing the answer content.",\n'
+        '  "follow_up_question": "A targeted follow-up question based on the evaluation. If strong answer, probe deeper or increase difficulty. If partial, ask about the missing concept. If incorrect, ask a simpler diagnostic question. If vague, ask for a concrete example.",\n'
+        '  "difficulty_adjustment": "<increase|maintain|decrease>"\n'
+        "}\n\n"
+        "SCORING GUIDE (0-10 scale):\n"
+        "0: No answer, completely irrelevant, or gibberish\n"
+        "1-2: Fundamentally incorrect with major misconceptions\n"
+        "3-4: Partially correct but missing critical concepts\n"
+        "5-6: Correct fundamentals but lacks depth or examples\n"
+        "7-8: Strong answer covering most key points with good reasoning\n"
+        "9-10: Exceptional answer with deep insight, examples, and trade-off analysis\n"
+    )
+
+    payload = {
+        "contents": [
+            {
+                "parts": [
+                    {"text": (
+                        f"{system_prompt}\n\n"
+                        f"--- Question Asked ---\n{question}\n\n"
+                        f"--- Candidate's Answer ---\n{answer}\n"
+                    )}
+                ]
+            }
+        ],
+        "generationConfig": {
+            "temperature": 0.15,
+            "responseMimeType": "application/json",
+        },
+    }
+
+    models_to_try = ["gemini-1.5-flash", "gemini-2.0-flash", "gemini-1.5-flash-latest"]
+    for model_name in models_to_try:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={gemini_key}"
+        try:
+            response = requests.post(url, json=payload, timeout=12)
+            if response.status_code == 200:
+                data = response.json()
+                raw_text = data["candidates"][0]["content"]["parts"][0]["text"].strip()
+                if raw_text.startswith("```json"):
+                    raw_text = raw_text[7:]
+                if raw_text.startswith("```"):
+                    raw_text = raw_text[3:]
+                if raw_text.endswith("```"):
+                    raw_text = raw_text[:-3]
+                parsed = json.loads(raw_text.strip())
+
+                # Validate required fields
+                required = ["score", "verdict", "feedback", "interviewer_reaction"]
+                if all(k in parsed for k in required):
+                    parsed["score"] = max(0, min(10, int(parsed.get("score", 0))))
+                    valid_verdicts = {"correct", "partially_correct", "incorrect", "vague", "irrelevant", "no_answer"}
+                    if parsed.get("verdict") not in valid_verdicts:
+                        parsed["verdict"] = "partially_correct" if parsed["score"] >= 4 else "incorrect"
+                    valid_adjustments = {"increase", "maintain", "decrease"}
+                    if parsed.get("difficulty_adjustment") not in valid_adjustments:
+                        parsed["difficulty_adjustment"] = "maintain"
+                    return parsed
+            elif response.status_code == 404:
+                continue
+            else:
+                print(f"[LLM Evaluator] Gemini {model_name} status: {response.status_code}")
+                break
+        except Exception as e:
+            print(f"[LLM Evaluator] Gemini {model_name} error: {e}")
+            break
+
+    return None
+
+
+def _build_local_adaptive_feedback(
+    eval_res: Dict[str, Any],
+    question: str,
+    answer: str,
+    missing: List[str],
+    identified: List[str],
+    expected_key_points: List[str],
+) -> Dict[str, Any]:
+    """
+    Builds adaptive feedback locally when Gemini is unavailable.
+    References the actual answer content instead of using generic praise.
+    """
+    score_100 = eval_res.get("score", 0)
+    status = eval_res.get("status", "INCORRECT")
+    answer_lower = answer.lower()
+    answer_words = answer.split()
+    word_count = len(answer_words)
+
+    # Map 0-100 score to 0-10
+    score_10 = round(score_100 / 10)
+
+    # Determine verdict
+    if score_100 >= 70:
+        verdict = "correct"
+    elif score_100 >= 40:
+        verdict = "partially_correct"
+    elif score_100 >= 15:
+        verdict = "incorrect"
+    elif is_no_answer(answer):
+        verdict = "no_answer"
+    elif word_count < 8:
+        verdict = "vague"
+    else:
+        verdict = "incorrect"
+
+    # Build feedback referencing the actual answer
+    first_words = " ".join(answer_words[:12]) + ("..." if word_count > 12 else "")
+
+    if verdict == "correct":
+        strengths = []
+        if identified:
+            strengths.append(f"Correctly addressed {', '.join(identified[:2])}.")
+        else:
+            strengths.append("Demonstrated solid understanding of the core concept.")
+        if word_count >= 40:
+            strengths.append("Provided a well-structured, detailed explanation.")
+
+        improvements = []
+        if missing:
+            improvements.append(f"Could also discuss {missing[0]}.")
+        elif not any(t in answer_lower for t in ["trade-off", "tradeoff", "disadvantage", "cons", "limitation"]):
+            improvements.append("Consider discussing trade-offs or limitations of the approach.")
+
+        feedback = eval_res.get("feedback", "")
+        if not feedback or "Outstanding" in feedback:
+            feedback = f"Your explanation correctly covers the key aspects."
+            if identified:
+                feedback += f" You accurately addressed {identified[0]}."
+            if improvements:
+                feedback += f" To strengthen your answer further, {improvements[0].lower()}"
+
+    elif verdict == "partially_correct":
+        strengths = []
+        if identified:
+            strengths.append(f"Touched on {', '.join(identified[:2])}.")
+        else:
+            strengths.append("Showed basic familiarity with the topic.")
+
+        improvements = []
+        if missing:
+            improvements.append(f"Did not address: {', '.join(missing[:2])}.")
+        improvements.append("Provide more specific technical details and concrete examples.")
+
+        feedback = f"Your answer shows partial understanding. "
+        if identified:
+            feedback += f"You correctly mentioned {identified[0]}, "
+        else:
+            feedback += f"You addressed some aspects, "
+        if missing:
+            feedback += f"but did not cover {missing[0]}."
+        else:
+            feedback += "but lacked sufficient depth and specifics."
+
+    elif verdict == "vague":
+        strengths = []
+        improvements = ["Answer is too brief to demonstrate understanding.", "Provide specific technical details, mechanisms, and examples."]
+        if missing:
+            improvements.append(f"Key concepts to address: {', '.join(missing[:3])}.")
+        feedback = f"Your response ('{first_words}') is too brief to assess. Please provide a more detailed explanation with specific technical details."
+
+    elif verdict == "no_answer":
+        strengths = []
+        improvements = ["Acknowledge the knowledge gap and attempt a structured response."]
+        feedback = "That's okay — it's better to be honest than to guess. " + (
+            f"The key concept here involves {expected_key_points[0]}." if expected_key_points else
+            "Review the fundamental principles of this topic."
+        )
+
+    else:  # incorrect
+        strengths = []
+        improvements = []
+        if missing:
+            improvements.append(f"Missing critical concepts: {', '.join(missing[:3])}.")
+        improvements.append("Review the fundamental principles of this topic.")
+
+        feedback = f"Your answer does not accurately address the question. "
+        if identified:
+            feedback += f"While you mentioned {identified[0]}, "
+        if missing:
+            feedback += f"the key concepts ({', '.join(missing[:2])}) were not covered or were incorrect."
+        else:
+            feedback += "the technical accuracy is insufficient."
+
+    # Build adaptive follow-up
+    if verdict == "correct":
+        if missing:
+            follow_up = f"Building on your answer: How would {missing[0]} factor into your approach, and what trade-offs would that introduce?"
+        else:
+            follow_up = "Can you walk me through a concrete scenario where this approach might fail, and how you would mitigate it?"
+        difficulty_adjustment = "increase"
+    elif verdict == "partially_correct":
+        if missing:
+            target = missing[0]
+            target_clean = re.sub(r'^[0-9\.\-\s]+', '', target).strip()
+            follow_up = f"You mentioned some key points. Can you elaborate on {target_clean}? How does it work and why is it important?"
+        else:
+            follow_up = "Can you provide a specific example or walk through the mechanism step by step?"
+        difficulty_adjustment = "maintain"
+    elif verdict == "vague":
+        follow_up = "Could you elaborate on that? Specifically, what are the core mechanisms or steps involved?"
+        difficulty_adjustment = "maintain"
+    elif verdict == "no_answer":
+        if expected_key_points:
+            follow_up = f"Let me rephrase: In the context of {expected_key_points[0]}, what approach would you consider and why?"
+        else:
+            follow_up = "Let's try a related but simpler question: What do you understand about the fundamental concept behind this?"
+        difficulty_adjustment = "decrease"
+    else:  # incorrect
+        follow_up = "Let me ask a simpler version: What is the basic purpose and mechanism of the concept in question?"
+        difficulty_adjustment = "decrease"
+
+    # Build interviewer reaction referencing the actual answer
+    if verdict == "correct" and identified:
+        reaction = f"Good — you correctly identified {identified[0]} and explained the reasoning well."
+    elif verdict == "partially_correct" and identified:
+        reaction = f"You're on the right track with {identified[0]}, but there are gaps to address."
+    elif verdict == "vague":
+        reaction = "I need a more detailed response to properly evaluate your understanding."
+    elif verdict == "no_answer":
+        reaction = "That's honest. Let me guide you toward the concept."
+    elif verdict == "incorrect":
+        reaction = "There are some inaccuracies in your explanation that we should address."
+    else:
+        reaction = "Thank you for your response. Let me provide some feedback."
+
+    return {
+        "score": score_10,
+        "verdict": verdict,
+        "strengths": strengths,
+        "improvements": improvements,
+        "missing_concepts": missing[:3],
+        "feedback": feedback,
+        "interviewer_reaction": reaction,
+        "follow_up_question": follow_up,
+        "difficulty_adjustment": difficulty_adjustment,
+    }
+
+
 def generate_interviewer_turn(
     question_dict: Dict[str, Any],
     candidate_answer: str,
@@ -1462,10 +1782,12 @@ def generate_interviewer_turn(
     role: str = "Software Engineer",
     interviewer_name: str = "Mr. J. Chen",
     next_question_dict: Optional[Dict[str, Any]] = None,
+    interview_history: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """
-    Generates real-time conversational commentary, probing follow-ups, and smooth transitions
-    during live interview sessions.
+    Generates adaptive, evaluation-driven interviewer responses during live interview sessions.
+    Every response is grounded in the candidate's actual answer — feedback, scores, and follow-ups
+    all depend on what the candidate said.
     """
     q_text = question_dict.get("question", "")
     q_id = question_dict.get("id", question_dict.get("question_id", 1))
@@ -1485,6 +1807,7 @@ def generate_interviewer_turn(
                 "question_id": q_id,
                 "status": "SKIPPED",
                 "score": 0,
+                "verdict": "no_answer",
                 "interviewer_reaction": "Understood, let's keep moving.",
                 "message": f"Understood, no problem at all. Let's move ahead to the next topic:\n\n{next_q}",
                 "next_question": next_q,
@@ -1492,7 +1815,13 @@ def generate_interviewer_turn(
                 "is_follow_up": False,
                 "is_hint": False,
                 "completed": False,
-                "feedback_summary": "Question was skipped by candidate.",
+                "feedback_summary": "Question was skipped by candidate. Zero credit assigned.",
+                "strengths": [],
+                "improvements": ["Attempt every question, even partially, to demonstrate your thought process."],
+                "missing_concepts": q_exp[:3] if q_exp else ["Response to this question"],
+                "difficulty_adjustment": "decrease",
+                "technical_score": 0,
+                "communication_score": 0,
             }
         else:
             return {
@@ -1500,6 +1829,7 @@ def generate_interviewer_turn(
                 "question_id": q_id,
                 "status": "SKIPPED",
                 "score": 0,
+                "verdict": "no_answer",
                 "interviewer_reaction": "Understood.",
                 "message": "Understood. That concludes all our interview questions for today! I am compiling your final assessment now.",
                 "next_question": None,
@@ -1508,13 +1838,20 @@ def generate_interviewer_turn(
                 "is_hint": False,
                 "completed": True,
                 "feedback_summary": "Question was skipped by candidate.",
+                "strengths": [],
+                "improvements": [],
+                "missing_concepts": q_exp[:3] if q_exp else [],
+                "difficulty_adjustment": "maintain",
+                "technical_score": 0,
+                "communication_score": 0,
             }
 
-    # 2. Evaluate current answer
+    # 2. Evaluate current answer with local rubric evaluator
+    full_answer = cleaned_ans + (f"\n[Code Implementation]:\n{code_submission}" if code_submission else "")
     eval_res = evaluate_single_question(
         question_id=q_id,
         question=q_text,
-        answer=cleaned_ans + (f"\n[Code Implementation]:\n{code_submission}" if code_submission else ""),
+        answer=full_answer,
         category=q_cat,
         company=company,
         role=role,
@@ -1522,80 +1859,153 @@ def generate_interviewer_turn(
         expected_key_points=q_exp,
     )
 
-    score = eval_res.get("score", 75)
+    score_100 = eval_res.get("score", 0)
     identified = eval_res.get("identified_keywords", [])
     missing = eval_res.get("missing_concepts", [])
-    status = eval_res.get("status", "CORRECT")
+    status = eval_res.get("status", "INCORRECT")
 
-    # 3. Dynamic probing follow-up (if partial score and first turn on this question)
-    if turn_count_on_question == 1 and 25 <= score < 75 and missing:
-        target_point = missing[0]
-        # Clean target point
-        target_clean = re.sub(r'^[0-9\.\-\s]+', '', target_point).strip()
-        follow_up = f"You touched on the initial mechanics. How would you specifically address {target_clean} or handle failure modes under heavy load?"
-        speech = f"Good start on the initial approach. Let's dig one layer deeper: {follow_up}"
+    # 3. Try Gemini API for intelligent adaptive evaluation
+    gemini_eval = _gemini_evaluate_turn(
+        question=q_text,
+        answer=full_answer,
+        company=company,
+        role=role,
+        domain=q_domain,
+        expected_key_points=q_exp,
+        category=q_cat,
+        interview_history=interview_history,
+        has_next_question=next_question_dict is not None,
+    )
 
+    # 4. Use Gemini evaluation if available, otherwise build local adaptive feedback
+    if gemini_eval:
+        adaptive = gemini_eval
+        # Cross-validate: if local rubric gave 0 (zero-credit gate), force Gemini to 0 too
+        if score_100 == 0 and status in ("SKIPPED", "IRRELEVANT", "NO_ANSWER"):
+            adaptive["score"] = 0
+            adaptive["verdict"] = "irrelevant" if status == "IRRELEVANT" else "no_answer"
+    else:
+        adaptive = _build_local_adaptive_feedback(
+            eval_res=eval_res,
+            question=q_text,
+            answer=cleaned_ans,
+            missing=missing,
+            identified=identified,
+            expected_key_points=q_exp,
+        )
+
+    turn_score = adaptive.get("score", 0)
+    turn_verdict = adaptive.get("verdict", "incorrect")
+    turn_feedback = adaptive.get("feedback", eval_res.get("feedback", ""))
+    turn_reaction = adaptive.get("interviewer_reaction", "Thank you for your response.")
+    turn_follow_up = adaptive.get("follow_up_question", "")
+    turn_strengths = adaptive.get("strengths", [])
+    turn_improvements = adaptive.get("improvements", [])
+    turn_missing = adaptive.get("missing_concepts", missing[:3])
+    difficulty_adj = adaptive.get("difficulty_adjustment", "maintain")
+
+    # Convert 0-10 score to 0-100 for internal consistency
+    score_100_final = turn_score * 10
+
+    # Ensure technical and communication scores align with the verdict and score
+    if score_100_final == 0:
+        tech_score = 0
+        comm_score = 0
+    elif gemini_eval:
+        tech_score = score_100_final
+        comm_score = min(100, max(0, score_100_final + 5 if len(cleaned_ans.split()) >= 20 else score_100_final))
+    else:
+        tech_score = eval_res.get("technical_accuracy", score_100_final)
+        comm_score = eval_res.get("communication_clarity", score_100_final)
+
+    # Status alignment
+    if turn_verdict == "correct":
+        eval_status = "CORRECT"
+    elif turn_verdict == "partially_correct":
+        eval_status = "PARTIAL"
+    elif turn_verdict == "no_answer":
+        eval_status = "NO_ANSWER"
+    elif turn_verdict == "irrelevant":
+        eval_status = "IRRELEVANT"
+    else:
+        eval_status = "INCORRECT"
+
+    # 5. Decide: follow-up on same question OR advance to next question
+    should_follow_up = (
+        turn_count_on_question == 1
+        and turn_verdict in ("partially_correct", "vague")
+        and turn_follow_up
+    )
+
+    if should_follow_up:
+        speech = f"{turn_reaction}\n\n{turn_feedback}\n\n{turn_follow_up}"
         return {
             "success": True,
             "question_id": q_id,
-            "status": status,
-            "score": score,
-            "interviewer_reaction": "Good start on the initial approach.",
+            "status": eval_status,
+            "score": score_100_final,
+            "verdict": turn_verdict,
+            "interviewer_reaction": turn_reaction,
             "message": speech,
-            "next_question": follow_up,
+            "next_question": turn_follow_up,
             "next_question_id": q_id,
             "is_follow_up": True,
             "is_hint": False,
             "completed": False,
-            "feedback_summary": eval_res.get("feedback", "Partial answer provided; follow-up asked."),
-            "technical_score": eval_res.get("technical_accuracy", 75),
-            "communication_score": eval_res.get("communication_clarity", 80),
+            "feedback_summary": turn_feedback,
+            "strengths": turn_strengths,
+            "improvements": turn_improvements,
+            "missing_concepts": turn_missing,
+            "difficulty_adjustment": difficulty_adj,
+            "technical_score": tech_score,
+            "communication_score": comm_score,
         }
 
-    # 4. Advance to Next Question or Conclude
-    if score >= 75:
-        reaction = "Excellent explanation! You clearly articulated the core principles and trade-offs."
-        if identified:
-            reaction = f"Great insights on {identified[0]}. You clearly articulated the core design and trade-offs."
-    elif score >= 50:
-        reaction = "Solid breakdown. You covered the foundational requirements."
-    else:
-        reaction = "I see your line of reasoning. In a high-scale production setting, edge-case resilience is key."
-
+    # 6. Advance to next question or conclude
     if next_question_dict:
         next_q = next_question_dict.get("question", "")
-        speech = f"{reaction}\n\nLet's move on to our next question:\n{next_q}"
+        speech = f"{turn_reaction}\n\n{turn_feedback}\n\nLet's move on to our next question:\n{next_q}"
         return {
             "success": True,
             "question_id": q_id,
-            "status": status,
-            "score": score,
-            "interviewer_reaction": reaction,
+            "status": eval_status,
+            "score": score_100_final,
+            "verdict": turn_verdict,
+            "interviewer_reaction": turn_reaction,
             "message": speech,
             "next_question": next_q,
             "next_question_id": next_question_dict.get("id"),
             "is_follow_up": False,
             "is_hint": False,
             "completed": False,
-            "feedback_summary": eval_res.get("feedback", reaction),
-            "technical_score": eval_res.get("technical_accuracy", 80),
-            "communication_score": eval_res.get("communication_clarity", 80),
+            "feedback_summary": turn_feedback,
+            "strengths": turn_strengths,
+            "improvements": turn_improvements,
+            "missing_concepts": turn_missing,
+            "difficulty_adjustment": difficulty_adj,
+            "technical_score": tech_score,
+            "communication_score": comm_score,
         }
     else:
-        speech = f"{reaction}\n\nThank you for sharing your technical thought process! That concludes our interview questions today. I am compiling your granular assessment report now."
+        speech = f"{turn_reaction}\n\n{turn_feedback}\n\nThank you for sharing your technical thought process! That concludes our interview questions today. I am compiling your granular assessment report now."
         return {
             "success": True,
             "question_id": q_id,
-            "status": status,
-            "score": score,
-            "interviewer_reaction": reaction,
+            "status": eval_status,
+            "score": score_100_final,
+            "verdict": turn_verdict,
+            "interviewer_reaction": turn_reaction,
             "message": speech,
             "next_question": None,
             "next_question_id": None,
             "is_follow_up": False,
             "is_hint": False,
             "completed": True,
-            "feedback_summary": eval_res.get("feedback", reaction),
-            "technical_score": eval_res.get("technical_accuracy", 80),
-            "communication_score": eval_res.get("communication_clarity", 80),
+            "feedback_summary": turn_feedback,
+            "strengths": turn_strengths,
+            "improvements": turn_improvements,
+            "missing_concepts": turn_missing,
+            "difficulty_adjustment": difficulty_adj,
+            "technical_score": tech_score,
+            "communication_score": comm_score,
         }

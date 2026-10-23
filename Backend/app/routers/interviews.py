@@ -469,6 +469,7 @@ def start_mock_interview(
         "company": payload.company,
         "role": payload.role,
         "difficulty": payload.difficulty,
+        "current_difficulty": payload.difficulty,
         "warning_count": 0,
         "max_warnings": 5,
         "status": "ACTIVE",
@@ -477,6 +478,10 @@ def start_mock_interview(
         "termination_reason": None,
         "interview_id": None,
         "answers": {},
+        "evaluations": {},
+        "interview_history": [],
+        "strengths": [],
+        "weaknesses": [],
         "questions": [q.dict() for q in all_questions],
     }
 
@@ -725,72 +730,139 @@ def save_candidate_answer(
     db: Session = Depends(get_db),
 ):
     """
-    Silently records candidate's exact answer into the database during the interview.
-    Does NOT evaluate or leak scores during the active session.
+    Evaluates candidate's exact answer and persists it into the database during the interview.
+    Returns adaptive feedback, score, and verdict grounded in the actual answer.
     """
     user_id = current_user.id if current_user else None
     cleaned_ans = str(payload.candidate_answer or "").strip()
     status = payload.status or ("SKIPPED" if not cleaned_ans else "SUBMITTED")
 
-    # Update in-memory session if active
-    if payload.session_id and payload.session_id in ACTIVE_PROCTORING_SESSIONS:
-        sess = ACTIVE_PROCTORING_SESSIONS[payload.session_id]
-        if "answers" not in sess:
-            sess["answers"] = {}
-        sess["answers"][payload.question_id] = {
-            "question_id": payload.question_id,
-            "question": payload.question,
-            "candidate_answer": cleaned_ans,
-            "status": status,
-            "submitted_at": datetime.now(timezone.utc).isoformat(),
+    # Normalize question id
+    raw_qid = payload.question_id if payload.question_id is not None else 1
+    try:
+        norm_qid = int(str(raw_qid).replace("q", "").replace("Q", "").strip() or 1)
+    except Exception:
+        norm_qid = 1
+
+    sess = ACTIVE_PROCTORING_SESSIONS.get(payload.session_id) if payload.session_id else None
+    sess_q = sess.get("questions", []) if sess else []
+    company = sess.get("company", "Google") if sess else "Google"
+    role = sess.get("role", "Software Engineer") if sess else "Software Engineer"
+    interviewer_name = sess.get("interviewer_name", "Mr. J. Chen") if sess else "Mr. J. Chen"
+
+    # Find current question and next question context
+    current_q = None
+    next_q = None
+    for idx, q in enumerate(sess_q):
+        if q.get("id") == norm_qid or str(q.get("id")) == str(raw_qid):
+            current_q = q
+            if idx + 1 < len(sess_q):
+                next_q = sess_q[idx + 1]
+            break
+
+    if not current_q:
+        current_q = {
+            "id": norm_qid,
+            "question": payload.question or f"Question {norm_qid}",
+            "category": "Technical Assessment",
+            "domain": "Software Engineering",
+            "expected_key_points": [],
         }
+
+    # Evaluate candidate's actual answer adaptively
+    turn_data = generate_interviewer_turn(
+        question_dict=current_q,
+        candidate_answer=cleaned_ans,
+        turn_count_on_question=1,
+        company=company,
+        role=role,
+        interviewer_name=interviewer_name,
+        next_question_dict=next_q,
+        interview_history=sess.get("interview_history", []) if sess else None,
+    )
+
+    eval_status = turn_data.get("status", status)
 
     # Persist immutable answer record in database
     existing = None
     if payload.session_id:
         existing = db.query(models.InterviewAnswer).filter(
             models.InterviewAnswer.session_id == payload.session_id,
-            models.InterviewAnswer.question_id == payload.question_id,
+            models.InterviewAnswer.question_id == norm_qid,
         ).first()
 
     if existing:
         existing.candidate_answer = cleaned_ans
-        existing.status = status
+        existing.status = eval_status
         existing.submitted_at = datetime.now(timezone.utc)
     else:
         new_ans = models.InterviewAnswer(
             session_id=payload.session_id,
             user_id=user_id,
-            question_id=payload.question_id,
-            question=payload.question,
+            question_id=norm_qid,
+            question=current_q.get("question", payload.question or f"Question {norm_qid}"),
             candidate_answer=cleaned_ans,
-            status=status,
+            status=eval_status,
             submitted_at=datetime.now(timezone.utc),
         )
         db.add(new_ans)
 
     db.commit()
 
-    # Determine next question context if session is active
-    next_q_text = None
-    if payload.session_id and payload.session_id in ACTIVE_PROCTORING_SESSIONS:
-        sess_q = ACTIVE_PROCTORING_SESSIONS[payload.session_id].get("questions", [])
-        for idx, q in enumerate(sess_q):
-            if q.get("id") == payload.question_id and idx + 1 < len(sess_q):
-                next_q_text = sess_q[idx + 1].get("question")
-                break
+    # Track in-memory session if active
+    if sess is not None:
+        if "answers" not in sess:
+            sess["answers"] = {}
+        sess["answers"][norm_qid] = {
+            "question_id": norm_qid,
+            "question": current_q.get("question"),
+            "candidate_answer": cleaned_ans,
+            "status": eval_status,
+            "submitted_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+        eval_record = {
+            "question_id": norm_qid,
+            "question": current_q.get("question"),
+            "candidate_answer": cleaned_ans,
+            "status": eval_status,
+            "verdict": turn_data.get("verdict"),
+            "score": turn_data.get("score", 0),
+            "technical_score": turn_data.get("technical_score", 0),
+            "communication_score": turn_data.get("communication_score", 0),
+            "feedback": turn_data.get("feedback_summary"),
+            "interviewer_reaction": turn_data.get("interviewer_reaction"),
+            "strengths": turn_data.get("strengths", []),
+            "weaknesses": turn_data.get("improvements", []),
+            "missing_concepts": turn_data.get("missing_concepts", []),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+        sess.setdefault("evaluations", {})[norm_qid] = eval_record
+        sess.setdefault("interview_history", []).append(eval_record)
+        if turn_data.get("strengths"):
+            sess.setdefault("strengths", []).extend(turn_data["strengths"])
+        if turn_data.get("improvements"):
+            sess.setdefault("weaknesses", []).extend(turn_data["improvements"])
 
     return schemas.SaveAnswerResponse(
         success=True,
-        question_id=payload.question_id,
-        status=status,
-        message="Answer stored successfully in database.",
-        next_question=next_q_text or "Great! Let's proceed to the next technical topic.",
-        nextQuestion=next_q_text or "Great! Let's proceed to the next technical topic.",
-        ai_feedback="Solid explanation. You clearly articulated the core principles.",
-        aiFeedback="Solid explanation. You clearly articulated the core principles.",
-        is_follow_up=False,
-        completed=False,
+        question_id=norm_qid,
+        status=eval_status,
+        message=turn_data.get("message", "Answer evaluated and stored."),
+        next_question=turn_data.get("next_question"),
+        nextQuestion=turn_data.get("next_question"),
+        ai_feedback=turn_data.get("feedback_summary") or turn_data.get("message"),
+        aiFeedback=turn_data.get("feedback_summary") or turn_data.get("message"),
+        interviewer_reaction=turn_data.get("interviewer_reaction"),
+        score=turn_data.get("score"),
+        verdict=turn_data.get("verdict"),
+        technical_score=turn_data.get("technical_score"),
+        communication_score=turn_data.get("communication_score"),
+        strengths=turn_data.get("strengths", []),
+        improvements=turn_data.get("improvements", []),
+        missing_concepts=turn_data.get("missing_concepts", []),
+        is_follow_up=turn_data.get("is_follow_up", False),
+        completed=turn_data.get("completed", False),
     )
 
 
@@ -863,8 +935,8 @@ def interview_turn_interaction(
             is_hint=True,
             completed=False,
             feedback_summary="Interviewer provided technical hint.",
-            technical_score=75,
-            communication_score=85,
+            technical_score=None,
+            communication_score=None,
         )
 
     # Determine turn count on this question
@@ -877,7 +949,7 @@ def interview_turn_interaction(
     if current_idx >= 0 and current_idx + 1 < len(questions):
         next_q = questions[current_idx + 1]
 
-    # Generate real-time turn feedback
+    # Generate real-time turn feedback with full interview history
     turn_data = generate_interviewer_turn(
         question_dict=current_q,
         candidate_answer=cleaned_ans,
@@ -887,6 +959,7 @@ def interview_turn_interaction(
         role=role,
         interviewer_name=interviewer_name,
         next_question_dict=next_q,
+        interview_history=session.get("interview_history", []),
     )
 
     status = "SKIPPED" if payload.skip_question else turn_data.get("status", "SUBMITTED")
@@ -919,7 +992,7 @@ def interview_turn_interaction(
 
     db.commit()
 
-    # Track in memory session
+    # Track evaluation and history in session state
     if "answers" not in session:
         session["answers"] = {}
     session["answers"][norm_qid] = {
@@ -930,6 +1003,31 @@ def interview_turn_interaction(
         "submitted_at": datetime.now(timezone.utc).isoformat(),
     }
 
+    eval_record = {
+        "question_id": norm_qid,
+        "question": current_q.get("question"),
+        "candidate_answer": full_ans,
+        "status": status,
+        "verdict": turn_data.get("verdict"),
+        "score": turn_data.get("score", 0),
+        "technical_score": turn_data.get("technical_score", 0),
+        "communication_score": turn_data.get("communication_score", 0),
+        "feedback": turn_data.get("feedback_summary"),
+        "interviewer_reaction": turn_data.get("interviewer_reaction"),
+        "strengths": turn_data.get("strengths", []),
+        "weaknesses": turn_data.get("improvements", []),
+        "missing_concepts": turn_data.get("missing_concepts", []),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+    session.setdefault("evaluations", {})[norm_qid] = eval_record
+    session.setdefault("interview_history", []).append(eval_record)
+    if turn_data.get("strengths"):
+        session.setdefault("strengths", []).extend(turn_data["strengths"])
+    if turn_data.get("improvements"):
+        session.setdefault("weaknesses", []).extend(turn_data["improvements"])
+    if turn_data.get("difficulty_adjustment"):
+        session["current_difficulty"] = turn_data["difficulty_adjustment"]
+
     next_q_schema = None
     if next_q and not turn_data.get("is_follow_up"):
         next_q_schema = schemas.InterviewQuestion(**next_q)
@@ -938,6 +1036,7 @@ def interview_turn_interaction(
         success=True,
         session_id=payload.session_id,
         question_id=norm_qid,
+        status=status,
         message=turn_data["message"],
         reply=turn_data["message"],
         interviewer_reaction=turn_data.get("interviewer_reaction"),
@@ -948,8 +1047,13 @@ def interview_turn_interaction(
         is_hint=False,
         completed=turn_data.get("completed", False),
         feedback_summary=turn_data.get("feedback_summary"),
-        technical_score=turn_data.get("technical_score", 85),
-        communication_score=turn_data.get("communication_score", 85),
+        score=turn_data.get("score"),
+        verdict=turn_data.get("verdict"),
+        technical_score=turn_data.get("technical_score"),
+        communication_score=turn_data.get("communication_score"),
+        strengths=turn_data.get("strengths", []),
+        improvements=turn_data.get("improvements", []),
+        missing_concepts=turn_data.get("missing_concepts", []),
     )
 
 
@@ -1115,13 +1219,113 @@ def submit_mock_interview(
             "test_results": getattr(a, "test_results", None) if ans_status != "SKIPPED" else None,
         })
 
-    # 2. Run Deferred Evaluation across ALL answers
-    eval_result = evaluate_interview_submission(
-        company=effective_company,
-        role=effective_role,
-        difficulty=effective_difficulty,
-        answers=answers_dicts,
-    )
+    # 2. Run Evaluation: use stored per-question evaluations from active session if available
+    active_sess = ACTIVE_PROCTORING_SESSIONS.get(payload.session_id) if payload.session_id else None
+    stored_evals = active_sess.get("evaluations", {}) if active_sess else {}
+    all_evaluated = len(answers_dicts) > 0 and all(a["question_id"] in stored_evals for a in answers_dicts)
+
+    if all_evaluated:
+        merged_detailed = []
+        for idx, a in enumerate(answers_dicts):
+            q_id = a["question_id"]
+            ev = stored_evals[q_id]
+            q_score = int(ev.get("score", 0))
+            merged_detailed.append({
+                "question_id": q_id,
+                "question": a["question"],
+                "candidate_answer": a["answer"],
+                "status": ev.get("status", a.get("status", "SUBMITTED")),
+                "score": q_score,
+                "feedback": ev.get("feedback") or ev.get("interviewer_reaction") or "No feedback available.",
+                "suggested_answer_points": ev.get("suggested_answer_points", []),
+                "identified_keywords": ev.get("identified_keywords", []),
+                "technical_accuracy": int(ev.get("technical_score", q_score)),
+                "communication_clarity": int(ev.get("communication_score", q_score)),
+                "completeness": q_score,
+                "technical_depth": int(ev.get("technical_score", q_score)),
+                "relevance": q_score if q_score > 0 else 0,
+                "missing_concepts": ev.get("missing_concepts", []),
+                "ideal_answer": ev.get("ideal_answer"),
+            })
+
+        num_answers = len(answers_dicts)
+        total_possible = num_answers * 100
+        total_score_sum = sum(df["score"] for df in merged_detailed)
+        authoritative_final_score = round(total_score_sum / total_possible * 100) if total_possible > 0 else 0
+        authoritative_final_score = max(0, min(100, authoritative_final_score))
+
+        skipped_count = sum(1 for df in merged_detailed if df.get("status") in ("SKIPPED", "EMPTY", "NO_ANSWER"))
+        correct_count = sum(1 for df in merged_detailed if df.get("score", 0) >= 70 and df.get("status") not in ("SKIPPED", "EMPTY", "NO_ANSWER"))
+        partially_correct_count = sum(1 for df in merged_detailed if 30 <= df.get("score", 0) < 70 and df.get("status") not in ("SKIPPED", "EMPTY", "NO_ANSWER"))
+        incorrect_count = sum(1 for df in merged_detailed if df.get("score", 0) < 30 and df.get("status") not in ("SKIPPED", "EMPTY", "NO_ANSWER"))
+        answered_count = num_answers - skipped_count
+
+        avg_tech = round(sum(df.get("technical_accuracy", 0) for df in merged_detailed) / num_answers) if num_answers > 0 else 0
+        avg_comm = round(sum(df.get("communication_clarity", 0) for df in merged_detailed) / num_answers) if num_answers > 0 else 0
+        avg_prob = round(sum(df.get("technical_depth", 0) for df in merged_detailed) / num_answers) if num_answers > 0 else 0
+
+        grade = (
+            "A+ (Strong Hire • Outstanding)" if authoritative_final_score >= 90
+            else "A (Hire • Strong Performance)" if authoritative_final_score >= 80
+            else "B+ (Leaning Hire • Good Fundamentals)" if authoritative_final_score >= 70
+            else "B- (Borderline • Needs Practice)" if authoritative_final_score >= 50
+            else "C (Needs Significant Preparation)" if authoritative_final_score >= 30
+            else "F (Incomplete / Unsatisfactory • 0-29%)"
+        )
+
+        all_strengths = list(dict.fromkeys(active_sess.get("strengths", []))) if active_sess else []
+        all_weaknesses = list(dict.fromkeys(active_sess.get("weaknesses", []))) if active_sess else []
+        all_missing = []
+        for df in merged_detailed:
+            all_missing.extend(df.get("missing_concepts", []))
+        all_missing = list(dict.fromkeys(all_missing))
+
+        eval_result = {
+            "overall_score": authoritative_final_score,
+            "technical_score": avg_tech,
+            "communication_score": avg_comm,
+            "problem_solving_score": avg_prob,
+            "grade": grade,
+            "total_questions": num_answers,
+            "answered_count": answered_count,
+            "skipped_count": skipped_count,
+            "correct_count": correct_count,
+            "partially_correct_count": partially_correct_count,
+            "incorrect_count": incorrect_count,
+            "overall_summary": f"Candidate completed {num_answers} questions with final score {authoritative_final_score}/100 ({grade}). Evaluated live across adaptive turns.",
+            "strengths": all_strengths,
+            "improvements": all_weaknesses,
+            "missing_concepts": all_missing,
+            "identified_keywords": [],
+            "detailed_feedback": merged_detailed,
+            "analysis": {
+                "overall_performance": {
+                    "overall_score": authoritative_final_score,
+                    "performance_level": grade,
+                    "completion_rate": f"{round((answered_count / num_answers) * 100)}%" if num_answers > 0 else "0%",
+                    "total_questions": num_answers,
+                    "answered_count": answered_count,
+                    "skipped_count": skipped_count,
+                },
+                "technical_performance": {
+                    "technical_score": avg_tech,
+                    "problem_solving_score": avg_prob,
+                },
+                "communication": {
+                    "communication_score": avg_comm,
+                },
+                "strengths": all_strengths,
+                "weaknesses": all_weaknesses,
+                "missing_concepts": all_missing,
+            },
+        }
+    else:
+        eval_result = evaluate_interview_submission(
+            company=effective_company,
+            role=effective_role,
+            difficulty=effective_difficulty,
+            answers=answers_dicts,
+        )
 
     final_score = int(eval_result.get("overall_score", 0))
     tech_score = int(eval_result.get("technical_score", final_score))

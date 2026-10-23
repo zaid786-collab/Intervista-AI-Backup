@@ -374,6 +374,14 @@ class SaveAnswerResponse(BaseModel):
     nextQuestion: Optional[str] = None
     ai_feedback: Optional[str] = None
     aiFeedback: Optional[str] = None
+    interviewer_reaction: Optional[str] = None
+    score: Optional[int] = None
+    verdict: Optional[str] = None
+    technical_score: Optional[int] = None
+    communication_score: Optional[int] = None
+    strengths: Optional[List[str]] = []
+    improvements: Optional[List[str]] = []
+    missing_concepts: Optional[List[str]] = []
     is_follow_up: Optional[bool] = False
     completed: Optional[bool] = False
 
@@ -397,6 +405,7 @@ class InterviewTurnResponse(BaseModel):
     success: bool
     session_id: str
     question_id: Optional[Union[int, str]] = 1
+    status: Optional[str] = "SUBMITTED"
     message: str
     reply: Optional[str] = None
     interviewer_reaction: Optional[str] = None
@@ -407,8 +416,13 @@ class InterviewTurnResponse(BaseModel):
     is_hint: bool = False
     completed: bool = False
     feedback_summary: Optional[str] = None
-    technical_score: Optional[int] = 85
-    communication_score: Optional[int] = 85
+    score: Optional[int] = None
+    verdict: Optional[str] = None
+    technical_score: Optional[int] = None
+    communication_score: Optional[int] = None
+    strengths: Optional[List[str]] = []
+    improvements: Optional[List[str]] = []
+    missing_concepts: Optional[List[str]] = []
 
 
 class SubmitInterviewRequest(BaseModel):
@@ -435,11 +449,11 @@ class QuestionFeedback(BaseModel):
     feedback: str
     suggested_answer_points: List[str]
     identified_keywords: Optional[List[str]] = []
-    technical_accuracy: Optional[int] = 85
-    communication_clarity: Optional[int] = 85
-    completeness: Optional[int] = 85
-    technical_depth: Optional[int] = 85
-    relevance: Optional[int] = 85
+    technical_accuracy: Optional[int] = None
+    communication_clarity: Optional[int] = None
+    completeness: Optional[int] = None
+    technical_depth: Optional[int] = None
+    relevance: Optional[int] = None
     missing_concepts: Optional[List[str]] = []
     ideal_answer: Optional[str] = None
 
