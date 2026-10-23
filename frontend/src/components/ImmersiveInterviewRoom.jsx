@@ -129,7 +129,6 @@ export default function ImmersiveInterviewRoom({
   }, [isMicMuted]);
 
   const trackerRef = useRef(null);
-  const textareaRef = useRef(null);
   const proctorRef = useRef(null);
 
   const [telemetryHud, setTelemetryHud] = useState({
