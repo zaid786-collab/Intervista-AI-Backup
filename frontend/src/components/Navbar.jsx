@@ -54,9 +54,7 @@ export default function Navbar({
     { label: 'HOME', page: 'home', id: 'hero', path: '/' },
     { label: 'DASHBOARD', page: 'dashboard', id: 'dashboard', path: '/dashboard' },
     { label: 'COMPANIES', page: 'companies', id: 'companies', path: '/companies' },
-    { label: 'RESOURCES', page: 'resources', id: 'resources', path: '/resources' },
     { label: 'PLANS', page: 'plans', id: 'plans', path: '/plans' },
-    ...(currentUser ? [{ label: 'MY PROFILE', page: 'profile', id: 'profile', path: '/profile' }] : []),
     ...(currentUser?.is_admin ? [{ label: 'ADMIN', page: 'admin', id: 'admin', path: '/admin' }] : []),
     { label: 'CONTACT', id: 'contact', isContact: true },
   ];
