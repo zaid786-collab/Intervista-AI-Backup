@@ -99,6 +99,7 @@ export default function Hero({ onStartInterview, onWatchDemo, onNavigate }) {
 
             {/* 3 Value Propositions */}
             <div
+              className="hero-value-props"
               style={{
                 display: 'flex',
                 alignItems: 'center',
@@ -148,9 +149,23 @@ export default function Hero({ onStartInterview, onWatchDemo, onNavigate }) {
 
       <style>{`
         @media (max-width: 992px) {
+          #hero {
+            padding-top: calc(var(--nav-height) + 3.25rem) !important;
+            padding-bottom: 5rem !important;
+          }
           .hero-grid {
             grid-template-columns: 1fr !important;
             gap: 3.5rem !important;
+          }
+        }
+        @media (max-width: 640px) {
+          #hero {
+            padding-top: calc(var(--nav-height) + 2rem) !important;
+            padding-bottom: 4rem !important;
+          }
+          .hero-value-props {
+            gap: 1.15rem !important;
+            padding-top: 1.5rem !important;
           }
         }
       `}</style>

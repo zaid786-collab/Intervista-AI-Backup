@@ -7,12 +7,12 @@ from sqlalchemy.orm import declarative_base, sessionmaker
 
 reload_env()
 
-PROJECT_ROOT = Path(__file__).resolve().parent
-DEFAULT_DATABASE_PATH = PROJECT_ROOT / "Backend" / "intervista_ai_v2.db"
+BACKEND_DIR = Path(__file__).resolve().parent.parent
+DEFAULT_DATABASE_PATH = BACKEND_DIR / "intervista_ai_v2.db"
 configured_database_url = os.getenv("DATABASE_URL")
 
 if configured_database_url and configured_database_url.startswith("sqlite:///./"):
-    database_path = PROJECT_ROOT / configured_database_url.removeprefix("sqlite:///./")
+    database_path = BACKEND_DIR / configured_database_url.removeprefix("sqlite:///./")
     DATABASE_URL = f"sqlite:///{database_path}"
 else:
     DATABASE_URL = configured_database_url or f"sqlite:///{DEFAULT_DATABASE_PATH}"

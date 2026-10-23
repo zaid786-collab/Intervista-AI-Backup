@@ -260,11 +260,14 @@ export async function apiStartInterview(payload) {
   const role = payload?.role || 'Software Engineer';
   const questions = questionsByRole[role] || questionsByRole['Software Engineer'];
 
+  const welcomeMsg = `Hello! I am your AI Technical Interviewer today. We are conducting a ${payload?.interviewType || 'Technical Interview'} for the ${role} position at ${payload?.company || 'our company'}. Let's begin!`;
+
   return {
     success: true,
     sessionId,
     session_id: sessionId,
-    welcomeMessage: `Hello! I am your AI Technical Interviewer today. We are conducting a ${payload?.interviewType || 'Technical Interview'} for the ${role} position at ${payload?.company || 'our company'}. Let's begin!`,
+    welcomeMessage: welcomeMsg,
+    message: `${welcomeMsg}\n\nTo begin: ${questions[0]}`,
     currentQuestion: questions[0],
     questions,
     totalQuestions: questions.length,

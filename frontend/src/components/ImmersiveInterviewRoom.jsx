@@ -116,6 +116,7 @@ export default function ImmersiveInterviewRoom({
   const transcriptScrollRef = useRef(null);
   const interviewerFinishedSpeakingAtRef = useRef(Date.now());
   const isMicMutedRef = useRef(isMicMuted);
+  const textareaRef = useRef(null);
   useEffect(() => {
     isMicMutedRef.current = isMicMuted;
   }, [isMicMuted]);
@@ -501,15 +502,17 @@ export default function ImmersiveInterviewRoom({
       setGeminiInteractionId(response.geminiInteractionId);
       setIsDemoMode(!!response.isDemoMode);
 
-      const openingMsg = response.message;
+      const openingMsg = response?.message || response?.welcomeMessage || 'Welcome to your interview!';
       setMessages([{ role: 'interviewer', text: openingMsg, timestamp: Date.now() }]);
 
       // Extract question part for the floating question card
-      const questionClean = openingMsg
-        .replace(/Hello!.*?\n\n/s, '')
-        .replace(/^To begin:\s*/i, '')
-        .trim();
-      setCurrentQuestionText(questionClean || openingMsg);
+      const questionClean = typeof openingMsg === 'string'
+        ? openingMsg
+            .replace(/Hello!.*?\n\n/s, '')
+            .replace(/^To begin:\s*/i, '')
+            .trim()
+        : response?.currentQuestion || '';
+      setCurrentQuestionText(questionClean || response?.currentQuestion || openingMsg);
       setQuestionIndex(1);
 
       setSessionPhase('active');

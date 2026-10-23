@@ -57,7 +57,7 @@ export default function Navbar({
     { label: 'RESOURCES', page: 'resources', id: 'resources', path: '/resources' },
     { label: 'PLANS', page: 'plans', id: 'plans', path: '/plans' },
     ...(currentUser?.is_admin ? [{ label: 'ADMIN', page: 'admin', id: 'admin', path: '/admin' }] : []),
-    { label: 'CONTACT US', id: 'contact', isContact: true },
+    { label: 'CONTACT', id: 'contact', isContact: true },
   ];
 
   useEffect(() => {
@@ -349,17 +349,20 @@ export default function Navbar({
             else if (onNavigateToHome) onNavigateToHome();
             else window.scrollTo({ top: 0, behavior: 'smooth' });
           }}
+          className="brand-logo-link"
           style={{
             display: 'flex',
             alignItems: 'center',
-            gap: '0.12rem',
+            gap: '0.55rem',
             textDecoration: 'none',
             color: 'var(--text-primary)',
             cursor: 'pointer',
+            flexShrink: 0,
           }}
         >
-          {/* Official Intervista Emblem ('I' with shining star) - acts as first letter 'I' */}
+          {/* Official Intervista Emblem */}
           <div
+            className="brand-emblem-wrap"
             style={{
               position: 'relative',
               height: '32px',
@@ -372,7 +375,7 @@ export default function Navbar({
             <img
               ref={logoImgRef}
               src="/logo-emblem.png"
-              alt="I"
+              alt="Intervista Emblem"
               style={{
                 height: '32px',
                 width: 'auto',
@@ -384,24 +387,43 @@ export default function Navbar({
               }}
             />
           </div>
-          <span
-            style={{
-              fontFamily: "'Cinzel', 'Playfair Display', serif",
-              fontSize: '1.32rem',
-              fontWeight: 700,
-              letterSpacing: '0.12em',
-              textTransform: 'uppercase',
-              background: 'linear-gradient(180deg, #FFFFFF 0%, #F6ECD8 22%, #DDB86C 60%, #9B7023 100%)',
-              WebkitBackgroundClip: 'text',
-              WebkitTextFillColor: 'transparent',
-              filter: 'drop-shadow(0 0 12px rgba(217, 183, 122, 0.35))',
-              display: 'inline-block',
-              lineHeight: 1,
-              marginTop: '4px',
-            }}
-          >
-            Ntervista
-          </span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+            <span
+              className="brand-logo-text"
+              style={{
+                fontFamily: "'Cinzel', 'Playfair Display', serif",
+                fontSize: '1.25rem',
+                fontWeight: 700,
+                letterSpacing: '0.12em',
+                textTransform: 'uppercase',
+                background: 'linear-gradient(180deg, #FFFFFF 0%, #F6ECD8 22%, #DDB86C 60%, #9B7023 100%)',
+                WebkitBackgroundClip: 'text',
+                WebkitTextFillColor: 'transparent',
+                filter: 'drop-shadow(0 0 12px rgba(217, 183, 122, 0.35))',
+                display: 'inline-block',
+                lineHeight: 1,
+              }}
+            >
+              INTERVISTA
+            </span>
+            <span
+              className="brand-logo-badge"
+              style={{
+                fontSize: '0.62rem',
+                fontWeight: 800,
+                letterSpacing: '0.08em',
+                padding: '0.15rem 0.4rem',
+                borderRadius: '6px',
+                background: 'rgba(217, 183, 122, 0.14)',
+                border: '1px solid rgba(217, 183, 122, 0.32)',
+                color: 'var(--accent-gold)',
+                lineHeight: 1,
+                display: 'inline-block',
+              }}
+            >
+              AI
+            </span>
+          </div>
         </a>
 
         {/* Desktop GSAP PillNav Container */}
@@ -804,27 +826,74 @@ export default function Navbar({
           className="mobile-toggle"
           style={{
             display: 'none',
-            background: 'none',
-            border: 'none',
-            color: 'var(--text-primary)',
+            background: 'rgba(255, 255, 255, 0.05)',
+            border: '1px solid rgba(217, 183, 122, 0.3)',
+            borderRadius: '10px',
+            color: 'var(--accent-gold)',
             cursor: 'pointer',
-            padding: '0.5rem',
+            padding: '0.45rem',
+            transition: 'all 0.2s ease',
           }}
         >
-          {mobileMenuOpen ? <X size={24} /> : <Menu size={24} />}
+          {mobileMenuOpen ? <X size={22} /> : <Menu size={22} />}
         </button>
       </div>
+
+      {/* Backdrop overlay for mobile menu */}
+      {mobileMenuOpen && (
+        <div
+          onClick={() => {
+            const menu = mobileMenuRef.current;
+            if (menu) {
+              gsap.to(menu, {
+                opacity: 0,
+                y: -15,
+                duration: 0.2,
+                ease: 'power3.in',
+                onComplete: () => {
+                  gsap.set(menu, { display: 'none' });
+                  setMobileMenuOpen(false);
+                },
+              });
+            } else {
+              setMobileMenuOpen(false);
+            }
+          }}
+          style={{
+            position: 'fixed',
+            top: 'var(--nav-height, 76px)',
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.75)',
+            backdropFilter: 'blur(8px)',
+            WebkitBackdropFilter: 'blur(8px)',
+            zIndex: 99,
+          }}
+          aria-hidden="true"
+        />
+      )}
 
       {/* Mobile Menu Dropdown with GSAP transition */}
       <div
         ref={mobileMenuRef}
+        className="mobile-nav-drawer"
         style={{
           display: 'none',
-          backgroundColor: '#0F0F0F',
-          borderBottom: '1px solid var(--border-card)',
-          padding: '1.5rem',
+          position: 'fixed',
+          top: 'var(--nav-height, 76px)',
+          left: 0,
+          right: 0,
+          maxHeight: 'calc(100vh - var(--nav-height, 76px))',
+          maxHeight: 'calc(100dvh - var(--nav-height, 76px))',
+          overflowY: 'auto',
+          backgroundColor: 'rgba(12, 12, 12, 0.98)',
+          borderBottom: '1px solid rgba(217, 183, 122, 0.25)',
+          padding: '1.25rem 1.25rem 2rem 1.25rem',
           flexDirection: 'column',
-          gap: '1rem',
+          gap: '0.65rem',
+          zIndex: 100,
+          boxShadow: '0 24px 48px rgba(0, 0, 0, 0.85), 0 0 24px rgba(217, 183, 122, 0.1)',
         }}
       >
         {navItems.map((item) => {
@@ -845,12 +914,14 @@ export default function Navbar({
                 fontSize: '0.92rem',
                 fontWeight: 600,
                 letterSpacing: '0.08em',
-                padding: '0.4rem 0.75rem',
-                borderRadius: '8px',
-                backgroundColor: isActive ? 'rgba(217, 183, 122, 0.08)' : 'transparent',
+                padding: '0.65rem 0.95rem',
+                borderRadius: '10px',
+                backgroundColor: isActive ? 'rgba(217, 183, 122, 0.12)' : 'rgba(255, 255, 255, 0.02)',
+                border: isActive ? '1px solid rgba(217, 183, 122, 0.3)' : '1px solid transparent',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'space-between',
+                transition: 'all 0.2s ease',
               }}
             >
               <span>{item.label}</span>
@@ -861,14 +932,14 @@ export default function Navbar({
                     height: '6px',
                     borderRadius: '50%',
                     backgroundColor: 'var(--accent-gold)',
-                    boxShadow: '0 0 6px var(--accent-gold)',
+                    boxShadow: '0 0 8px var(--accent-gold)',
                   }}
                 />
               )}
             </a>
           );
         })}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', marginTop: '0.5rem' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', marginTop: '0.85rem', paddingTop: '0.85rem', borderTop: '1px solid rgba(255, 255, 255, 0.08)' }}>
           {currentUser ? (
             <div
               onClick={() => {
@@ -880,7 +951,7 @@ export default function Navbar({
                 display: 'flex',
                 alignItems: 'center',
                 gap: '0.65rem',
-                padding: '0.6rem 0.85rem',
+                padding: '0.65rem 0.95rem',
                 backgroundColor: 'rgba(217, 183, 122, 0.1)',
                 border: '1px solid rgba(217, 183, 122, 0.3)',
                 borderRadius: '12px',
@@ -927,7 +998,7 @@ export default function Navbar({
                   onOpenLogin();
                 }}
                 className="btn-ghost-outline"
-                style={{ flex: 1 }}
+                style={{ flex: 1, padding: '0.6rem 1rem' }}
               >
                 Log In
               </button>
@@ -938,7 +1009,7 @@ export default function Navbar({
                   else onOpenLogin();
                 }}
                 className="btn-ghost-outline"
-                style={{ flex: 1, borderColor: 'var(--accent-gold)', color: 'var(--accent-gold)' }}
+                style={{ flex: 1, padding: '0.6rem 1rem', borderColor: 'var(--accent-gold)', color: 'var(--accent-gold)' }}
               >
                 Sign Up
               </button>
@@ -950,7 +1021,7 @@ export default function Navbar({
               onStartInterview();
             }}
             className="btn-primary"
-            style={{ width: '100%' }}
+            style={{ width: '100%', padding: '0.75rem 1.25rem', justifyContent: 'center' }}
           >
             Start Interview
             <ArrowRight size={15} />
@@ -959,12 +1030,63 @@ export default function Navbar({
       </div>
 
       <style>{`
-        @media (max-width: 960px) {
+        /* Compact PillNav for medium screens between 1025px and 1220px */
+        @media (max-width: 1220px) and (min-width: 1025px) {
+          .desktop-pill-nav {
+            height: 40px !important;
+            padding: 0 4px !important;
+          }
+          .desktop-pill-nav a.pill-nav-item {
+            padding: 0 10px !important;
+            height: 30px !important;
+          }
+          .desktop-pill-nav .pill-label,
+          .desktop-pill-nav .pill-label-hover {
+            font-size: 0.72rem !important;
+            letter-spacing: 0.05em !important;
+          }
+          .desktop-actions {
+            gap: 0.5rem !important;
+          }
+          .desktop-actions .btn-ghost-outline,
+          .desktop-actions .btn-primary {
+            padding: 0.46rem 0.95rem !important;
+            font-size: 0.82rem !important;
+          }
+        }
+
+        /* Mobile & Tablet Breakpoint */
+        @media (max-width: 1024px) {
           .desktop-pill-nav, .desktop-actions {
             display: none !important;
           }
           .mobile-toggle {
-            display: block !important;
+            display: flex !important;
+            align-items: center;
+            justify-content: center;
+          }
+        }
+
+        @media (max-width: 520px) {
+          .brand-logo-text {
+            font-size: 1.1rem !important;
+            letter-spacing: 0.08em !important;
+          }
+          .brand-logo-badge {
+            font-size: 0.55rem !important;
+            padding: 0.12rem 0.3rem !important;
+          }
+          .brand-emblem-wrap img {
+            height: 26px !important;
+          }
+        }
+
+        @media (max-width: 360px) {
+          .brand-logo-text {
+            font-size: 0.96rem !important;
+          }
+          .brand-logo-badge {
+            display: none !important;
           }
         }
       `}</style>

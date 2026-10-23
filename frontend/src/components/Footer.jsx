@@ -55,7 +55,7 @@ export default function Footer({ onOpenLegal, onNavigate, onOpenContact, onSelec
           className="footer-top-row"
         >
           {/* Brand */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.12rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.55rem', flexWrap: 'wrap' }}>
             <div
               style={{
                 position: 'relative',
@@ -68,7 +68,7 @@ export default function Footer({ onOpenLegal, onNavigate, onOpenContact, onSelec
             >
               <img
                 src="/logo-emblem.png"
-                alt="I"
+                alt="Intervista Emblem"
                 style={{
                   height: '28px',
                   width: 'auto',
@@ -78,29 +78,47 @@ export default function Footer({ onOpenLegal, onNavigate, onOpenContact, onSelec
                 }}
               />
             </div>
-            <span
-              style={{
-                fontFamily: "'Cinzel', 'Playfair Display', serif",
-                fontSize: '1.22rem',
-                fontWeight: 700,
-                letterSpacing: '0.11em',
-                textTransform: 'uppercase',
-                background: 'linear-gradient(180deg, #FFFFFF 0%, #F6ECD8 22%, #DDB86C 60%, #9B7023 100%)',
-                WebkitBackgroundClip: 'text',
-                WebkitTextFillColor: 'transparent',
-                filter: 'drop-shadow(0 0 10px rgba(217, 183, 122, 0.35))',
-                display: 'inline-block',
-                lineHeight: 1,
-                marginTop: '3px',
-              }}
-            >
-              Ntervista
-            </span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+              <span
+                style={{
+                  fontFamily: "'Cinzel', 'Playfair Display', serif",
+                  fontSize: '1.22rem',
+                  fontWeight: 700,
+                  letterSpacing: '0.11em',
+                  textTransform: 'uppercase',
+                  background: 'linear-gradient(180deg, #FFFFFF 0%, #F6ECD8 22%, #DDB86C 60%, #9B7023 100%)',
+                  WebkitBackgroundClip: 'text',
+                  WebkitTextFillColor: 'transparent',
+                  filter: 'drop-shadow(0 0 10px rgba(217, 183, 122, 0.35))',
+                  display: 'inline-block',
+                  lineHeight: 1,
+                  marginTop: '1px',
+                }}
+              >
+                INTERVISTA
+              </span>
+              <span
+                style={{
+                  fontSize: '0.6rem',
+                  fontWeight: 800,
+                  letterSpacing: '0.08em',
+                  padding: '0.12rem 0.38rem',
+                  borderRadius: '5px',
+                  background: 'rgba(217, 183, 122, 0.14)',
+                  border: '1px solid rgba(217, 183, 122, 0.32)',
+                  color: 'var(--accent-gold)',
+                  lineHeight: 1,
+                  display: 'inline-block',
+                }}
+              >
+                AI
+              </span>
+            </div>
             <span
               style={{
                 color: 'var(--text-tertiary)',
                 fontSize: '0.82rem',
-                marginLeft: '0.4rem',
+                marginLeft: '0.3rem',
               }}
             >
               · Voice-first AI mock interview practice
