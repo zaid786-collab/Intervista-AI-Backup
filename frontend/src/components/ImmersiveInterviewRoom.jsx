@@ -192,6 +192,7 @@ export default function ImmersiveInterviewRoom({
   const interviewerFinishedSpeakingAtRef = useRef(Date.now());
   const isMicMutedRef = useRef(false);
   const currentRecognitionFinalRef = useRef('');
+  const lastSpeechErrorRef = useRef(null);
   const sessionPhaseRef = useRef(sessionPhase);
   const textareaRef = useRef(null);
 
@@ -432,9 +433,11 @@ export default function ImmersiveInterviewRoom({
         setIsVoiceListening(true);
         isRecognitionActiveRef.current = true;
         setMicPermissionError(null);
+        lastSpeechErrorRef.current = null;
       };
 
       recognition.onresult = (event) => {
+        lastSpeechErrorRef.current = null;
         let currentSessionFinal = '';
         let currentSessionInterim = '';
 
@@ -462,6 +465,7 @@ export default function ImmersiveInterviewRoom({
       };
 
       recognition.onerror = (err) => {
+        lastSpeechErrorRef.current = err.error;
         if (err.error !== 'no-speech' && err.error !== 'aborted') {
           console.warn('Speech recognition status:', err.error);
         }
@@ -484,9 +488,11 @@ export default function ImmersiveInterviewRoom({
           sessionPhaseRef.current === 'active' &&
           !isMicMutedRef.current
         ) {
+          // If the last error was 'network' or blocked, use exponential backoff (2.5s) to prevent spamming
+          const restartDelay = lastSpeechErrorRef.current === 'network' ? 2500 : 200;
           restartTimeoutRef.current = setTimeout(() => {
             startSpeechRecognition();
-          }, 180);
+          }, restartDelay);
         }
       };
 
