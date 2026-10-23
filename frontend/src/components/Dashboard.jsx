@@ -6,7 +6,6 @@ import InterviewDNAView from './InterviewDNAView';
 import ResumeRealityCheckView from './ResumeRealityCheckView';
 import CareerReadinessMapView from './CareerReadinessMapView';
 import ProfilePage from './ProfilePage';
-import AICoachWidget from './AICoachWidget';
 import { useAuth } from '../context/useAuth';
 import { apiGetSessions, apiGetReport } from '../utils/api';
 import {
@@ -932,15 +931,7 @@ export default function Dashboard({
                 </div>
               </div>
 
-              {/* Feature 1: AI Coach (Weakness Memory & Trajectory Tracker) */}
-              <div style={{ marginBottom: '2.5rem' }}>
-                <AICoachWidget
-                  onStartInterview={(role) => {
-                    setActiveNav('Mock Interview');
-                    window.scrollTo({ top: 0, behavior: 'smooth' });
-                  }}
-                />
-              </div>
+
 
           {/* =========================================================================
               C. YEARLY PRACTICE ACTIVITY HEATMAP

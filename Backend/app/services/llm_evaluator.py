@@ -1433,6 +1433,193 @@ def evaluate_with_gemini(
 
     return None
 
+
+def evaluate_with_grok(
+    company: str,
+    role: str,
+    difficulty: str,
+    answers: List[Dict[str, Any]],
+    api_key: str,
+) -> Optional[Dict[str, Any]]:
+    """Evaluates candidate answers strictly using Grok (xAI) or Groq API with zero-credit gating."""
+    pre_evaluated = {}
+    answers_to_send_to_grok = []
+
+    for idx, item in enumerate(answers):
+        q_id = item.get("question_id", idx + 1)
+        q_text = item.get("question", "")
+        a_text = str(item.get("answer", "")).strip()
+        status_hint = item.get("status")
+
+        gate_res = evaluate_zero_credit_gate(
+            question=q_text,
+            answer=a_text,
+            status=status_hint,
+            question_id=q_id,
+        )
+        if gate_res:
+            pre_evaluated[q_id] = gate_res
+        else:
+            answers_to_send_to_grok.append((q_id, item))
+
+    if len(answers_to_send_to_grok) == 0:
+        return evaluate_with_local_rubric(company, role, difficulty, answers)
+
+    is_groq = api_key.startswith("gsk_")
+    if is_groq:
+        url = "https://api.groq.com/openai/v1/chat/completions"
+        model_name = "llama-3.3-70b-versatile"
+    else:
+        url = "https://api.x.ai/v1/chat/completions"
+        model_name = "grok-2-latest"
+
+    questions_and_answers_text = ""
+    for q_id, item in answers_to_send_to_grok:
+        questions_and_answers_text += f"\n--- Question (ID: {q_id}) ---\n"
+        questions_and_answers_text += f"Question: {item.get('question')}\n"
+        questions_and_answers_text += f"Candidate Answer: {item.get('answer')}\n"
+
+    system_instruction = (
+        f"You are a strict, professional Staff Technical Interviewer evaluating candidate answers for {company}'s {role} position ({difficulty} difficulty).\n\n"
+        "CRITICAL EVALUATION RULES:\n"
+        "1. ZERO-CREDIT FOR IRRELEVANT OR NON-ANSWERS:\n"
+        "   - If the candidate's answer is completely off-topic, random, or discusses personal topics (e.g. cricket, sports, weather, movies, food) unrelated to the question, give score = 0, status = 'IRRELEVANT', relevance = 0.\n"
+        "   - If the answer is keyword stuffing, give score = 0, status = 'IRRELEVANT'.\n"
+        "   - If the candidate says they do not know, give score = 0, status = 'NO_ANSWER'.\n"
+        "   - If the answer contradicts core technical facts, penalize heavily (score 0-10, status = 'INCORRECT').\n"
+        "   - Zero credit must be strictly 0/100.\n\n"
+        "2. STRICT 5-DIMENSION RUBRIC FOR LEGITIMATE ATTEMPTS:\n"
+        "   - Relevance (25% weight): Directly addresses this question? If relevance < 20, overall score MUST be 0.\n"
+        "   - Technical Accuracy (25% weight): Correct concepts, APIs, and design.\n"
+        "   - Completeness (20% weight): Covered edge cases and scale considerations.\n"
+        "   - Technical Depth (15% weight): Internals, memory, trade-offs.\n"
+        "   - Communication Clarity (15% weight): Structured, concise articulation.\n\n"
+        "Return ONLY a valid JSON object conforming strictly to this format (no markdown fences, no explanatory text):\n"
+        "{\n"
+        '  "detailed_feedback": [\n'
+        "    {\n"
+        '      "question_id": 1,\n'
+        '      "score": 0,\n'
+        '      "status": "IRRELEVANT",\n'
+        '      "relevance": 0,\n'
+        '      "technical_accuracy": 0,\n'
+        '      "completeness": 0,\n'
+        '      "technical_depth": 0,\n'
+        '      "communication_clarity": 0,\n'
+        '      "feedback": "Strict feedback on what was correct or why zero credit was assigned.",\n'
+        '      "suggested_improvement": "Actionable tip.",\n'
+        '      "identified_keywords": [],\n'
+        '      "missing_concepts": ["core concept 1", "core concept 2"]\n'
+        "    }\n"
+        "  ],\n"
+        '  "strengths": ["Demonstrated strength 1", "Demonstrated strength 2"],\n'
+        '  "improvements": ["Primary area to improve 1", "Primary area to improve 2"],\n'
+        '  "missing_concepts": ["Missing concept 1", "Missing concept 2"]\n'
+        "}"
+    )
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "model": model_name,
+        "messages": [
+            {"role": "system", "content": system_instruction},
+            {"role": "user", "content": f"Please evaluate these candidate interview responses:\n{questions_and_answers_text}"},
+        ],
+        "temperature": 0.2,
+    }
+
+    try:
+        response = requests.post(url, headers=headers, json=payload, timeout=30)
+        if response.status_code == 200:
+            data = response.json()
+            raw_text = data["choices"][0]["message"]["content"].strip()
+            if raw_text.startswith("```json"):
+                raw_text = raw_text[7:]
+            if raw_text.startswith("```"):
+                raw_text = raw_text[3:]
+            if raw_text.endswith("```"):
+                raw_text = raw_text[:-3]
+            parsed = json.loads(raw_text.strip())
+
+            grok_feedback_map = {
+                df.get("question_id"): df for df in parsed.get("detailed_feedback", [])
+            }
+
+            merged_detailed = []
+            for idx, item in enumerate(answers):
+                q_id = item.get("question_id", idx + 1)
+                if q_id in pre_evaluated:
+                    merged_detailed.append(pre_evaluated[q_id])
+                elif q_id in grok_feedback_map:
+                    gf = grok_feedback_map[q_id]
+                    q_score = int(gf.get("score", 0))
+                    status_val = str(gf.get("status", "CORRECT")).upper()
+                    relevance_val = int(gf.get("relevance", 80))
+
+                    if status_val in ("SKIPPED", "EMPTY", "NO_ANSWER", "IRRELEVANT") or relevance_val < 20:
+                        gf["score"] = 0
+                        gf["relevance"] = 0
+                        gf["technical_accuracy"] = 0
+                        gf["completeness"] = 0
+                        gf["technical_depth"] = 0
+                        gf["communication_clarity"] = 0
+                        gf["status"] = status_val if status_val in ("SKIPPED", "EMPTY", "NO_ANSWER", "IRRELEVANT") else "IRRELEVANT"
+                    else:
+                        gf["score"] = max(0, min(100, q_score))
+
+                    merged_detailed.append(gf)
+                else:
+                    fallback_df = evaluate_single_question(
+                        question_id=q_id,
+                        question=item.get("question", ""),
+                        answer=item.get("answer", ""),
+                        company=company,
+                        role=role,
+                        difficulty=difficulty,
+                    )
+                    merged_detailed.append(fallback_df)
+
+            num_answers = len(answers)
+            total_possible = num_answers * 100
+            total_score_sum = sum(df["score"] for df in merged_detailed)
+
+            authoritative_final_score = round(total_score_sum / total_possible * 100) if total_possible > 0 else 0
+
+            avg_tech = round(sum(df.get("technical_accuracy", 0) for df in merged_detailed) / num_answers) if num_answers else 0
+            avg_prob = round(sum(df.get("completeness", 0) for df in merged_detailed) / num_answers) if num_answers else 0
+            avg_comm = round(sum(df.get("communication_clarity", 0) for df in merged_detailed) / num_answers) if num_answers else 0
+
+            return {
+                "overall_score": authoritative_final_score,
+                "score_num": authoritative_final_score,
+                "score": f"{authoritative_final_score}%",
+                "detailed_feedback": merged_detailed,
+                "per_question_feedback": merged_detailed,
+                "strengths": parsed.get("strengths", ["Clear fundamental baseline."]),
+                "growth_areas": parsed.get("improvements", ["Deepen production system trade-offs."]),
+                "feedback": f"Grok AI Evaluation completed with score {authoritative_final_score}%.",
+                "analytics": {
+                    "technical": {
+                        "technical_score": avg_tech,
+                        "problem_solving_score": avg_prob,
+                    },
+                    "communication": {
+                        "communication_score": avg_comm,
+                    },
+                    "strengths": parsed.get("strengths", []),
+                    "weaknesses": parsed.get("improvements", []),
+                    "missing_concepts": parsed.get("missing_concepts", []),
+                },
+            }
+    except Exception as e:
+        print(f"[LLM Evaluator] Grok API error: {e}")
+
+    return None
+
+
 def evaluate_interview_submission(
     company: str,
     role: str,
@@ -1442,8 +1629,16 @@ def evaluate_interview_submission(
     """
     Main evaluation entry point.
     Evaluates candidate's stored answers deferred after interview completion.
-    Checks environment for GEMINI_API_KEY, and falls back to question-specific rubric evaluator.
+    Checks environment for GROK_API_KEY, GEMINI_API_KEY, and falls back to local rubric evaluator.
     """
+    # 1. Check for Grok API Key (xAI Grok or Groq)
+    grok_key = os.getenv("GROK_API_KEY") or os.getenv("XAI_API_KEY") or os.getenv("GROQ_API_KEY")
+    if grok_key and len(grok_key) > 5:
+        result = evaluate_with_grok(company, role, difficulty, answers, grok_key)
+        if result and "overall_score" in result:
+            return result
+
+    # 2. Check for Gemini API Key
     gemini_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
     if gemini_key and len(gemini_key) > 10:
         result = evaluate_with_gemini(company, role, difficulty, answers, gemini_key)

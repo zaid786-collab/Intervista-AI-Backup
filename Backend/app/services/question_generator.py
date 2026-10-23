@@ -498,6 +498,97 @@ Return ONLY a valid JSON array of objects conforming to this schema (no markdown
     return None
 
 
+def generate_with_grok(
+    company: str,
+    role: str,
+    difficulty: str,
+    interview_type: str,
+    domain: str,
+    question_count: int,
+    api_key: str,
+) -> Optional[List[Dict[str, Any]]]:
+    """Generates strictly constrained interview questions using Grok (xAI) or Groq API."""
+    is_groq = api_key.startswith("gsk_")
+    if is_groq:
+        url = "https://api.groq.com/openai/v1/chat/completions"
+        model_name = "llama-3.3-70b-versatile"
+    else:
+        url = "https://api.x.ai/v1/chat/completions"
+        model_name = "grok-2-latest"
+
+    system_prompt = f"""You are a Staff Technical Interviewer at {company} conducting a real {difficulty} difficulty {interview_type} for a {role} position.
+
+CRITICAL HARD CONSTRAINTS:
+1. DOMAIN / TOPIC: Every single question MUST strictly test: "{domain}".
+2. ZERO DRIFT: Never ask questions about other unrelated languages, frameworks, or libraries. (e.g. If domain is C++, NEVER ask about React, Python, Java, or web CSS).
+3. INTERVIEW TYPE: Must match "{interview_type}".
+   - If "Technical Interview": In-depth conceptual & system questions on {domain} (memory, internals, trade-offs, concurrency).
+   - If "Coding & DSA": Algorithmic problem with starter code in {domain} language and test cases.
+   - If "Behavioral & HR": STAR method leadership/collaboration questions.
+4. TONE & LENGTH: Real interviewer style!
+   - 1 to 3 clear, focused sentences per question.
+   - Exactly ONE primary concept per question. Do NOT combine 4-5 unrelated topics into a bloated paragraph.
+5. DIFFICULTY: Calibrate strictly to "{difficulty}".
+
+Generate exactly {question_count} distinct questions.
+
+Return ONLY a valid JSON array of objects conforming to this schema (no markdown fences, no explanatory text):
+[
+  {{
+    "id": 1,
+    "category": "{domain} - Core Concept",
+    "question": "Clear 1-3 sentence interviewer question testing one primary concept.",
+    "hint": "Concise hint explaining the core expected technical intuition.",
+    "expected_key_points": ["Point 1", "Point 2", "Point 3", "Point 4"],
+    "difficulty": "{difficulty}",
+    "domain": "{domain}",
+    "language": "{domain.lower()}"
+  }}
+]"""
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "model": model_name,
+        "messages": [
+            {"role": "system", "content": "You are a professional technical interviewer that outputs only valid JSON."},
+            {"role": "user", "content": system_prompt},
+        ],
+        "temperature": 0.3,
+    }
+
+    try:
+        response = requests.post(url, headers=headers, json=payload, timeout=25)
+        if response.status_code == 200:
+            data = response.json()
+            raw_text = data["choices"][0]["message"]["content"].strip()
+            if raw_text.startswith("```json"):
+                raw_text = raw_text[7:]
+            if raw_text.startswith("```"):
+                raw_text = raw_text[3:]
+            if raw_text.endswith("```"):
+                raw_text = raw_text[:-3]
+            parsed = json.loads(raw_text.strip())
+            if isinstance(parsed, list) and len(parsed) > 0:
+                validated_questions = []
+                for q in parsed:
+                    is_valid, reason = validate_question(q, domain, interview_type)
+                    if is_valid:
+                        validated_questions.append(q)
+                    else:
+                        print(f"[QuestionGenerator] Rejected Grok question due to constraint violation: {reason}")
+                
+                if len(validated_questions) >= max(1, question_count // 2):
+                    return validated_questions
+    except Exception as e:
+        print(f"[QuestionGenerator] Grok generation error: {e}")
+
+    return None
+
+
+
 # =====================================================================
 # SYNTHESIZER / FALLBACK ENGINE FOR ANY DOMAIN
 # =====================================================================
@@ -606,7 +697,26 @@ def generate_interview_session(
     domain = domain.strip() if domain else "C++"
     question_count = max(5, min(question_count, 20))
 
-    # 1. Try LLM Generation if API Key is configured in environment
+    # 1. Try Grok LLM Generation if GROK_API_KEY / XAI_API_KEY / GROQ_API_KEY is configured
+    grok_key = os.getenv("GROK_API_KEY") or os.getenv("XAI_API_KEY") or os.getenv("GROQ_API_KEY")
+    if grok_key and len(grok_key) > 5:
+        llm_questions = generate_with_grok(
+            company=company,
+            role=role,
+            difficulty=difficulty,
+            interview_type=interview_type,
+            domain=domain,
+            question_count=question_count,
+            api_key=grok_key,
+        )
+        if llm_questions and len(llm_questions) >= question_count:
+            for idx, q in enumerate(llm_questions):
+                q["id"] = idx + 1
+                q["round_number"] = (idx // 5) + 1
+                q["round_title"] = f"{domain} {interview_type}"
+            return llm_questions[:question_count]
+
+    # 2. Try Gemini LLM Generation if GEMINI_API_KEY is configured
     gemini_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
     if gemini_key and len(gemini_key) > 10:
         llm_questions = generate_with_gemini(
