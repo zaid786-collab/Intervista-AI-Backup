@@ -26,10 +26,73 @@ export function VisionAnalysisCard({ visionData }) {
     attentionAwayDuration = 0,
     faceMissingCount = 0,
     faceMissingDuration = 0,
+    lightingQuality = "Optimal Lighting",
     presentationStyle = {},
     strengths = [],
     improvements = [],
+    disclaimer,
   } = visionData;
+
+  // Handle camera disabled / unavailable gracefully without fabricating data
+  if (available === false) {
+    return (
+      <section className="analysis-card vision-analysis-card" aria-label="Computer Vision Presentation Analysis">
+        <div className="vision-card-header">
+          <div className="vision-header-left">
+            <div
+              className="vision-icon-bubble"
+              style={{
+                background: "rgba(148, 163, 184, 0.12)",
+                color: "#94A3B8",
+                borderColor: "rgba(148, 163, 184, 0.25)",
+              }}
+            >
+              <FaVideo />
+            </div>
+            <div>
+              <div className="vision-badge-row">
+                <span className="vision-pill-tag">AI Computer Vision</span>
+                <span
+                  className="vision-live-tag"
+                  style={{ background: "rgba(148, 163, 184, 0.15)", color: "#94A3B8", borderColor: "rgba(148, 163, 184, 0.3)" }}
+                >
+                  Camera Paused / Unassessed
+                </span>
+              </div>
+              <h2 className="vision-card-title">Computer Vision Analysis</h2>
+              <p className="vision-card-subtitle">
+                Camera was turned off or unavailable during this session. Visual presentation and eye gaze telemetry were not recorded.
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <div
+          style={{
+            padding: "16px 20px",
+            background: "rgba(255, 255, 255, 0.03)",
+            borderRadius: "12px",
+            fontSize: "0.85rem",
+            color: "var(--text-secondary, #94a3b8)",
+            lineHeight: 1.6,
+            marginBottom: "16px",
+          }}
+        >
+          <strong style={{ color: "#E2E8F0", display: "block", marginBottom: "4px" }}>
+            Telemetry Note:
+          </strong>
+          {visionData.message || "To receive real-time lens focus, posture stability, and presentation poise feedback, keep your webcam enabled during your next mock interview."}
+        </div>
+
+        <div className="vision-privacy-disclosure">
+          <FaShieldAlt className="privacy-shield-icon" />
+          <div className="privacy-text">
+            <strong>Privacy & Integrity:</strong> Intervista AI strictly evaluates actual recorded camera frames. Missing telemetry is clearly reported as unassessed and is never fabricated.
+          </div>
+        </div>
+      </section>
+    );
+  }
 
   const {
     communicationPresence = "Strong",
@@ -51,6 +114,9 @@ export function VisionAnalysisCard({ visionData }) {
             <div className="vision-badge-row">
               <span className="vision-pill-tag">AI Computer Vision</span>
               <span className="vision-live-tag">Webcam Presentation Analysis</span>
+              <span className="vision-live-tag" style={{ background: "rgba(34, 197, 94, 0.15)", color: "#4ADE80", borderColor: "rgba(34, 197, 94, 0.3)" }}>
+                {lightingQuality}
+              </span>
             </div>
             <h2 className="vision-card-title">Computer Vision Analysis</h2>
             <p className="vision-card-subtitle">
@@ -61,7 +127,7 @@ export function VisionAnalysisCard({ visionData }) {
 
         {/* Overall Presentation Confidence Pill */}
         <div className="vision-overall-score-box">
-          <span className="overall-score-lbl">Presentation Confidence</span>
+          <span className="overall-score-lbl">Presentation Poise</span>
           <div className="overall-score-val-wrap">
             <span className="overall-score-num">{presentationConfidence}</span>
             <span className="overall-score-max">/100</span>
@@ -192,7 +258,7 @@ export function VisionAnalysisCard({ visionData }) {
           </div>
 
           <div className="vision-notice-footnote">
-            * Brief natural eye glances or head movements under 2 seconds are excluded from attention events.
+            * Natural brief eye glances or head tilts under 2 seconds are excluded from attention events.
           </div>
         </div>
       </div>
@@ -226,7 +292,7 @@ export function VisionAnalysisCard({ visionData }) {
       <div className="vision-privacy-disclosure">
         <FaShieldAlt className="privacy-shield-icon" />
         <div className="privacy-text">
-          <strong>Privacy & Methodology:</strong> Computer Vision analyzes camera-based presentation signals in real-time. Raw video is processed locally in your browser and is never stored. Metrics reflect observable presentation indicators and do not represent psychological, medical, or personality diagnoses.
+          <strong>Privacy & Methodology:</strong> Computer Vision analyzes camera-based presentation signals in real-time. Raw video is processed locally in your browser and is never stored. Metrics reflect observable presentation indicators and do not represent psychological, medical, honesty, or personality diagnoses.
         </div>
       </div>
     </section>

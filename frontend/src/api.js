@@ -20,20 +20,28 @@ export function getApiBaseUrl() {
 }
 
 const TOKEN_KEY = "intervista-token";
+const ALT_TOKEN_KEY = "intervista_jwt";
 
 export function getToken() {
-  return typeof localStorage !== "undefined" ? localStorage.getItem(TOKEN_KEY) : null;
+  if (typeof localStorage === "undefined") return null;
+  return localStorage.getItem(TOKEN_KEY) || localStorage.getItem(ALT_TOKEN_KEY) || null;
 }
 
 export function setToken(token) {
   if (typeof localStorage !== "undefined") {
-    localStorage.setItem(TOKEN_KEY, token);
+    if (token) {
+      localStorage.setItem(TOKEN_KEY, token);
+      localStorage.setItem(ALT_TOKEN_KEY, token);
+    } else {
+      clearToken();
+    }
   }
 }
 
 export function clearToken() {
   if (typeof localStorage !== "undefined") {
     localStorage.removeItem(TOKEN_KEY);
+    localStorage.removeItem(ALT_TOKEN_KEY);
   }
 }
 
@@ -354,8 +362,12 @@ export async function fetchAnalysisData(interviewId) {
   }
 }
 
+// ---------- Practice & Session History ----------
 
-// ---------- Resources ----------
+export async function fetchInterviewHistory() {
+  return request("/api/interviews/history", { auth: true });
+}
+
 
 export function fetchResources(params = {}) {
   const query = new URLSearchParams();

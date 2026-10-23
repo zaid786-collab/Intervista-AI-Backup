@@ -1027,6 +1027,10 @@ def submit_mock_interview(
                 existing_interview = db.query(models.Interview).filter(models.Interview.id == existing_ans.interview_id).first()
 
         if existing_interview:
+            if existing_interview.user_id is None and current_user:
+                existing_interview.user_id = current_user.id
+                db.commit()
+
             # Already submitted: return existing result without duplicate interview, activity, notification, or XP awards
             rep = {}
             if existing_interview.report_data:
@@ -1392,6 +1396,192 @@ def evaluate_single_question_endpoint(
         communication_clarity=result.get("communication_clarity", 80),
         problem_solving=result.get("problem_solving", 80),
     )
+@router.get("/history", response_model=schemas.InterviewHistoryResponse)
+def get_interview_history(
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Fetches real practice and interview history for the authenticated user only.
+    Protected strictly against cross-user data access.
+    """
+    user_id = current_user.id
+
+    # 1. Fetch user's completed/scheduled interviews
+    interviews_db = (
+        db.query(models.Interview)
+        .filter(models.Interview.user_id == user_id)
+        .order_by(models.Interview.id.desc())
+        .all()
+    )
+
+    history_items = []
+    for item in interviews_db:
+        # Parse report_data JSON if available
+        rep_data = {}
+        if item.report_data:
+            try:
+                rep_data = json.loads(item.report_data)
+            except Exception:
+                rep_data = {}
+
+        score_num = (
+            item.score_num
+            if item.score_num is not None
+            else int(str(item.score or "0").replace("%", "").strip() or 0)
+        )
+
+        tech_score = item.technical_score if item.technical_score is not None else score_num
+        comm_score = item.communication_score if item.communication_score is not None else score_num
+        prob_score = item.problem_solving_score if item.problem_solving_score is not None else score_num
+        conf_score = max(50, min(100, comm_score - 4))
+
+        # Efficiency calculation from genuine evaluation metrics
+        eff_val = min(100, max(50, round((tech_score * 0.4) + (prob_score * 0.4) + (comm_score * 0.2))))
+        if eff_val >= 90:
+            eff_grade = "Exceptional Execution"
+        elif eff_val >= 85:
+            eff_grade = "High Speed & Precision"
+        elif eff_val >= 75:
+            eff_grade = "Strong Delivery"
+        elif eff_val >= 60:
+            eff_grade = "Pragmatic & Structured"
+        else:
+            eff_grade = "Needs Focused Practice"
+
+        detailed_feedback = rep_data.get("detailed_feedback") or []
+        strengths = rep_data.get("strengths") or (
+            ["Demonstrated solid core technical understanding and clear articulation."]
+            if score_num >= 60
+            else ["Attempted interview prompts with foundational engineering awareness."]
+        )
+        improvements = rep_data.get("improvements") or [
+            "Proactively state Big-O runtime and space complexity before writing pseudocode.",
+            "Discuss production error handling and automated rollback strategies.",
+        ]
+        missing_concepts = rep_data.get("missing_concepts") or []
+
+        answered_cnt = item.answered_count if item.answered_count is not None else len(detailed_feedback)
+        total_q = item.question_count if item.question_count is not None else max(1, len(detailed_feedback))
+        dur_mins = item.duration_minutes or 45
+
+        eff_notes = (
+            f"Evaluated {answered_cnt}/{total_q} prompts in ~{dur_mins}m. "
+            f"Overall audit score: {score_num}% ({item.grade or 'Evaluated'})."
+        )
+
+        track_domain = rep_data.get("domain") or rep_data.get("interview_type") or item.role or "Software Engineering"
+
+        # Raw report for SampleReportModal full audit view
+        raw_report = {
+            "id": f"int_{item.id}",
+            "interview_id": item.id,
+            "role": item.role,
+            "company": item.company,
+            "level": rep_data.get("difficulty") or "Medium",
+            "overallScore": score_num,
+            "score": score_num,
+            "scores": {
+                "communication": comm_score,
+                "technicalDepth": tech_score,
+                "problemSolving": prob_score,
+                "confidence": conf_score,
+            },
+            "criterionScores": {
+                "technicalKnowledge": tech_score,
+                "problemSolving": prob_score,
+                "communication": comm_score,
+                "confidence": conf_score,
+            },
+            "strengths": strengths,
+            "improvements": improvements,
+            "missing_concepts": missing_concepts,
+            "questionFeedback": [
+                {
+                    "question": qf.get("question", "Interview Question"),
+                    "candidateAnswer": qf.get("candidate_answer", ""),
+                    "feedback": qf.get("feedback", ""),
+                    "score": qf.get("score", 0),
+                    "status": qf.get("status", "CORRECT"),
+                    "suggested_answer_points": qf.get("suggested_answer_points", []),
+                    "missing_concepts": qf.get("missing_concepts", []),
+                    "identified_keywords": qf.get("identified_keywords", []),
+                }
+                for qf in detailed_feedback
+            ],
+            "vision_data": rep_data.get("vision_data") or (json.loads(item.vision_data) if getattr(item, "vision_data", None) else None),
+            "visualObservations": rep_data.get("vision_data") or (json.loads(item.vision_data) if getattr(item, "vision_data", None) else None),
+            "verbalDelivery": rep_data.get("audioTelemetry"),
+            "summary": item.feedback or "Mock interview evaluation completed.",
+        }
+
+        history_items.append(
+            schemas.InterviewHistoryItem(
+                id=f"mock-{item.id}",
+                type="mock",
+                company=item.company,
+                role=item.role,
+                track=track_domain,
+                date=item.date or (item.created_at.strftime("%d %b %Y") if item.created_at else datetime.now().strftime("%d %b %Y")),
+                duration=f"{dur_mins} mins",
+                score=score_num,
+                efficiency=eff_val,
+                efficiencyGrade=eff_grade,
+                status=item.status or "Completed",
+                details=schemas.HistoryItemDetails(
+                    scores=schemas.HistoryItemScores(
+                        communication=comm_score,
+                        technicalDepth=tech_score,
+                        problemSolving=prob_score,
+                        confidence=conf_score,
+                    ),
+                    strengths=strengths,
+                    improvements=improvements,
+                    efficiencyNotes=eff_notes,
+                    detailed_feedback=detailed_feedback,
+                    missing_concepts=missing_concepts,
+                ),
+                created_at=item.created_at.isoformat() if item.created_at else None,
+                raw_report=raw_report,
+            )
+        )
+
+    # 2. Fetch user's solved practice resources if any
+    solved_resources_db = (
+        db.query(models.UserSolvedResource)
+        .filter(models.UserSolvedResource.user_id == user_id)
+        .order_by(models.UserSolvedResource.id.desc())
+        .all()
+    )
+
+    resources_items = []
+    for sr in solved_resources_db:
+        resources_items.append({
+            "id": f"res-{sr.id}",
+            "type": "resource",
+            "company": "Technical Prep",
+            "title": sr.resource_title,
+            "sourceType": "Official Problem Set",
+            "category": "DSA & Coding Practice",
+            "topics": [sr.resource_title],
+            "date": sr.solved_at.strftime("%d %b %Y") if sr.solved_at else datetime.now().strftime("%d %b %Y"),
+            "duration": "Practice drill",
+            "score": 100,
+            "efficiency": 95,
+            "efficiencyGrade": "Solved & Mastered",
+            "completionRate": "100% Solved",
+            "stats": "Validated Problem Solution",
+            "notes": "Practice challenge successfully solved and validated.",
+        })
+
+    return schemas.InterviewHistoryResponse(
+        success=True,
+        total_count=len(history_items) + len(resources_items),
+        interviews=history_items,
+        resources=resources_items,
+        faqs=[],
+    )
+
 
 @router.get("/{interview_id}/pdf")
 def download_interview_pdf(

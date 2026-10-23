@@ -29,7 +29,7 @@ import {
   confirmPayment,
   fetchPaymentHistory,
   fetchInvoice,
-  submitFeedback,
+  fetchInterviewHistory,
   adminListUsers,
   adminGetUser,
   adminUpdateUser,
@@ -57,7 +57,7 @@ export {
   confirmPayment,
   fetchPaymentHistory,
   fetchInvoice,
-  submitFeedback,
+  fetchInterviewHistory,
   adminListUsers,
   adminGetUser,
   adminUpdateUser,
@@ -683,6 +683,26 @@ export async function apiGetReports() {
 
   return merged;
 }
+
+export async function apiGetInterviewHistory() {
+  try {
+    const res = await request('GET', '/api/interviews/history');
+    if (res && res.success !== false) {
+      return res;
+    }
+    return {
+      success: true,
+      total_count: 0,
+      interviews: [],
+      resources: [],
+      faqs: [],
+    };
+  } catch (err) {
+    console.error('Failed to fetch interview history from backend:', err);
+    throw err;
+  }
+}
+
 
 export async function apiGetReport(reportId) {
   const reports = await apiGetReports();

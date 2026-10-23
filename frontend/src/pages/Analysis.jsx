@@ -1,12 +1,22 @@
-import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import React, { useState, useEffect } from 'react';
+import { useNavigate, useLocation } from 'react-router-dom';
 import HistoryPage from '../components/HistoryPage';
 import InterviewDNAView from '../components/InterviewDNAView';
 import { Dna, History } from 'lucide-react';
 
-export default function Analysis({ onStartInterview, onViewReport }) {
+export default function Analysis({ defaultTab, onStartInterview, onViewReport }) {
   const navigate = useNavigate();
-  const [activeTab, setActiveTab] = useState('dna'); // 'dna' | 'history'
+  const location = useLocation();
+  const initialTab = defaultTab || (location?.pathname === '/history' ? 'history' : 'dna');
+  const [activeTab, setActiveTab] = useState(initialTab);
+
+  useEffect(() => {
+    if (defaultTab) {
+      setActiveTab(defaultTab);
+    } else if (location?.pathname === '/history') {
+      setActiveTab('history');
+    }
+  }, [defaultTab, location?.pathname]);
 
   return (
     <div
@@ -99,7 +109,8 @@ export default function Analysis({ onStartInterview, onViewReport }) {
           <HistoryPage
             onStartInterview={onStartInterview || (() => navigate('/interview'))}
             onViewReport={onViewReport}
-            onBackToHome={() => navigate('/dashboard')}
+            onBackToOverview={() => navigate('/dashboard')}
+            onNavigateToCompanies={() => navigate('/companies')}
           />
         )}
       </div>

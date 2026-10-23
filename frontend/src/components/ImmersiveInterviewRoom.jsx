@@ -36,6 +36,8 @@ import ThreeInterviewScene from './ThreeInterviewScene';
 import DeskCodingLaptop from './DeskCodingLaptop';
 import CandidatePOVHands from './CandidatePOVHands';
 import { MultimodalTracker } from '../utils/multimodalTracker';
+import { useComputerVision } from '../computerVision/useComputerVision';
+import { VisionStatusBadge } from '../computerVision/VisionStatusBadge';
 
 const ROLE_OPTIONS = [
   'Software Engineer',
@@ -189,6 +191,13 @@ export default function ImmersiveInterviewRoom({
 
   const trackerRef = useRef(null);
   const proctorRef = useRef(null);
+
+  // Real-time Computer Vision analysis hook
+  const visionCV = useComputerVision({
+    isInterviewActive: sessionPhase === 'active',
+    isCameraActive: !isCameraOff,
+    videoRef: candidateVideoRef,
+  });
 
   const [telemetryHud, setTelemetryHud] = useState({
     posture: 'Upright & Centered',
@@ -949,6 +958,7 @@ export default function ImmersiveInterviewRoom({
     stopAllMedia();
 
     const finalTelemetry = trackerRef.current?.getFinalTelemetry({ isCameraOff, isMicMuted }) || {};
+    const cvSummary = visionCV.getFinalSummary();
 
     // 1. Gather genuine metrics by checking all candidate answers
     const candidateMsgs = messages.filter(m => m.role === 'candidate');
@@ -1022,20 +1032,22 @@ export default function ImmersiveInterviewRoom({
       suggestions: ['Enable microphone for live speech rhythm, pause detection, and clarity telemetry.']
     };
 
-    const visualObservations = !isCameraOff ? {
+    const visualObservations = !isCameraOff && cvSummary?.available ? {
+      ...cvSummary,
       enabled: true,
-      postureScore: telemetryHud.posture?.includes('Slouch') ? 72 : 88,
-      postureStatus: telemetryHud.posture || 'Upright & Centered',
-      gazeCenteredRatio: telemetryHud.gaze?.includes('Focus') ? 86 : 70,
-      gazeStatus: telemetryHud.gaze || 'Direct Lens Focus',
-      headMovementStability: telemetryHud.headStability || 'Steady & Poised',
-      facialExpression: telemetryHud.expression || 'Engaged & Attentive',
-      suggestions: [
+      postureScore: cvSummary.presentationConfidence || 88,
+      postureStatus: cvSummary.presentationStyle?.overallPresentation || 'Upright & Centered',
+      gazeCenteredRatio: cvSummary.cameraFacingPercentage || 86,
+      gazeStatus: cvSummary.presentationStyle?.cameraEngagement ? `${cvSummary.presentationStyle.cameraEngagement} Camera Focus` : 'Direct Lens Focus',
+      headMovementStability: cvSummary.presentationStyle?.visualAttentiveness || 'Steady & Poised',
+      facialExpression: cvSummary.presentationStyle?.expressiveness || 'Engaged & Attentive',
+      suggestions: cvSummary.improvements?.length ? cvSummary.improvements : [
         'Maintained consistent direct eye contact with the camera lens during core explanations.',
         'Camera framing and posture remained upright and stable throughout.'
       ]
     } : {
       enabled: false,
+      available: false,
       postureStatus: 'Not assessed (Camera disabled by user)',
       gazeStatus: 'Not assessed',
       headMovementStability: 'Not assessed',
@@ -1104,6 +1116,7 @@ export default function ImmersiveInterviewRoom({
       questionFeedback,
       verbalDelivery,
       visualObservations,
+      vision_data: cvSummary,
       multimodalTelemetry: finalTelemetry,
       summary: overall >= 70
         ? `The candidate demonstrated strong domain fundamentals for ${targetRole} at ${targetCompany}. Answers showed structured thinking, sound technical reasoning, and professional poise under mock interview pressure.`
@@ -1125,6 +1138,7 @@ export default function ImmersiveInterviewRoom({
               score: a.score,
             })),
             durationSeconds: typeof secondsElapsed !== 'undefined' ? secondsElapsed : 0,
+            vision_data: cvSummary,
             visualObservations: reportPayload.visualObservations,
             audioTelemetry: reportPayload.verbalDelivery,
             multimodalTelemetry: finalTelemetry,
@@ -2120,6 +2134,18 @@ export default function ImmersiveInterviewRoom({
               }}
             />
 
+            {/* Live Computer Vision Gaze Tracker HUD Badge */}
+            <VisionStatusBadge
+              isModelReady={visionCV.isModelReady}
+              isModelLoading={visionCV.isModelLoading}
+              faceDetected={visionCV.faceDetected}
+              direction={visionCV.direction}
+              expression={visionCV.expression}
+              activeTip={visionCV.activeTip}
+              lighting={visionCV.lighting}
+              isCameraOff={isCameraOff}
+            />
+
             {/* Camera Off Placeholder Screen */}
             {isCameraOff && (
               <div
@@ -2224,17 +2250,44 @@ export default function ImmersiveInterviewRoom({
                 justifyContent: 'space-between',
               }}
             >
-              <div style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '0.64rem', color: '#E2E8F0' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.64rem', color: '#E2E8F0' }}>
                 <div
                   style={{
-                    width: '5px',
-                    height: '5px',
+                    width: '6px',
+                    height: '6px',
                     borderRadius: '50%',
-                    backgroundColor: isCameraOff ? '#9CA3AF' : '#22C55E',
+                    backgroundColor: isCameraOff
+                      ? '#9CA3AF'
+                      : visionCV.faceDetected
+                      ? visionCV.direction === 'camera_facing'
+                        ? '#22C55E'
+                        : '#F59E0B'
+                      : '#F59E0B',
+                    boxShadow: isCameraOff
+                      ? 'none'
+                      : visionCV.faceDetected
+                      ? visionCV.direction === 'camera_facing'
+                        ? '0 0 6px #22C55E'
+                        : '0 0 6px #F59E0B'
+                      : '0 0 6px #F59E0B',
                   }}
                 />
-                <span style={{ fontWeight: 600 }}>
-                  {isCameraOff ? 'Vision: Paused' : (telemetryHud.posture || 'Upright & Centered')}
+                <span style={{ fontWeight: 700, color: '#FFFFFF' }}>
+                  {isCameraOff
+                    ? 'Vision: Paused'
+                    : !visionCV.faceDetected
+                    ? 'Looking for face...'
+                    : visionCV.direction === 'camera_facing'
+                    ? 'Looking at screen'
+                    : visionCV.direction === 'looking_left'
+                    ? 'Looking left'
+                    : visionCV.direction === 'looking_right'
+                    ? 'Looking right'
+                    : visionCV.direction === 'looking_up'
+                    ? 'Looking up'
+                    : visionCV.direction === 'looking_down'
+                    ? 'Looking down'
+                    : 'Looking away'}
                 </span>
                 <span style={{ color: 'rgba(255,255,255,0.2)' }}>•</span>
                 <span style={{ color: isMicMuted ? '#EF4444' : '#4ADE80' }}>
@@ -2258,7 +2311,7 @@ export default function ImmersiveInterviewRoom({
                   padding: '2px 4px',
                 }}
               >
-                <span>{showPipTelemetry ? 'Less' : 'Stats'}</span>
+                <span>{showPipTelemetry ? 'Less' : 'Vision HUD'}</span>
                 {showPipTelemetry ? <ChevronUp size={10} /> : <ChevronDown size={10} />}
               </button>
             </div>
@@ -2268,15 +2321,37 @@ export default function ImmersiveInterviewRoom({
                 style={{
                   display: 'grid',
                   gridTemplateColumns: '1fr 1fr',
-                  gap: '4px',
+                  gap: '5px',
                   marginTop: '5px',
                   paddingTop: '5px',
-                  borderTop: '1px solid rgba(255, 255, 255, 0.06)',
-                  fontSize: '0.6rem',
+                  borderTop: '1px solid rgba(255, 255, 255, 0.08)',
+                  fontSize: '0.62rem',
                 }}
               >
                 <div style={{ color: '#94A3B8' }}>
-                  Gaze: <span style={{ color: 'var(--accent-champagne)', fontWeight: 600 }}>{isCameraOff ? 'Cam Off' : (telemetryHud.gaze || 'Direct Lens')}</span>
+                  Gaze: <span style={{ color: 'var(--accent-champagne)', fontWeight: 600 }}>
+                    {isCameraOff
+                      ? 'Cam Off'
+                      : !visionCV.faceDetected
+                      ? 'Searching'
+                      : visionCV.direction === 'camera_facing'
+                      ? 'Looking at screen'
+                      : visionCV.direction === 'looking_left'
+                      ? 'Looking left'
+                      : visionCV.direction === 'looking_right'
+                      ? 'Looking right'
+                      : 'Looking away'}
+                  </span>
+                </div>
+                <div style={{ color: '#94A3B8', textAlign: 'right' }}>
+                  Head: <span style={{ color: '#4ADE80', fontWeight: 600 }}>
+                    {isCameraOff ? 'N/A' : `Yaw: ${visionCV.headPose?.yaw || 0}°`}
+                  </span>
+                </div>
+                <div style={{ color: '#94A3B8' }}>
+                  Lighting: <span style={{ color: visionCV.lighting === 'low_light' ? '#FBBF24' : '#38BDF8', fontWeight: 600 }}>
+                    {isCameraOff ? 'N/A' : visionCV.lighting === 'low_light' ? 'Low Light' : 'Optimal'}
+                  </span>
                 </div>
                 <div style={{ color: '#94A3B8', textAlign: 'right' }}>
                   Fillers: <span style={{ color: '#4ADE80', fontWeight: 600 }}>{telemetryHud.fillerCount || 0}</span>

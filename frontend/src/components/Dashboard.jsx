@@ -37,7 +37,7 @@ import {
   RefreshCw,
   Loader2,
 } from 'lucide-react';
-import { apiGetReports, apiDownloadReportPdf } from '../utils/api';
+import { apiGetReports, apiDownloadReportPdf, apiGetInterviewHistory } from '../utils/api';
 
 // Preset active practice days for 2026 (matching the ~18 practice days in screenshot)
 const PRACTICE_DAYS_2026 = {
@@ -248,12 +248,19 @@ export default function Dashboard({
     setLoadingReports(true);
     setReportsError(null);
     try {
-      const res = await apiGetReports();
-      if (res && res.reports) {
-        setReports(res.reports);
-      } else {
-        setReports([]);
+      let list = [];
+      try {
+        const histRes = await apiGetInterviewHistory();
+        if (histRes?.interviews && histRes.interviews.length > 0) {
+          list = histRes.interviews;
+        }
+      } catch (_) {}
+
+      if (list.length === 0) {
+        const res = await apiGetReports();
+        list = Array.isArray(res) ? res : (res?.reports || []);
       }
+      setReports(list);
     } catch (err) {
       console.error('Failed to load reports:', err);
       setReportsError(err.message || 'Failed to connect to backend reports server.');

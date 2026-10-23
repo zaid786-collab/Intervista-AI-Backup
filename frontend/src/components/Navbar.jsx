@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { ArrowRight, Menu, X, LogOut, User, BarChart2, Shield } from 'lucide-react';
+import { ArrowRight, Menu, X, LogOut, User, BarChart2, Shield, History } from 'lucide-react';
 import { gsap } from 'gsap';
 
 export default function Navbar({
@@ -707,6 +707,33 @@ export default function Navbar({
                   >
                     <BarChart2 size={15} color="#D9B77A" />
                     Performance Analysis
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      setUserDropdownOpen(false);
+                      if (navigate) navigate('/history');
+                      else if (onNavigate) onNavigate('history');
+                    }}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '0.65rem',
+                      padding: '0.65rem 0.85rem',
+                      background: 'none',
+                      border: 'none',
+                      color: '#F6F0E7',
+                      fontSize: '0.86rem',
+                      cursor: 'pointer',
+                      borderRadius: '10px',
+                      textAlign: 'left',
+                      transition: 'background 0.2s',
+                    }}
+                    onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.06)')}
+                    onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
+                  >
+                    <History size={15} color="#D9B77A" />
+                    Practice History
                   </button>
 
                   {currentUser?.is_admin && (

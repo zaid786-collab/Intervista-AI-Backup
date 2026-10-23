@@ -922,10 +922,53 @@ class CareerReadinessResponse(BaseModel):
     disclaimer: str = "Indicative assessment of preparation, not a prediction of hiring guarantee."
 
 
+# 5. Practice History & Audit Log
+class HistoryItemScores(BaseModel):
+    communication: int = 80
+    technicalDepth: int = 80
+    problemSolving: int = 80
+    confidence: int = 80
+
+
+class HistoryItemDetails(BaseModel):
+    scores: HistoryItemScores
+    strengths: List[str] = []
+    improvements: List[str] = []
+    efficiencyNotes: str = ""
+    detailed_feedback: Optional[List[dict]] = []
+    missing_concepts: Optional[List[str]] = []
+
+
+class InterviewHistoryItem(BaseModel):
+    id: Union[int, str]
+    type: str = "mock"  # "mock" | "resource" | "faq"
+    company: str
+    role: str
+    track: str
+    date: str
+    duration: str
+    score: int
+    efficiency: int
+    efficiencyGrade: str
+    status: str
+    details: HistoryItemDetails
+    created_at: Optional[str] = None
+    raw_report: Optional[dict] = None
+
+
+class InterviewHistoryResponse(BaseModel):
+    success: bool = True
+    total_count: int
+    interviews: List[InterviewHistoryItem]
+    resources: List[dict] = []
+    faqs: List[dict] = []
+
+
 TokenResponse.model_rebuild()
 CoachProfileResponse.model_rebuild()
 InterviewDNAResponse.model_rebuild()
 ResumeRealityCheckResponse.model_rebuild()
 CareerReadinessResponse.model_rebuild()
+InterviewHistoryResponse.model_rebuild()
 
 

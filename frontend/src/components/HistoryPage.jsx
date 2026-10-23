@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import {
   History,
   Award,
@@ -27,7 +27,10 @@ import {
   ShieldCheck,
   RefreshCw,
   Mic,
+  Loader2,
+  AlertCircle,
 } from 'lucide-react';
+import { apiGetInterviewHistory } from '../utils/api';
 
 // ─── Company Logos ─────────────────────────────────────────────────────────────
 const renderCompanyLogo = (company) => {
@@ -88,286 +91,6 @@ const renderCompanyLogo = (company) => {
   }
 };
 
-// ─── Practice Mock Interviews Data ─────────────────────────────────────────────
-const MOCK_INTERVIEWS_HISTORY = [
-  {
-    id: 'mock-1',
-    type: 'mock',
-    company: 'Google',
-    role: 'Software Engineer',
-    track: 'Algorithmic Rigor & System Design',
-    date: '16 Oct 2026',
-    duration: '42 mins',
-    score: 86,
-    efficiency: 92,
-    efficiencyGrade: 'High Speed & Precision',
-    status: 'Mastered',
-    details: {
-      scores: { communication: 90, technicalDepth: 88, problemSolving: 89, confidence: 82 },
-      strengths: ['Strong algorithmic optimization with EXPLAIN ANALYZE', 'System design trade-off explanation', 'Zero hesitation during graph traversal prompt'],
-      improvements: ['State Big-O time and space complexity upfront before pseudocode'],
-      efficiencyNotes: 'Solved 3/3 algorithmic prompts in 38m vs 45m expected benchmark. Speech clarity index 94% with minimal pauses.',
-    },
-  },
-  {
-    id: 'mock-2',
-    type: 'mock',
-    company: 'Meta',
-    role: 'Frontend Engineer',
-    track: 'React Composition, State & DOM Performance',
-    date: '14 Oct 2026',
-    duration: '38 mins',
-    score: 88,
-    efficiency: 94,
-    efficiencyGrade: 'Exceptional Execution',
-    status: 'Mastered',
-    details: {
-      scores: { communication: 91, technicalDepth: 89, problemSolving: 92, confidence: 85 },
-      strengths: ['Flawless explanation of React Fiber reconciler', 'Accurate LCP/FID web vitals bottleneck analysis', 'Modular component composition'],
-      improvements: ['Expand more on server-side streaming cache invalidation patterns'],
-      efficiencyNotes: 'Completed live interactive DOM state exercise in 14m (average candidate takes 24m). Code clean with zero redundant re-renders.',
-    },
-  },
-  {
-    id: 'mock-3',
-    type: 'mock',
-    company: 'Microsoft',
-    role: 'Full Stack Engineer',
-    track: 'Azure Microservices & Resilient APIs',
-    date: '12 Oct 2026',
-    duration: '35 mins',
-    score: 78,
-    efficiency: 85,
-    efficiencyGrade: 'Strong Delivery',
-    status: 'Passed',
-    details: {
-      scores: { communication: 82, technicalDepth: 76, problemSolving: 80, confidence: 75 },
-      strengths: ['Clean RESTful API contracts', 'Circuit breaker pattern explanation', 'Good database index reasoning'],
-      improvements: ['Elaborate more on distributed saga transactions across asynchronous message brokers'],
-      efficiencyNotes: 'Covered 4 architecture scenarios in 35m. Answered follow-ups with concise 90-second structured summaries.',
-    },
-  },
-  {
-    id: 'mock-4',
-    type: 'mock',
-    company: 'Amazon',
-    role: 'Senior SDE',
-    track: '14 Leadership Principles & Scalability',
-    date: '08 Oct 2026',
-    duration: '45 mins',
-    score: 82,
-    efficiency: 89,
-    efficiencyGrade: 'High Data Density',
-    status: 'Passed',
-    details: {
-      scores: { communication: 86, technicalDepth: 80, problemSolving: 84, confidence: 80 },
-      strengths: ['Tight adherence to STAR framework', 'Clear Customer Obsession and Bias for Action metrics', 'Quantified revenue impacts'],
-      improvements: ['Deepen quantitative analysis on cost-optimization tradeoffs in DynamoDB hot partition scenarios'],
-      efficiencyNotes: 'Structured STAR delivery with 89% content efficiency. Zero rambling; clear Situation, Task, Action, and verifiable Results.',
-    },
-  },
-  {
-    id: 'mock-5',
-    type: 'mock',
-    company: 'Tesla',
-    role: 'Product & Systems Manager',
-    track: 'Autonomous Telemetry & Hardware Integration',
-    date: '04 Oct 2026',
-    duration: '50 mins',
-    score: 76,
-    efficiency: 81,
-    efficiencyGrade: 'Pragmatic & Structured',
-    status: 'Passed',
-    details: {
-      scores: { communication: 78, technicalDepth: 74, problemSolving: 77, confidence: 75 },
-      strengths: ['Autonomous feature prioritization vision', 'Solid safety-critical risk mitigation'],
-      improvements: ['Deepen telemetry failure mode recovery protocols and hardware sensor calibration delays'],
-      efficiencyNotes: 'Addressed complex regulatory and safety tradeoffs systematically in 48m vs 50m target time.',
-    },
-  },
-];
-
-// ─── Company Resources Practiced Data ──────────────────────────────────────────
-const COMPANY_RESOURCES_HISTORY = [
-  {
-    id: 'res-1',
-    type: 'resource',
-    company: 'Google',
-    title: 'Google Technical Interview Architecture & OpenLeet Guide',
-    sourceType: 'Official & Candidate Synthesis',
-    category: 'System Design & Distributed Data',
-    topics: ['Distributed Graph Traversal', 'Big-O Optimization', 'MapReduce Fundamentals', 'Load Balancing'],
-    date: '15 Oct 2026',
-    duration: '45 mins drill',
-    score: 91,
-    efficiency: 95,
-    efficiencyGrade: 'Optimal Throughput',
-    completionRate: '100% Completed',
-    stats: '12/12 Concepts Validated • 0 Critical Flaws',
-    notes: 'Covered Google core evaluation criteria: systematic problem decomposition, clean edge-case testing, and computational complexity clarity.',
-  },
-  {
-    id: 'res-2',
-    type: 'resource',
-    company: 'Amazon',
-    title: 'Amazon 14 Leadership Principles Playbook & STAR Story Bank',
-    sourceType: 'Official Bar Raiser Standard',
-    category: 'Executive Behavioral & Bar Raiser',
-    topics: ['Customer Obsession', 'Ownership', 'Bias for Action', 'Have Backbone; Disagree & Commit'],
-    date: '11 Oct 2026',
-    duration: '35 mins drill',
-    score: 86,
-    efficiency: 88,
-    efficiencyGrade: 'Crisp STAR Framework',
-    completionRate: '100% Completed',
-    stats: '14/14 Scenarios Simulated • 92% Situation-to-Result clarity',
-    notes: 'Validated metric-backed STAR storytelling. Eliminated passive language ("we built" replaced with "I architected and led").',
-  },
-  {
-    id: 'res-3',
-    type: 'resource',
-    company: 'Microsoft',
-    title: 'Microsoft Azure Cloud Architecture & Resilient Specs',
-    sourceType: 'Official Technical Whitepapers',
-    category: 'Cloud Infrastructure & High Availability',
-    topics: ['Event-Driven Architecture', 'CosmosDB Partitioning', 'Azure Service Bus', 'Fault Tolerance'],
-    date: '09 Oct 2026',
-    duration: '40 mins drill',
-    score: 82,
-    efficiency: 87,
-    efficiencyGrade: 'Solid Architecture',
-    completionRate: '90% Completed',
-    stats: '8/10 Scenarios Mastered • 1 Needs Review',
-    notes: 'Practiced system trade-offs: multi-region replication vs eventual consistency latency penalties in mission-critical workflows.',
-  },
-  {
-    id: 'res-4',
-    type: 'resource',
-    company: 'Meta',
-    title: 'Meta Front-End Architecture & DOM Performance Checklist',
-    sourceType: 'Engineering Standards Guide',
-    category: 'Frontend Scale & Core Web Vitals',
-    topics: ['Virtual DOM Internals', 'React 19 Server Components', 'INP / LCP Optimization', 'Client Cache Synchronization'],
-    date: '06 Oct 2026',
-    duration: '30 mins drill',
-    score: 94,
-    efficiency: 96,
-    efficiencyGrade: 'Peak Efficiency',
-    completionRate: '100% Completed',
-    stats: '15/15 Performance Checks Passed • 0 Memory Leaks',
-    notes: 'Simulated profiling large component trees under 6x CPU throttling. Identified 4 unnecessary render cascades within 10 minutes.',
-  },
-];
-
-// ─── Company FAQs Solved Data ─────────────────────────────────────────────────
-const SOLVED_FAQS_HISTORY = [
-  {
-    id: 'faq-1',
-    type: 'faq',
-    company: 'Google',
-    question: 'How do you systematically handle ambiguous requirements when designing an exabyte-scale system?',
-    category: 'System Design & Distributed Systems FAQ',
-    date: '16 Oct 2026',
-    timeSpent: '4m 12s',
-    benchmarkTime: '5m 00s',
-    score: 93,
-    efficiency: 96,
-    efficiencyGrade: 'Structured Analytical Framing',
-    userAnswerSummary: 'Directly scoped read/write ratios (100:1), estimated 500M DAU with 50K QPS peak, determined 99.99% availability SLA, and framed multi-region storage partitioning before diving into API contracts.',
-    aiFeedback: 'Exemplary requirements clarification; established back-of-the-envelope calculations before proposing storage layers. Did not rush into technology brand-name picking.',
-    rubrics: {
-      clarity: 95,
-      technicalDepth: 94,
-      structure: 96,
-      conciseness: 98,
-    },
-  },
-  {
-    id: 'faq-2',
-    type: 'faq',
-    company: 'Amazon',
-    question: 'Tell me about a time you made a critical product decision without complete data (Bias for Action).',
-    category: 'Leadership Principles & Behavioral FAQ',
-    date: '13 Oct 2026',
-    timeSpent: '3m 45s',
-    benchmarkTime: '4m 00s',
-    score: 89,
-    efficiency: 91,
-    efficiencyGrade: 'High Impact STAR Delivery',
-    userAnswerSummary: 'Situation: Payment gateway failure causing 14% drop-off. Action: Implemented instant fallback provider within 45 minutes using cached tokenization, accepting slight surcharge. Result: Recovered $140K daily GMV.',
-    aiFeedback: 'High ownership displayed; explicitly addressed calculated risk and reversibility (two-way door decision). Quantifiable revenue metric outcome made the story undeniable.',
-    rubrics: {
-      clarity: 92,
-      technicalDepth: 88,
-      structure: 93,
-      conciseness: 90,
-    },
-  },
-  {
-    id: 'faq-3',
-    type: 'faq',
-    company: 'Microsoft',
-    question: 'Explain how you test boundary conditions, prevent deadlocks, and ensure thread safety in concurrent services.',
-    category: 'Concurrency & Core Engineering FAQ',
-    date: '10 Oct 2026',
-    timeSpent: '5m 02s',
-    benchmarkTime: '6m 00s',
-    score: 87,
-    efficiency: 90,
-    efficiencyGrade: 'Precise CS Rigor',
-    userAnswerSummary: 'Distinguished mutex vs read-write locks, outlined strict lock ordering hierarchies to break circular wait conditions, and demonstrated atomic CAS (Compare-And-Swap) operations for lock-free counters.',
-    aiFeedback: 'Strong depth on starvation avoidance and thread pool sizing; clear mention of idempotency and jittered exponential backoffs.',
-    rubrics: {
-      clarity: 89,
-      technicalDepth: 90,
-      structure: 88,
-      conciseness: 92,
-    },
-  },
-  {
-    id: 'faq-4',
-    type: 'faq',
-    company: 'Meta',
-    question: 'How do you architect a client-side offline-first cache with conflict resolution for dynamic feed data?',
-    category: 'Frontend Systems & Data Flow FAQ',
-    date: '07 Oct 2026',
-    timeSpent: '4m 30s',
-    benchmarkTime: '5m 00s',
-    score: 91,
-    efficiency: 94,
-    efficiencyGrade: 'Architectural Elegance',
-    userAnswerSummary: 'Outlined IndexedDB persistent layer, optimistic mutation queue with rollback snapshots, and Last-Write-Wins (LWW) with client-timestamp vector clocks for server synchronization.',
-    aiFeedback: 'Exceptional knowledge of optimistic UI updates and background synchronization queues. Handled edge cases of network flakiness smoothly.',
-    rubrics: {
-      clarity: 94,
-      technicalDepth: 92,
-      structure: 93,
-      conciseness: 95,
-    },
-  },
-  {
-    id: 'faq-5',
-    type: 'faq',
-    company: 'Tesla',
-    question: 'How do you resolve architectural trade-offs between ultra-low-latency sensor throughput and safety redundancy?',
-    category: 'Embedded & Systems Reliability FAQ',
-    date: '03 Oct 2026',
-    timeSpent: '5m 18s',
-    benchmarkTime: '6m 00s',
-    score: 83,
-    efficiency: 85,
-    efficiencyGrade: 'Pragmatic Engineering',
-    userAnswerSummary: 'Proposed zero-copy ring buffers with lockless atomic memory barriers for sensor telemetry streams, paired with a dual-channel watchdog subsystem that triggers degraded-mode safe stops upon checksum drift.',
-    aiFeedback: 'Solid safety-critical reasoning and understanding of hard real-time latency ceilings; suggested adding explicit hardware telemetry fallback modes.',
-    rubrics: {
-      clarity: 84,
-      technicalDepth: 86,
-      structure: 85,
-      conciseness: 87,
-    },
-  },
-];
-
 export default function HistoryPage({
   onViewReport,
   onStartInterview,
@@ -380,18 +103,58 @@ export default function HistoryPage({
   const [sortBy, setSortBy] = useState('recent'); // 'recent' | 'score' | 'efficiency'
   const [expandedFaqId, setExpandedFaqId] = useState(null);
 
+  // Real backend history state
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [historyData, setHistoryData] = useState({
+    interviews: [],
+    resources: [],
+    faqs: [],
+  });
+
   const toggleFaq = (id) => {
     setExpandedFaqId((prev) => (prev === id ? null : id));
   };
 
-  // Combine data items
+  const fetchHistory = useCallback(async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      const res = await apiGetInterviewHistory();
+      setHistoryData({
+        interviews: res?.interviews || [],
+        resources: res?.resources || [],
+        faqs: res?.faqs || [],
+      });
+    } catch (err) {
+      console.error('Error fetching interview history:', err);
+      setError(err.message || 'Unable to load your practice history. Please verify your connection.');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchHistory();
+  }, [fetchHistory]);
+
+  // Combine real data items
   const allItems = useMemo(() => {
     return [
-      ...MOCK_INTERVIEWS_HISTORY,
-      ...COMPANY_RESOURCES_HISTORY,
-      ...SOLVED_FAQS_HISTORY,
+      ...(historyData.interviews || []),
+      ...(historyData.resources || []),
+      ...(historyData.faqs || []),
     ];
-  }, []);
+  }, [historyData]);
+
+  // Available companies dynamically computed from actual data
+  const availableCompanies = useMemo(() => {
+    const set = new Set(['google', 'meta', 'microsoft', 'amazon', 'tesla']);
+    allItems.forEach((i) => {
+      if (i.company) set.add(i.company.toLowerCase());
+    });
+    return ['all', ...Array.from(set)];
+  }, [allItems]);
 
   // Filtered & Sorted items
   const filteredItems = useMemo(() => {
@@ -422,23 +185,50 @@ export default function HistoryPage({
 
     // Sort
     return [...list].sort((a, b) => {
-      if (sortBy === 'score') return b.score - a.score;
-      if (sortBy === 'efficiency') return b.efficiency - a.efficiency;
-      return 0; // Default order
+      if (sortBy === 'score') return (b.score || 0) - (a.score || 0);
+      if (sortBy === 'efficiency') return (b.efficiency || 0) - (a.efficiency || 0);
+      return 0; // Default order (most recent first from backend)
     });
   }, [allItems, activeTab, selectedCompany, searchQuery, sortBy]);
 
-  // Aggregate stats
+  // Aggregate stats derived strictly from authentic data
   const aggregateStats = useMemo(() => {
     const totalCount = allItems.length;
-    const avgScore = Math.round(allItems.reduce((acc, i) => acc + i.score, 0) / (totalCount || 1));
-    const avgEfficiency = Math.round(allItems.reduce((acc, i) => acc + i.efficiency, 0) / (totalCount || 1));
-    const mockCount = MOCK_INTERVIEWS_HISTORY.length;
-    const resCount = COMPANY_RESOURCES_HISTORY.length;
-    const faqCount = SOLVED_FAQS_HISTORY.length;
+    const avgScore = totalCount > 0 ? Math.round(allItems.reduce((acc, i) => acc + (Number(i.score) || 0), 0) / totalCount) : 0;
+    const avgEfficiency = totalCount > 0 ? Math.round(allItems.reduce((acc, i) => acc + (Number(i.efficiency) || 0), 0) / totalCount) : 0;
+    const mockCount = (historyData.interviews || []).length;
+    const resCount = (historyData.resources || []).length;
+    const faqCount = (historyData.faqs || []).length;
 
-    return { totalCount, avgScore, avgEfficiency, mockCount, resCount, faqCount };
-  }, [allItems]);
+    // Company breakdown
+    const companyMap = {};
+    allItems.forEach((i) => {
+      const comp = (i.company || '').trim();
+      if (comp) {
+        if (!companyMap[comp]) {
+          companyMap[comp] = { totalScore: 0, count: 0 };
+        }
+        companyMap[comp].totalScore += (Number(i.score) || 0);
+        companyMap[comp].count += 1;
+      }
+    });
+
+    const companiesList = Object.entries(companyMap).map(([comp, data]) => ({
+      company: comp,
+      avgScore: Math.round(data.totalScore / data.count),
+    }));
+
+    return {
+      totalCount,
+      avgScore,
+      avgEfficiency,
+      mockCount,
+      resCount,
+      faqCount,
+      companiesCount: companiesList.length,
+      companiesList,
+    };
+  }, [allItems, historyData]);
 
   const getScoreBadgeColor = (score) => {
     if (score >= 88) return '#10B981'; // Green
@@ -547,13 +337,18 @@ export default function HistoryPage({
           <div className="kpi-info">
             <span className="kpi-label">COMPANY TARGETS PRACTICED</span>
             <div className="kpi-metric-row">
-              <span className="kpi-value">5 Companies</span>
+              <span className="kpi-value">{aggregateStats.companiesCount} {aggregateStats.companiesCount === 1 ? 'Company' : 'Companies'}</span>
             </div>
             <div className="company-micro-strip">
-              <span className="micro-badge">Google 86%</span>
-              <span className="micro-badge">Meta 88%</span>
-              <span className="micro-badge">MSFT 78%</span>
-              <span className="micro-badge">Amazon 82%</span>
+              {aggregateStats.companiesList.length > 0 ? (
+                aggregateStats.companiesList.slice(0, 4).map((c) => (
+                  <span key={c.company} className="micro-badge">
+                    {c.company} {c.avgScore}%
+                  </span>
+                ))
+              ) : (
+                <span className="micro-badge" style={{ opacity: 0.6 }}>No practice targets yet</span>
+              )}
             </div>
           </div>
         </div>
@@ -617,7 +412,7 @@ export default function HistoryPage({
 
           {/* Company Chips */}
           <div className="company-chips-row">
-            {['all', 'google', 'meta', 'microsoft', 'amazon', 'tesla'].map((c) => (
+            {availableCompanies.map((c) => (
               <button
                 key={c}
                 onClick={() => setSelectedCompany(c)}
@@ -646,10 +441,38 @@ export default function HistoryPage({
 
       {/* ─── History Items Stream ────────────────────────────────────────── */}
       <div className="history-stream-container">
-        {filteredItems.length === 0 ? (
+        {loading ? (
+          <div className="history-loading-card">
+            <Loader2 size={36} className="history-spin" color="var(--accent-gold)" />
+            <h3>Loading Practice History...</h3>
+            <p>Fetching your authenticated interview and drill records from the database.</p>
+          </div>
+        ) : error ? (
+          <div className="history-error-card">
+            <AlertCircle size={36} color="#EF4444" />
+            <h3>Failed to Load History</h3>
+            <p>{error}</p>
+            <button onClick={fetchHistory} className="retry-btn">
+              <RefreshCw size={14} />
+              <span>Retry Loading</span>
+            </button>
+          </div>
+        ) : allItems.length === 0 ? (
+          <div className="history-empty-card">
+            <div style={{ width: '64px', height: '64px', borderRadius: '50%', backgroundColor: 'rgba(217, 183, 122, 0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <Sparkles size={32} color="var(--accent-gold)" />
+            </div>
+            <h3>No practice history recorded yet</h3>
+            <p>Complete an AI mock interview or practice drill to see your performance history, authoritative rubric scores, and audit reports.</p>
+            <button onClick={onStartInterview} className="history-primary-cta" style={{ marginTop: '0.75rem' }}>
+              <Sparkles size={15} />
+              <span>Start Your First Interview</span>
+            </button>
+          </div>
+        ) : filteredItems.length === 0 ? (
           <div className="history-empty-card">
             <History size={40} color="var(--text-tertiary)" />
-            <h3>No practice history found</h3>
+            <h3>No matching practice history</h3>
             <p>Try adjusting your search query or company filters to find past drills.</p>
             <button
               onClick={() => {
@@ -729,51 +552,51 @@ export default function HistoryPage({
                     <div className="rubric-stat">
                       <span className="rubric-name">Communication</span>
                       <div className="rubric-track">
-                        <div className="rubric-fill" style={{ width: `${item.details.scores.communication}%`, backgroundColor: '#10B981' }} />
+                        <div className="rubric-fill" style={{ width: `${item.details?.scores?.communication ?? item.score}%`, backgroundColor: '#10B981' }} />
                       </div>
-                      <span className="rubric-num">{item.details.scores.communication}%</span>
+                      <span className="rubric-num">{item.details?.scores?.communication ?? item.score}%</span>
                     </div>
 
                     <div className="rubric-stat">
                       <span className="rubric-name">Technical Depth</span>
                       <div className="rubric-track">
-                        <div className="rubric-fill" style={{ width: `${item.details.scores.technicalDepth}%`, backgroundColor: 'var(--accent-gold)' }} />
+                        <div className="rubric-fill" style={{ width: `${item.details?.scores?.technicalDepth ?? item.score}%`, backgroundColor: 'var(--accent-gold)' }} />
                       </div>
-                      <span className="rubric-num">{item.details.scores.technicalDepth}%</span>
+                      <span className="rubric-num">{item.details?.scores?.technicalDepth ?? item.score}%</span>
                     </div>
 
                     <div className="rubric-stat">
                       <span className="rubric-name">Problem Solving</span>
                       <div className="rubric-track">
-                        <div className="rubric-fill" style={{ width: `${item.details.scores.problemSolving}%`, backgroundColor: '#60A5FA' }} />
+                        <div className="rubric-fill" style={{ width: `${item.details?.scores?.problemSolving ?? item.score}%`, backgroundColor: '#60A5FA' }} />
                       </div>
-                      <span className="rubric-num">{item.details.scores.problemSolving}%</span>
+                      <span className="rubric-num">{item.details?.scores?.problemSolving ?? item.score}%</span>
                     </div>
 
                     <div className="rubric-stat">
                       <span className="rubric-name">Confidence</span>
                       <div className="rubric-track">
-                        <div className="rubric-fill" style={{ width: `${item.details.scores.confidence}%`, backgroundColor: '#FBBF24' }} />
+                        <div className="rubric-fill" style={{ width: `${item.details?.scores?.confidence ?? 80}%`, backgroundColor: '#FBBF24' }} />
                       </div>
-                      <span className="rubric-num">{item.details.scores.confidence}%</span>
+                      <span className="rubric-num">{item.details?.scores?.confidence ?? 80}%</span>
                     </div>
                   </div>
 
                   {/* Efficiency Takeaway Notes */}
                   <div className="item-efficiency-notes">
                     <Zap size={14} color="var(--accent-gold)" className="flex-shrink-0" />
-                    <span><strong>Efficiency Analysis:</strong> {item.details.efficiencyNotes}</span>
+                    <span><strong>Efficiency Analysis:</strong> {item.details?.efficiencyNotes || 'Session evaluation complete.'}</span>
                   </div>
 
                   {/* Card Action Footer */}
                   <div className="item-actions-footer">
                     <div className="strengths-preview">
                       <span className="strength-dot" />
-                      <span>{item.details.strengths[0]}</span>
+                      <span>{item.details?.strengths?.[0] || 'Evaluated against industry standards'}</span>
                     </div>
 
                     <button
-                      onClick={() => onViewReport && onViewReport(item)}
+                      onClick={() => onViewReport && onViewReport(item.raw_report || item)}
                       className="view-audit-btn"
                     >
                       <BarChart2 size={14} />
@@ -1862,6 +1685,63 @@ export default function HistoryPage({
           font-size: 0.82rem;
           font-weight: 600;
           cursor: pointer;
+        }
+
+        /* Loading and Error States */
+        .history-loading-card,
+        .history-error-card {
+          background: #111111;
+          border: 1px solid rgba(255, 255, 255, 0.08);
+          border-radius: 18px;
+          padding: 4rem 2rem;
+          text-align: center;
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          gap: 0.75rem;
+        }
+
+        .history-loading-card h3,
+        .history-error-card h3 {
+          font-size: 1.25rem;
+          color: #FFFFFF;
+          margin-top: 0.5rem;
+        }
+
+        .history-loading-card p,
+        .history-error-card p {
+          color: var(--text-secondary);
+          font-size: 0.9rem;
+          max-width: 440px;
+        }
+
+        .retry-btn {
+          display: inline-flex;
+          align-items: center;
+          gap: 8px;
+          margin-top: 0.5rem;
+          background: rgba(239, 68, 68, 0.12);
+          border: 1px solid rgba(239, 68, 68, 0.35);
+          color: #F87171;
+          padding: 8px 20px;
+          border-radius: 9999px;
+          font-size: 0.84rem;
+          font-weight: 600;
+          cursor: pointer;
+          transition: all 0.2s;
+        }
+
+        .retry-btn:hover {
+          background: rgba(239, 68, 68, 0.2);
+        }
+
+        .history-spin {
+          animation: historySpin 1s linear infinite;
+        }
+
+        @keyframes historySpin {
+          from { transform: rotate(0deg); }
+          to { transform: rotate(360deg); }
         }
 
         @media (max-width: 768px) {

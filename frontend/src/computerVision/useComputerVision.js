@@ -21,8 +21,10 @@ export function useComputerVision({
   const [isModelLoading, setIsModelLoading] = useState(false);
   const [faceDetected, setFaceDetected] = useState(false);
   const [faceCount, setFaceCount] = useState(0);
-  const [direction, setDirection] = useState("camera_facing");
+  const [direction, setDirection] = useState(isCameraActive ? "camera_facing" : "camera_off");
   const [expression, setExpression] = useState("neutral");
+  const [lighting, setLighting] = useState("optimal");
+  const [headPose, setHeadPose] = useState({ yaw: 0, pitch: 0, roll: 0 });
   const [activeTip, setActiveTip] = useState(null);
   const [tipExpiresAt, setTipExpiresAt] = useState(0);
 
@@ -49,7 +51,7 @@ export function useComputerVision({
       .catch((err) => {
         if (mounted) {
           console.warn("[useComputerVision] Init error:", err);
-          setIsModelReady(false);
+          setIsModelReady(true); // Fallback canvas is ready
           setIsModelLoading(false);
         }
       });
@@ -69,6 +71,18 @@ export function useComputerVision({
 
   // Frame processing loop
   useEffect(() => {
+    if (!isCameraActive) {
+      if (intervalIdRef.current) {
+        clearInterval(intervalIdRef.current);
+        intervalIdRef.current = null;
+      }
+      isRunningRef.current = false;
+      setDirection("camera_off");
+      setFaceDetected(false);
+      setActiveTip(null);
+      return;
+    }
+
     const shouldRun = isInterviewActive && isCameraActive && isModelReady;
 
     if (!shouldRun) {
@@ -101,6 +115,8 @@ export function useComputerVision({
       setFaceCount(frameResult.faceCount);
       setDirection(frameResult.smoothedDirection);
       setExpression(frameResult.expression);
+      if (frameResult.lighting) setLighting(frameResult.lighting);
+      if (frameResult.headPose) setHeadPose(frameResult.headPose);
 
       // Handle non-punitive informational tip (auto-clears)
       const now = Date.now();
@@ -129,24 +145,25 @@ export function useComputerVision({
       return {
         available: false,
         message: "Computer Vision was not initialized.",
-        attentionScore: 85,
-        engagementScore: 85,
-        presentationConfidence: 85,
-        facialExpressiveness: 75,
-        faceVisibility: 95,
+        attentionScore: null,
+        engagementScore: null,
+        presentationConfidence: null,
+        facialExpressiveness: null,
+        faceVisibility: 0,
+        cameraFacingPercentage: 0,
         attentionAwayCount: 0,
         attentionAwayDuration: 0,
         faceMissingCount: 0,
         faceMissingDuration: 0,
         presentationStyle: {
-          communicationPresence: "Good",
-          expressiveness: "Composed",
-          cameraEngagement: "Consistent",
-          visualAttentiveness: "Good",
-          overallPresentation: "Professional",
+          communicationPresence: "Not Assessed",
+          expressiveness: "Not Assessed",
+          cameraEngagement: "Not Assessed",
+          visualAttentiveness: "Not Assessed",
+          overallPresentation: "Not Assessed",
         },
-        strengths: ["Camera and visual presentation remained steady throughout."],
-        improvements: ["Maintain consistent eye contact with the camera."],
+        strengths: ["Audio answers recorded."],
+        improvements: ["Enable webcam to receive visual engagement telemetry."],
         events: [],
       };
     }
@@ -160,6 +177,8 @@ export function useComputerVision({
     faceCount,
     direction,
     expression,
+    lighting,
+    headPose,
     activeTip,
     getFinalSummary,
   };

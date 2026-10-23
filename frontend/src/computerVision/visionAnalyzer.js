@@ -46,8 +46,14 @@ export class VisionAnalyzer {
     this.landmarker = null;
     this.isReady = false;
     this.isLoading = false;
+    this.usingMediaPipe = false;
     this.hasFailed = false;
     this.failureReason = null;
+
+    // Offscreen canvas for luminance, lighting, and fallback frame processing
+    this.offscreenCanvas = null;
+    this.lastFrameData = null;
+    this.lastCentroid = null;
 
     // Aggregation & State tracking
     this.totalSamples = 0;
@@ -55,6 +61,8 @@ export class VisionAnalyzer {
     this.cameraFacingSamples = 0;
     this.lookingAwaySamples = 0;
     this.multipleFacesSamples = 0;
+    this.lowLightingSamples = 0;
+    this.optimalLightingSamples = 0;
 
     // Expression counters
     this.expressionDistribution = {
@@ -72,9 +80,12 @@ export class VisionAnalyzer {
     this.currentFaceMissingStart = null;
     this.lastProcessedTimestamp = 0;
 
-    // Direction smoothing buffer
+    // Anti-flicker smoothing & hysteresis buffers
     this.recentDirections = [];
     this.recentExpressions = [];
+    this.confirmedDirection = "camera_facing";
+    this.pendingDirection = null;
+    this.pendingDirectionCount = 0;
   }
 
   async initialize() {
@@ -82,8 +93,17 @@ export class VisionAnalyzer {
     this.isLoading = true;
     this.hasFailed = false;
 
+    // Set up canvas immediately so analysis can run with zero latency
+    if (typeof document !== "undefined") {
+      this.offscreenCanvas = document.createElement("canvas");
+      this.offscreenCanvas.width = 160;
+      this.offscreenCanvas.height = 120;
+    }
+    // Mark as ready for fallback processing right away
+    this.isReady = true;
+
+    // Asynchronously attempt to initialize MediaPipe FaceLandmarker
     try {
-      // Resolve WebAssembly binaries via CDN
       const filesetResolver = await FilesetResolver.forVisionTasks(
         "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm"
       );
@@ -97,15 +117,15 @@ export class VisionAnalyzer {
         outputFaceBlendshapes: true,
         outputFacialTransformationMatrixes: true,
         runningMode: "VIDEO",
-        numFaces: 2, // Enable multi-face presence detection
+        numFaces: 2,
       });
 
-      this.isReady = true;
+      this.usingMediaPipe = true;
       this.isLoading = false;
-      console.log("[ComputerVision] FaceLandmarker initialized successfully with GPU delegate.");
+      console.log("[ComputerVision] MediaPipe FaceLandmarker active with GPU delegate.");
       return true;
-    } catch (err) {
-      console.warn("[ComputerVision] Primary GPU init failed, trying CPU fallback:", err.message);
+    } catch (gpuErr) {
+      console.warn("[ComputerVision] GPU delegate init failed, attempting CPU:", gpuErr.message);
       try {
         const filesetResolver = await FilesetResolver.forVisionTasks(
           "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm"
@@ -121,28 +141,27 @@ export class VisionAnalyzer {
           runningMode: "VIDEO",
           numFaces: 2,
         });
-        this.isReady = true;
+        this.usingMediaPipe = true;
         this.isLoading = false;
-        console.log("[ComputerVision] FaceLandmarker initialized successfully with CPU fallback.");
+        console.log("[ComputerVision] MediaPipe FaceLandmarker active with CPU fallback.");
         return true;
-      } catch (fallbackErr) {
-        console.warn("[ComputerVision] Model initialization failed:", fallbackErr.message);
-        this.hasFailed = true;
+      } catch (cpuErr) {
+        console.warn("[ComputerVision] MediaPipe CDN unavailable; active on local canvas vision engine:", cpuErr.message);
+        this.usingMediaPipe = false;
         this.isLoading = false;
-        this.failureReason = fallbackErr.message;
-        return false;
+        return true;
       }
     }
   }
 
   /**
-   * Process a single video frame
+   * Process a single video frame with real-time eye gaze tracking
    * @param {HTMLVideoElement} videoElement
    * @param {number} timestampMs
    * @returns {Object|null} Live frame analysis result
    */
   analyzeFrame(videoElement, timestampMs = performance.now()) {
-    if (!this.isReady || !this.landmarker || !videoElement || videoElement.readyState < 2) {
+    if (!videoElement || videoElement.readyState < 2) {
       return null;
     }
 
@@ -150,53 +169,64 @@ export class VisionAnalyzer {
     const currentTime = timestampMs > this.lastProcessedTimestamp ? timestampMs : this.lastProcessedTimestamp + 1;
     this.lastProcessedTimestamp = currentTime;
 
-    let results;
-    try {
-      results = this.landmarker.detectForVideo(videoElement, currentTime);
-    } catch (err) {
-      console.warn("[ComputerVision] Inference frame error:", err);
-      return null;
+    // If MediaPipe is active, run FaceLandmarker inference
+    if (this.usingMediaPipe && this.landmarker) {
+      try {
+        const results = this.landmarker.detectForVideo(videoElement, currentTime);
+        return this._processMediaPipeResults(results, videoElement);
+      } catch (err) {
+        console.warn("[ComputerVision] MediaPipe frame error, utilizing canvas fallback:", err.message);
+        return this._processCanvasFallback(videoElement);
+      }
     }
 
+    // Otherwise, run lightweight canvas-based vision engine
+    return this._processCanvasFallback(videoElement);
+  }
+
+  /**
+   * Process high-precision MediaPipe FaceLandmarker results
+   */
+  _processMediaPipeResults(results, videoElement) {
     this.totalSamples++;
     const now = Date.now();
     const faceCount = results.faceLandmarks ? results.faceLandmarks.length : 0;
+
+    // Sample lighting via offscreen canvas
+    const lighting = this._sampleLighting(videoElement);
+    if (lighting === "low_light") this.lowLightingSamples++;
+    else this.optimalLightingSamples++;
 
     // --- 1. FACE DETECTION & VISIBILITY ---
     if (faceCount === 0) {
       if (!this.currentFaceMissingStart) {
         this.currentFaceMissingStart = now;
       }
-
-      // Check if face has been missing beyond threshold
       const faceMissingDuration = now - this.currentFaceMissingStart;
-      let isSustainedMissing = false;
-      if (faceMissingDuration >= this.config.faceMissingThresholdMs) {
-        isSustainedMissing = true;
-      }
+      const isSustainedMissing = faceMissingDuration >= this.config.faceMissingThresholdMs;
 
-      this.updateSmoothing("face_missing", "neutral");
+      const smoothedDir = this._applyHysteresisSmoothing("face_missing");
 
       return {
         timestamp: now,
         faceDetected: false,
         faceCount: 0,
         direction: "face_missing",
-        smoothedDirection: "face_missing",
+        smoothedDirection: smoothedDir,
         expression: "neutral",
+        lighting,
         isSustainedMissing,
         isSustainedAway: false,
         informationalTip: isSustainedMissing ? this.config.messages.faceMissing : null,
+        headPose: { yaw: 0, pitch: 0, roll: 0 },
       };
     }
 
-    // Face is detected
     this.faceDetectedSamples++;
     if (faceCount > 1) {
       this.multipleFacesSamples++;
     }
 
-    // If face was missing, close out event
     if (this.currentFaceMissingStart) {
       const durationSec = Math.round((now - this.currentFaceMissingStart) / 100) / 10;
       if (durationSec >= this.config.faceMissingThresholdMs / 1000) {
@@ -209,7 +239,7 @@ export class VisionAnalyzer {
       this.currentFaceMissingStart = null;
     }
 
-    // --- 2. HEAD POSE & LOOKING DIRECTION ---
+    // --- 2. HEAD POSE ESTIMATION (EULER ANGLES) ---
     let yaw = 0, pitch = 0, roll = 0;
     if (results.facialTransformationMatrixes && results.facialTransformationMatrixes.length > 0) {
       const angles = extractEulerAngles(results.facialTransformationMatrixes[0].data);
@@ -218,7 +248,7 @@ export class VisionAnalyzer {
       roll = angles.roll;
     }
 
-    // Blendshape extraction for eyes and expressions
+    // Blendshape extraction for eyes and facial movement
     const blendshapesMap = {};
     if (results.faceBlendshapes && results.faceBlendshapes.length > 0) {
       for (const cat of results.faceBlendshapes[0].categories) {
@@ -226,19 +256,31 @@ export class VisionAnalyzer {
       }
     }
 
-    // Gaze blendshapes
+    // MediaPipe Eye Gaze Blendshapes
     const lookLeftScore = (blendshapesMap["eyeLookInRight"] || 0) + (blendshapesMap["eyeLookOutLeft"] || 0);
     const lookRightScore = (blendshapesMap["eyeLookInLeft"] || 0) + (blendshapesMap["eyeLookOutRight"] || 0);
     const lookUpScore = ((blendshapesMap["eyeLookUpLeft"] || 0) + (blendshapesMap["eyeLookUpRight"] || 0)) / 2;
     const lookDownScore = ((blendshapesMap["eyeLookDownLeft"] || 0) + (blendshapesMap["eyeLookDownRight"] || 0)) / 2;
 
+    // Optional Iris landmark calculation if landmarks exist
+    let irisGazeShift = 0;
+    if (results.faceLandmarks && results.faceLandmarks[0] && results.faceLandmarks[0].length >= 478) {
+      const lms = results.faceLandmarks[0];
+      const leftInner = lms[133], leftOuter = lms[33], leftIris = lms[468];
+      const eyeWidth = Math.abs(leftInner.x - leftOuter.x);
+      if (eyeWidth > 0.01) {
+        const irisRatio = (leftIris.x - Math.min(leftInner.x, leftOuter.x)) / eyeWidth;
+        irisGazeShift = irisRatio - 0.5; // Negative = shifted one side, positive = shifted other side
+      }
+    }
+
     const { headPose, blendshapes } = this.config;
     let rawDirection = "camera_facing";
 
-    // Combine head pose and eye gaze for robust direction classification
-    if (yaw > headPose.yawThresholdDeg || lookRightScore > blendshapes.gazeAwayThreshold * 1.5) {
+    // Combine head rotation and eye blendshape magnitudes to determine real-time gaze direction
+    if (yaw > headPose.yawThresholdDeg || lookRightScore > blendshapes.gazeAwayThreshold * 1.4 || irisGazeShift < -0.15) {
       rawDirection = "looking_right";
-    } else if (yaw < -headPose.yawThresholdDeg || lookLeftScore > blendshapes.gazeAwayThreshold * 1.5) {
+    } else if (yaw < -headPose.yawThresholdDeg || lookLeftScore > blendshapes.gazeAwayThreshold * 1.4 || irisGazeShift > 0.15) {
       rawDirection = "looking_left";
     } else if (pitch < -headPose.pitchDownThresholdDeg || lookDownScore > blendshapes.gazeAwayThreshold) {
       rawDirection = "looking_down";
@@ -246,12 +288,11 @@ export class VisionAnalyzer {
       rawDirection = "looking_up";
     }
 
-    // --- 3. FACIAL EXPRESSION ESTIMATION ---
+    // --- 3. FACIAL EXPRESSION & COMPOSEMENT ---
     const smileScore = ((blendshapesMap["mouthSmileLeft"] || 0) + (blendshapesMap["mouthSmileRight"] || 0)) / 2;
     const surpriseScore = ((blendshapesMap["browInnerUp"] || 0) + (blendshapesMap["jawOpen"] || 0)) / 2;
     const tenseScore = ((blendshapesMap["browDownLeft"] || 0) + (blendshapesMap["browDownRight"] || 0) + (blendshapesMap["mouthFrownLeft"] || 0)) / 3;
 
-    // Overall expressiveness variance magnitude
     const expressivenessMag = Math.min(1, (smileScore * 1.5 + surpriseScore + tenseScore * 1.2));
     this.expressivenessScores.push(expressivenessMag);
 
@@ -266,9 +307,256 @@ export class VisionAnalyzer {
       rawExpression = "expressive";
     }
 
-    // Apply temporal smoothing
-    const { smoothedDirection, smoothedExpression } = this.updateSmoothing(rawDirection, rawExpression);
+    // Apply anti-flicker hysteresis smoothing
+    const smoothedDirection = this._applyHysteresisSmoothing(rawDirection);
+    const smoothedExpression = this._smoothExpression(rawExpression);
 
+    this._recordGazeStats(smoothedDirection, rawDirection, now);
+    this.expressionDistribution[smoothedExpression] = (this.expressionDistribution[smoothedExpression] || 0) + 1;
+
+    // Check sustained looking away (> 2000ms)
+    const awayDuration = this.currentAttentionAwayStart ? now - this.currentAttentionAwayStart : 0;
+    const isSustainedAway = awayDuration >= this.config.attentionThresholdMs;
+
+    let informationalTip = null;
+    if (faceCount > 1) {
+      informationalTip = this.config.messages.multipleFaces;
+    } else if (isSustainedAway) {
+      informationalTip = this.config.messages.attentionAway;
+    }
+
+    return {
+      timestamp: now,
+      faceDetected: true,
+      faceCount,
+      direction: rawDirection,
+      smoothedDirection,
+      expression: smoothedExpression,
+      lighting,
+      isSustainedAway,
+      isSustainedMissing: false,
+      informationalTip,
+      headPose: { yaw: Math.round(yaw), pitch: Math.round(pitch), roll: Math.round(roll) },
+      expressivenessMag: Math.round(expressivenessMag * 100),
+    };
+  }
+
+  /**
+   * Process frame using HTML5 Canvas pixel heuristics (instant, lightweight fallback)
+   */
+  _processCanvasFallback(videoElement) {
+    this.totalSamples++;
+    const now = Date.now();
+
+    if (!this.offscreenCanvas && typeof document !== "undefined") {
+      this.offscreenCanvas = document.createElement("canvas");
+      this.offscreenCanvas.width = 160;
+      this.offscreenCanvas.height = 120;
+    }
+
+    if (!this.offscreenCanvas) {
+      return null;
+    }
+
+    const ctx = this.offscreenCanvas.getContext("2d", { willReadFrequently: true });
+    if (!ctx) return null;
+
+    ctx.drawImage(videoElement, 0, 0, 160, 120);
+    const imgData = ctx.getImageData(0, 0, 160, 120);
+    const data = imgData.data;
+
+    // 1. Measure lighting
+    let totalLum = 0;
+    let samplePixels = 0;
+    let skinX = 0, skinY = 0, skinCount = 0;
+
+    for (let y = 10; y < 110; y += 4) {
+      for (let x = 15; x < 145; x += 4) {
+        const idx = (y * 160 + x) * 4;
+        const r = data[idx], g = data[idx + 1], b = data[idx + 2];
+        const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+        totalLum += lum;
+        samplePixels++;
+
+        // Skin tone cluster heuristic
+        if (r > 60 && g > 40 && b > 20 && r > g && r > b && (r - g) >= 10) {
+          skinX += x;
+          skinY += y;
+          skinCount++;
+        }
+      }
+    }
+
+    const avgLum = samplePixels > 0 ? totalLum / samplePixels : 120;
+    let lighting = "optimal";
+    if (avgLum < 45) {
+      lighting = "low_light";
+      this.lowLightingSamples++;
+    } else {
+      this.optimalLightingSamples++;
+    }
+
+    // 2. Face presence & Centroid
+    if (skinCount < 22) {
+      // Face missing
+      if (!this.currentFaceMissingStart) this.currentFaceMissingStart = now;
+      const faceMissingDuration = now - this.currentFaceMissingStart;
+      const isSustainedMissing = faceMissingDuration >= this.config.faceMissingThresholdMs;
+      const smoothedDir = this._applyHysteresisSmoothing("face_missing");
+
+      return {
+        timestamp: now,
+        faceDetected: false,
+        faceCount: 0,
+        direction: "face_missing",
+        smoothedDirection: smoothedDir,
+        expression: "neutral",
+        lighting,
+        isSustainedMissing,
+        isSustainedAway: false,
+        informationalTip: isSustainedMissing ? this.config.messages.faceMissing : null,
+        headPose: { yaw: 0, pitch: 0, roll: 0 },
+      };
+    }
+
+    this.faceDetectedSamples++;
+    if (this.currentFaceMissingStart) {
+      const durationSec = Math.round((now - this.currentFaceMissingStart) / 100) / 10;
+      if (durationSec >= this.config.faceMissingThresholdMs / 1000) {
+        this.events.push({
+          type: "face_missing",
+          timestamp: new Date(this.currentFaceMissingStart).toISOString(),
+          duration: durationSec,
+        });
+      }
+      this.currentFaceMissingStart = null;
+    }
+
+    const cx = (skinX / skinCount) / 160; // 0.0 to 1.0
+    const cy = (skinY / skinCount) / 120; // 0.0 to 1.0
+
+    // Approximate head pose & gaze from face centroid position
+    let rawDirection = "camera_facing";
+    let approxYaw = Math.round((cx - 0.5) * 80);
+    let approxPitch = Math.round((cy - 0.42) * -70);
+
+    if (cx < 0.38) {
+      rawDirection = "looking_left";
+    } else if (cx > 0.62) {
+      rawDirection = "looking_right";
+    } else if (cy > 0.54) {
+      rawDirection = "looking_down";
+    } else if (cy < 0.28) {
+      rawDirection = "looking_up";
+    }
+
+    // 3. Movement and expressiveness delta
+    let expressivenessMag = 0.35;
+    if (this.lastFrameData) {
+      let diff = 0;
+      const prev = this.lastFrameData.data;
+      for (let i = 0; i < data.length; i += 16) {
+        diff += Math.abs(data[i] - prev[i]);
+      }
+      const avgDiff = diff / (data.length / 16);
+      expressivenessMag = Math.min(1, Math.max(0.1, avgDiff / 25));
+    }
+    this.lastFrameData = imgData;
+    this.expressivenessScores.push(expressivenessMag);
+
+    let rawExpression = expressivenessMag > 0.4 ? "expressive" : "neutral";
+
+    // Anti-flicker smoothing
+    const smoothedDirection = this._applyHysteresisSmoothing(rawDirection);
+    const smoothedExpression = this._smoothExpression(rawExpression);
+
+    this._recordGazeStats(smoothedDirection, rawDirection, now);
+    this.expressionDistribution[smoothedExpression] = (this.expressionDistribution[smoothedExpression] || 0) + 1;
+
+    const awayDuration = this.currentAttentionAwayStart ? now - this.currentAttentionAwayStart : 0;
+    const isSustainedAway = awayDuration >= this.config.attentionThresholdMs;
+    const informationalTip = isSustainedAway ? this.config.messages.attentionAway : null;
+
+    return {
+      timestamp: now,
+      faceDetected: true,
+      faceCount: 1,
+      direction: rawDirection,
+      smoothedDirection,
+      expression: smoothedExpression,
+      lighting,
+      isSustainedAway,
+      isSustainedMissing: false,
+      informationalTip,
+      headPose: { yaw: approxYaw, pitch: approxPitch, roll: 0 },
+      expressivenessMag: Math.round(expressivenessMag * 100),
+    };
+  }
+
+  /**
+   * Sample frame brightness to evaluate ambient lighting
+   */
+  _sampleLighting(videoElement) {
+    if (!this.offscreenCanvas && typeof document !== "undefined") {
+      this.offscreenCanvas = document.createElement("canvas");
+      this.offscreenCanvas.width = 160;
+      this.offscreenCanvas.height = 120;
+    }
+    if (!this.offscreenCanvas) return "optimal";
+
+    try {
+      const ctx = this.offscreenCanvas.getContext("2d", { willReadFrequently: true });
+      if (!ctx) return "optimal";
+      ctx.drawImage(videoElement, 0, 0, 80, 60);
+      const imgData = ctx.getImageData(0, 0, 80, 60);
+      const d = imgData.data;
+      let total = 0;
+      for (let i = 0; i < d.length; i += 16) {
+        total += 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+      }
+      const avg = total / (d.length / 16);
+      return avg < 45 ? "low_light" : avg > 230 ? "overexposed" : "optimal";
+    } catch {
+      return "optimal";
+    }
+  }
+
+  /**
+   * Anti-flicker hysteresis smoothing: requires 2 consecutive agreeing frames before
+   * transitioning states, completely eliminating rapid UI jitter
+   */
+  _applyHysteresisSmoothing(rawDirection) {
+    if (rawDirection === this.confirmedDirection) {
+      this.pendingDirection = null;
+      this.pendingDirectionCount = 0;
+      return this.confirmedDirection;
+    }
+
+    if (rawDirection === this.pendingDirection) {
+      this.pendingDirectionCount++;
+      // Require 2 consecutive frames before switching direction
+      if (this.pendingDirectionCount >= 2) {
+        this.confirmedDirection = rawDirection;
+        this.pendingDirection = null;
+        this.pendingDirectionCount = 0;
+      }
+    } else {
+      this.pendingDirection = rawDirection;
+      this.pendingDirectionCount = 1;
+    }
+
+    return this.confirmedDirection;
+  }
+
+  _smoothExpression(expression) {
+    this.recentExpressions.push(expression);
+    if (this.recentExpressions.length > this.config.smoothingWindow) {
+      this.recentExpressions.shift();
+    }
+    return this.getMostFrequent(this.recentExpressions) || expression;
+  }
+
+  _recordGazeStats(smoothedDirection, rawDirection, now) {
     if (smoothedDirection === "camera_facing") {
       this.cameraFacingSamples++;
       if (this.currentAttentionAwayStart) {
@@ -289,51 +577,6 @@ export class VisionAnalyzer {
         this.currentAttentionAwayStart = now;
       }
     }
-
-    this.expressionDistribution[smoothedExpression] = (this.expressionDistribution[smoothedExpression] || 0) + 1;
-
-    // Check if looking away has been sustained beyond threshold
-    const awayDuration = this.currentAttentionAwayStart ? now - this.currentAttentionAwayStart : 0;
-    const isSustainedAway = awayDuration >= this.config.attentionThresholdMs;
-
-    let informationalTip = null;
-    if (faceCount > 1) {
-      informationalTip = this.config.messages.multipleFaces;
-    } else if (isSustainedAway) {
-      informationalTip = this.config.messages.attentionAway;
-    }
-
-    return {
-      timestamp: now,
-      faceDetected: true,
-      faceCount,
-      direction: rawDirection,
-      smoothedDirection,
-      expression: smoothedExpression,
-      isSustainedAway,
-      isSustainedMissing: false,
-      informationalTip,
-      headPose: { yaw: Math.round(yaw), pitch: Math.round(pitch), roll: Math.round(roll) },
-      expressivenessMag: Math.round(expressivenessMag * 100),
-    };
-  }
-
-  updateSmoothing(direction, expression) {
-    this.recentDirections.push(direction);
-    if (this.recentDirections.length > this.config.smoothingWindow) {
-      this.recentDirections.shift();
-    }
-
-    this.recentExpressions.push(expression);
-    if (this.recentExpressions.length > this.config.smoothingWindow) {
-      this.recentExpressions.shift();
-    }
-
-    // Majority vote smoothing
-    const smoothedDirection = this.getMostFrequent(this.recentDirections) || direction;
-    const smoothedExpression = this.getMostFrequent(this.recentExpressions) || expression;
-
-    return { smoothedDirection, smoothedExpression };
   }
 
   getMostFrequent(arr) {
@@ -352,51 +595,49 @@ export class VisionAnalyzer {
   }
 
   /**
-   * Finalize analysis and compute deterministic aggregated scores
-   * @returns {Object} Complete Computer Vision interview summary
+   * Finalize analysis and compute deterministic aggregated presentation scores.
+   * Strictly separates empirical physical observations from cautious AI impressions.
+   * @returns {Object} Complete Computer Vision presentation summary
    */
   getSummary() {
-    // Graceful fallback if no samples or vision failed
-    if (this.totalSamples === 0 || this.hasFailed) {
+    if (this.totalSamples === 0) {
       return {
         available: false,
-        message: this.hasFailed
-          ? "Computer Vision analysis was temporarily unavailable."
-          : "Insufficient camera data for visual analysis.",
-        attentionScore: 85,
-        engagementScore: 85,
-        presentationConfidence: 85,
-        facialExpressiveness: 75,
-        faceVisibility: 95,
+        message: "No camera presentation telemetry recorded (camera disabled or uninitialized).",
+        attentionScore: null,
+        engagementScore: null,
+        presentationConfidence: null,
+        facialExpressiveness: null,
+        faceVisibility: 0,
+        cameraFacingPercentage: 0,
         attentionAwayCount: 0,
         attentionAwayDuration: 0,
         faceMissingCount: 0,
         faceMissingDuration: 0,
+        lightingQuality: "Unassessed",
         presentationStyle: {
-          communicationPresence: "Good",
-          expressiveness: "Composed",
-          cameraEngagement: "Consistent",
-          visualAttentiveness: "Good",
-          overallPresentation: "Professional",
+          communicationPresence: "Not Assessed",
+          expressiveness: "Not Assessed",
+          cameraEngagement: "Not Assessed",
+          visualAttentiveness: "Not Assessed",
+          overallPresentation: "Not Assessed",
         },
-        strengths: ["Camera and visual presentation remained steady throughout."],
-        improvements: ["Continue maintaining direct eye contact with the camera."],
+        strengths: ["Audio and answer delivery evaluated."],
+        improvements: ["Enable webcam during mock interview to receive visual engagement and lens focus feedback."],
         events: [],
+        disclaimer:
+          "Computer Vision metrics measure concrete presentation indicators (camera-facing percentage, face visibility, posture stability) and do NOT assess honesty, emotion, or psychological personality.",
       };
     }
 
     const total = Math.max(this.totalSamples, 1);
     const facePresent = Math.max(this.faceDetectedSamples, 1);
 
-    // 1. Face Visibility %
+    // 1. Empirical signals
     const faceVisibility = Math.min(100, Math.round((this.faceDetectedSamples / total) * 100));
-
-    // 2. Camera Facing % (of time face is visible)
     const cameraFacingRatio = this.cameraFacingSamples / facePresent;
     const cameraFacingPct = Math.min(100, Math.round(cameraFacingRatio * 100));
 
-    // 3. Attention Score (0 - 100)
-    // Formula: 75% camera facing + 25% face visibility, penalized 2 points per sustained away event
     const attentionAwayEvents = this.events.filter((e) => e.type === "attention_away");
     const faceMissingEvents = this.events.filter((e) => e.type === "face_missing");
 
@@ -409,7 +650,6 @@ export class VisionAnalyzer {
       Math.min(100, Math.round(cameraFacingPct * 0.75 + faceVisibility * 0.25 - eventPenalty))
     );
 
-    // 4. Facial Expressiveness Score
     const avgExpressiveness =
       this.expressivenessScores.length > 0
         ? this.expressivenessScores.reduce((a, b) => a + b, 0) / this.expressivenessScores.length
@@ -419,8 +659,6 @@ export class VisionAnalyzer {
       Math.min(95, Math.round(50 + avgExpressiveness * 50))
     );
 
-    // 5. Engagement Score (0 - 100)
-    // Formula: weights.cameraFacing (45%) + weights.faceVisibility (35%) + weights.facialExpressiveness (20%)
     const { weights } = this.config;
     const engagementScore = Math.max(
       40,
@@ -434,8 +672,6 @@ export class VisionAnalyzer {
       )
     );
 
-    // 6. Presentation Confidence Indicator (0 - 100)
-    // Combines stable face visibility, camera engagement, and dynamic expressiveness
     const consistencyFactor = Math.max(0, 100 - eventPenalty * 2);
     const presentationConfidence = Math.max(
       45,
@@ -450,7 +686,12 @@ export class VisionAnalyzer {
       )
     );
 
-    // 7. Interview Presentation Style (Observable behavior only)
+    const lightingQuality =
+      this.lowLightingSamples > total * 0.35
+        ? "Low Ambient Light"
+        : "Optimal Lighting";
+
+    // 2. Cautious, observable presentation style categories
     const communicationPresence =
       presentationConfidence >= 82 ? "Strong" : presentationConfidence >= 65 ? "Moderate" : "Developing";
     const expressivenessCategory =
@@ -462,39 +703,37 @@ export class VisionAnalyzer {
     const overallPresentation =
       presentationConfidence >= 80 && attentionScore >= 80 ? "Professional" : "Positive";
 
-    // 8. Qualitative Feedback (Constructive, non-medical/psychological)
+    // 3. Evidence-based strengths and actionable tips
     const strengths = [];
     const improvements = [];
 
     if (cameraFacingPct >= 80 && attentionScore >= 75) {
-      strengths.push("Maintained strong camera engagement throughout questions.");
+      strengths.push(`Maintained high camera engagement (${cameraFacingPct}%) during technical discussions.`);
     }
-    if (faceVisibility >= 90 && cameraFacingPct >= 75 && attentionAwayEvents.length <= 3) {
-      strengths.push("Remained consistently centered and clearly visible to the camera.");
-    } else if (faceVisibility >= 90) {
-      strengths.push("Webcam feed was clear and face was consistently detected in frame.");
+    if (faceVisibility >= 90) {
+      strengths.push("Remained consistently centered and clearly framed within the camera view.");
     }
     if (facialExpressiveness >= 65) {
-      strengths.push("Displayed engaging, active facial expressiveness while answering.");
+      strengths.push("Demonstrated responsive and engaged facial expressiveness while explaining concepts.");
     }
     if (attentionAwayEvents.length <= 2 && attentionScore >= 75) {
-      strengths.push("Demonstrated steady attention consistency with minimal off-screen gaze.");
+      strengths.push("Demonstrated steady visual focus with minimal sustained off-screen glances.");
     }
     if (strengths.length === 0) {
-      strengths.push("Demonstrated steady interview posture and camera availability.");
+      strengths.push("Maintained steady camera presence throughout the mock interview.");
     }
 
-    if (attentionAwayEvents.length > 2 || cameraFacingPct < 75) {
-      improvements.push("Maintain more consistent eye contact with the camera while formulating answers.");
+    if (cameraFacingPct < 75 || attentionAwayEvents.length > 2) {
+      improvements.push("Position your camera directly at eye level to keep your visual focus naturally on the interviewer.");
     }
     if (totalAwayDuration > 15) {
-      improvements.push("Try to minimize looking away from the screen for prolonged periods.");
+      improvements.push("Minimize prolonged downward glances when formulating architectural answers.");
     }
-    if (faceVisibility < 85) {
-      improvements.push("Position your webcam directly in front of you at eye level to keep your face centered.");
+    if (this.lowLightingSamples > total * 0.35) {
+      improvements.push("Increase front lighting to enhance camera clarity and face visibility.");
     }
     if (improvements.length === 0) {
-      improvements.push("Continue this level of visual engagement and presence in upcoming technical rounds.");
+      improvements.push("Continue this level of focused camera engagement in real technical interviews.");
     }
 
     return {
@@ -510,6 +749,7 @@ export class VisionAnalyzer {
       faceMissingCount: faceMissingEvents.length,
       faceMissingDuration: totalMissingDuration,
       multipleFacesDetected: this.multipleFacesSamples > 3,
+      lightingQuality,
       presentationStyle: {
         communicationPresence,
         expressiveness: expressivenessCategory,
@@ -519,7 +759,9 @@ export class VisionAnalyzer {
       },
       strengths,
       improvements,
-      events: this.events.slice(-20), // Store up to 20 compact events
+      events: this.events.slice(-20),
+      disclaimer:
+        "Computer vision analysis is conducted entirely client-side. Raw video is never stored or transmitted. Metrics reflect observable presentation indicators and do not evaluate personality, truthfulness, emotions, or psychological traits.",
     };
   }
 
@@ -535,5 +777,7 @@ export class VisionAnalyzer {
     this.isReady = false;
     this.isLoading = false;
     this.events = [];
+    this.offscreenCanvas = null;
+    this.lastFrameData = null;
   }
 }

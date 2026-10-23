@@ -343,7 +343,22 @@ function AppContent() {
           path="/analysis"
           element={
             <ProtectedRoute>
-              <Analysis />
+              <Analysis
+                onStartInterview={handleStartInterview}
+                onViewReport={handleViewSampleReport}
+              />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/history"
+          element={
+            <ProtectedRoute>
+              <Analysis
+                defaultTab="history"
+                onStartInterview={handleStartInterview}
+                onViewReport={handleViewSampleReport}
+              />
             </ProtectedRoute>
           }
         />

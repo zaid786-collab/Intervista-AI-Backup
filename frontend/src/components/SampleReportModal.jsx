@@ -28,6 +28,7 @@ import {
   FileText
 } from 'lucide-react';
 import { apiDownloadReportPdf } from '../utils/api';
+import { VisionAnalysisCard } from '../computerVision/VisionAnalysisCard';
 
 export default function SampleReportModal({ isOpen, onClose, reportData, onRetake }) {
   const [isDownloadingPdf, setIsDownloadingPdf] = useState(false);
@@ -65,22 +66,24 @@ export default function SampleReportModal({ isOpen, onClose, reportData, onRetak
 
   // ─── Multimodal Telemetry (Facial Expressions, Body Language & Posture, Vocals) ───
   const multimodal = reportData?.multimodalAnalysis || reportData?.multimodal;
+  const cvData = reportData?.vision_data || reportData?.visualObservations;
   const rawFacial = multimodal?.facialAnalysis || reportData?.facialAnalysis;
   const rawBody = multimodal?.bodyLanguageAnalysis || reportData?.bodyLanguageAnalysis || reportData?.visualObservations;
   const rawVoice = multimodal?.vocalAnalysis || reportData?.vocalAnalysis || reportData?.verbalDelivery || reportData?.communicationMetrics;
 
   // 1. Facial Expressions & Gaze
-  const facialAssessed = rawFacial ? (rawFacial.assessed !== false && rawFacial.score !== null) : (reportData?.visualObservations && reportData.visualObservations.enabled !== false);
+  const hasValidCv = cvData && (cvData.available !== false && cvData.enabled !== false);
+  const facialAssessed = rawFacial ? (rawFacial.assessed !== false && rawFacial.score !== null) : hasValidCv;
   const facial = facialAssessed ? {
     assessed: true,
-    score: rawFacial?.score || rawFacial?.facialEngagementScore || 88,
-    gazeCenteredRatio: rawFacial?.gazeCenteredRatio || 86,
-    gazeStatus: rawFacial?.gazeStatus || 'Direct Lens Focus (Optimal)',
-    expressionState: rawFacial?.expressionState || 'Engaged & Attentive',
+    score: cvData?.attentionScore || rawFacial?.score || rawFacial?.facialEngagementScore || 88,
+    gazeCenteredRatio: cvData?.cameraFacingPercentage || rawFacial?.gazeCenteredRatio || 86,
+    gazeStatus: cvData?.presentationStyle?.cameraEngagement ? `${cvData.presentationStyle.cameraEngagement} Camera Focus` : (rawFacial?.gazeStatus || 'Direct Lens Focus (Optimal)'),
+    expressionState: cvData?.presentationStyle?.expressiveness || rawFacial?.expressionState || 'Engaged & Attentive',
     nodCount: rawFacial?.nodGestureCount || 2,
-    headStability: rawFacial?.headStability || 'Steady & Poised',
-    observations: rawFacial?.neutralObservations || 'Maintained steady direct lens focus and calm professional facial composure.',
-    suggestions: rawFacial?.actionableTips || ['Position your webcam directly at eye level to lock direct eye contact with the interviewer.']
+    headStability: cvData?.presentationStyle?.visualAttentiveness || rawFacial?.headStability || 'Steady & Poised',
+    observations: cvData?.strengths?.[0] || rawFacial?.neutralObservations || 'Maintained steady direct lens focus and calm professional facial composure.',
+    suggestions: cvData?.improvements || rawFacial?.actionableTips || ['Position your webcam directly at eye level to lock direct eye contact with the interviewer.']
   } : {
     assessed: false,
     score: null,
@@ -94,16 +97,16 @@ export default function SampleReportModal({ isOpen, onClose, reportData, onRetak
   };
 
   // 2. Body Language & Posture
-  const bodyAssessed = rawBody ? (rawBody.assessed !== false && rawBody.score !== null) : (reportData?.visualObservations && reportData.visualObservations.enabled !== false);
+  const bodyAssessed = rawBody ? (rawBody.assessed !== false && rawBody.score !== null) : hasValidCv;
   const body = bodyAssessed ? {
     assessed: true,
-    score: rawBody?.score || rawBody?.postureScore || 86,
-    postureStatus: rawBody?.postureStatus || 'Upright & Centered',
-    uprightPercentage: rawBody?.uprightPercentage || 88,
+    score: cvData?.presentationConfidence || rawBody?.score || rawBody?.postureScore || 86,
+    postureStatus: cvData?.presentationStyle?.overallPresentation || rawBody?.postureStatus || 'Upright & Centered',
+    uprightPercentage: cvData?.faceVisibility || rawBody?.uprightPercentage || 88,
     framingStatus: rawBody?.framingStatus || 'Optimal Upper Torso Framing',
     fidgetIndex: rawBody?.fidgetIndex || 'Low (Composed)',
-    observations: rawBody?.neutralObservations || 'Exhibited balanced upright posture and stable shoulder framing throughout.',
-    suggestions: rawBody?.actionableTips || ['Rest your feet flat on the floor to maintain an upright stance without leaning forward.']
+    observations: cvData?.strengths?.[1] || rawBody?.neutralObservations || 'Exhibited balanced upright posture and stable shoulder framing throughout.',
+    suggestions: cvData?.improvements || rawBody?.actionableTips || ['Rest your feet flat on the floor to maintain an upright stance without leaning forward.']
   } : {
     assessed: false,
     score: null,
@@ -785,6 +788,13 @@ export default function SampleReportModal({ isOpen, onClose, reportData, onRetak
             </span>
           </div>
         </div>
+
+        {/* 3B. Dedicated Computer Vision & Presentation Analysis Card */}
+        {(reportData?.vision_data || reportData?.visualObservations) && (
+          <div style={{ marginBottom: '2.25rem' }}>
+            <VisionAnalysisCard visionData={reportData.vision_data || reportData.visualObservations} />
+          </div>
+        )}
 
         {/* 4. Key Strengths & Priority Improvements */}
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.25rem', marginBottom: '2.25rem' }} className="insights-grid">
