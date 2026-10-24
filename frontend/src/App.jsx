@@ -31,7 +31,7 @@ import ContactModal from './components/ContactModal';
 import LiveDemoModal from './components/LiveDemoModal';
 import FeedbackModal from './components/FeedbackModal';
 
-import { apiLogout, recordLocalInterviewSession } from './utils/api';
+import { apiLogout, recordLocalInterviewSession, apiSaveReport } from './utils/api';
 import './App.css';
 
 function ScrollToTop() {
@@ -119,6 +119,16 @@ function AppContent() {
   };
 
   const handleEnterInterviewRoom = (deviceSettings) => {
+    // Both camera and microphone are strictly required conditions to start an interview
+    const isCamReady = deviceSettings?.cameraStatus === 'granted' && deviceSettings?.isCameraActive !== false;
+    const isMicReady = deviceSettings?.micStatus === 'granted' && deviceSettings?.isMicActive !== false;
+
+    if (!isCamReady || !isMicReady) {
+      console.warn('[INTERVIEW ROOM] Entry blocked: Camera and microphone are both required to start an interview.');
+      setDeviceSetupOpen(true);
+      return;
+    }
+
     if (deviceSettings && typeof deviceSettings === 'object') {
       setInterviewConfig((prev) => ({ ...prev, ...deviceSettings }));
     }
@@ -127,7 +137,23 @@ function AppContent() {
   };
 
   const handleFinishInterview = (finalReport) => {
-    const scoreNum = finalReport?.overallScore ?? finalReport?.score ?? 88;
+    const isTerminated = finalReport?.status === 'TERMINATED_FOR_CHEATING' ||
+      finalReport?.status === 'TERMINATED_FOR_PROCTORING' ||
+      String(finalReport?.status || '').includes('TERMINATED') ||
+      finalReport?.isTerminated;
+
+    if (isTerminated) {
+      try {
+        localStorage.setItem('intervista_has_termination', 'true');
+      } catch (_) {}
+    }
+
+    const scoreNum = isTerminated ? 0 : (finalReport?.overallScore ?? finalReport?.score ?? 88);
+    const finalStatus = isTerminated
+      ? (finalReport?.status || 'TERMINATED_FOR_PROCTORING')
+      : (finalReport?.status || 'Completed');
+    const termReason = finalReport?.terminationReason || finalReport?.termination_reason || (isTerminated ? 'Interview terminated due to proctoring policy violation.' : null);
+
     const generatedReport = {
       ...finalReport,
       id: finalReport?.id || 'int_' + Date.now(),
@@ -136,25 +162,39 @@ function AppContent() {
       level: finalReport?.level || interviewConfig.level,
       overallScore: scoreNum,
       score: scoreNum,
-      scores: finalReport?.scores || {
+      status: finalStatus,
+      terminationReason: termReason,
+      scores: isTerminated ? {
+        communication: 0,
+        technicalDepth: 0,
+        problemSolving: 0,
+        confidence: 0,
+      } : (finalReport?.scores || {
         communication: 90,
         technicalDepth: 86,
         problemSolving: 88,
         confidence: 84,
-      },
-      strengths: finalReport?.strengths || [
+      }),
+      strengths: isTerminated ? [
+        'Session was stopped per proctoring policy enforcement.'
+      ] : (finalReport?.strengths || [
         'Strong grasp of modular system decomposition and clean API design.',
         'Structured and articulate approach to problem decomposition.',
-      ],
-      improvements: finalReport?.improvements || [
+      ]),
+      improvements: isTerminated ? [
+        'Adhere strictly to proctoring guidelines during mock interview sessions.'
+      ] : (finalReport?.improvements || [
         'Explicitly state asymptotic Big-O runtime and space complexity early in responses.',
         'Discuss failure recovery strategies and automated rollback flags.',
-      ],
+      ]),
       studyRoadmap: finalReport?.studyRoadmap || [
         { step: 1, title: 'Distributed Systems & Consistency Models', focus: 'Study Raft consensus, idempotency patterns, and event-driven architecture.' },
         { step: 2, title: 'Performance Profiling & Bottlenecks', focus: 'Deep dive into database indexing, memory leaks, and network latency optimization.' },
       ],
     };
+
+    // Save report to persistent local storage and history
+    apiSaveReport(generatedReport).catch((err) => console.warn('apiSaveReport error:', err));
 
     // Record session to local dashboard
     recordLocalInterviewSession({
@@ -162,12 +202,15 @@ function AppContent() {
       role: generatedReport.role,
       company: generatedReport.company,
       score: scoreNum,
-      duration_minutes: 25,
-      status: 'Completed',
-      technical_score: generatedReport.scores?.technicalDepth || 86,
-      communication_score: generatedReport.scores?.communication || 90,
-      problem_solving_score: generatedReport.scores?.problemSolving || 88,
-      feedback: `Completed interview for ${generatedReport.company}. Overall evaluation score: ${scoreNum}%.`,
+      duration_minutes: isTerminated ? 5 : 25,
+      status: finalStatus,
+      technical_score: isTerminated ? 0 : (generatedReport.scores?.technicalDepth || 86),
+      communication_score: isTerminated ? 0 : (generatedReport.scores?.communication || 90),
+      problem_solving_score: isTerminated ? 0 : (generatedReport.scores?.problemSolving || 88),
+      feedback: isTerminated
+        ? `Interview session was terminated: ${termReason || 'Proctoring violation'}.`
+        : `Completed interview for ${generatedReport.company}. Overall evaluation score: ${scoreNum}%.`,
+      termination_reason: termReason,
     });
 
     setReportData(generatedReport);

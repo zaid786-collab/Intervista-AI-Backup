@@ -523,14 +523,14 @@ export default function ImmersiveInterviewRoom({
     };
   }, []);
 
-  // Timer interval
+  // Timer interval (runs only when session is active and camera/mic are both on)
   useEffect(() => {
-    if (sessionPhase !== 'active') return;
+    if (sessionPhase !== 'active' || isCameraOff || isMicMuted) return;
     const interval = setInterval(() => {
       setSecondsElapsed(s => s + 1);
     }, 1000);
     return () => clearInterval(interval);
-  }, [sessionPhase]);
+  }, [sessionPhase, isCameraOff, isMicMuted]);
 
   // Proctoring lifecycle & anti-cheating warning system
   useEffect(() => {
@@ -3659,6 +3659,157 @@ export default function ImmersiveInterviewRoom({
                 }}
               >
                 End & Generate Report
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* =========================================================================
+          MANDATORY CAMERA & MICROPHONE REQUIREMENT SHIELD
+          Interview cannot proceed or start while camera or microphone is off
+          ========================================================================= */}
+      {(isCameraOff || isMicMuted) && sessionPhase !== 'ending' && sessionPhase !== 'ended' && !terminatedModalData && (
+        <div
+          id="mandatory-hardware-shield"
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 9998,
+            backgroundColor: 'rgba(8, 9, 12, 0.93)',
+            backdropFilter: 'blur(16px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '2rem',
+          }}
+        >
+          <div
+            style={{
+              maxWidth: '560px',
+              width: '100%',
+              backgroundColor: '#10121A',
+              border: '1.5px solid rgba(239, 68, 68, 0.55)',
+              borderRadius: '24px',
+              padding: '2.5rem',
+              textAlign: 'center',
+              boxShadow: '0 24px 60px rgba(0, 0, 0, 0.8), 0 0 45px rgba(239, 68, 68, 0.18)',
+            }}
+          >
+            <div
+              style={{
+                width: '64px',
+                height: '64px',
+                borderRadius: '50%',
+                backgroundColor: 'rgba(239, 68, 68, 0.16)',
+                border: '1px solid rgba(239, 68, 68, 0.4)',
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: '#EF4444',
+                marginBottom: '1.25rem',
+              }}
+            >
+              <ShieldAlert size={32} />
+            </div>
+
+            <h2
+              className="serif-heading"
+              style={{
+                fontSize: '1.65rem',
+                color: '#FFFFFF',
+                margin: '0 0 0.75rem 0',
+                letterSpacing: '-0.01em',
+              }}
+            >
+              Camera & Microphone Required
+            </h2>
+
+            <p style={{ fontSize: '0.9rem', color: '#CBD5E1', lineHeight: 1.6, margin: '0 0 1.75rem 0' }}>
+              Intervista AI proctoring and real-time speech evaluation require active video camera and microphone feeds. <strong>The interview is paused and cannot proceed</strong> until both devices are enabled.
+            </p>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem', marginBottom: '2rem' }}>
+              {isCameraOff && (
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  padding: '0.85rem 1.15rem',
+                  borderRadius: '12px',
+                  backgroundColor: 'rgba(239, 68, 68, 0.1)',
+                  border: '1px solid rgba(239, 68, 68, 0.3)',
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', color: '#FCA5A5', fontSize: '0.86rem', fontWeight: 600 }}>
+                    <CameraOff size={18} color="#EF4444" />
+                    <span>Camera is currently OFF</span>
+                  </div>
+                  <button
+                    onClick={toggleCamera}
+                    style={{
+                      padding: '0.45rem 1rem',
+                      borderRadius: '8px',
+                      backgroundColor: 'var(--accent-gold)',
+                      border: 'none',
+                      color: '#080808',
+                      fontSize: '0.8rem',
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Turn On Camera
+                  </button>
+                </div>
+              )}
+
+              {isMicMuted && (
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  padding: '0.85rem 1.15rem',
+                  borderRadius: '12px',
+                  backgroundColor: 'rgba(239, 68, 68, 0.1)',
+                  border: '1px solid rgba(239, 68, 68, 0.3)',
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', color: '#FCA5A5', fontSize: '0.86rem', fontWeight: 600 }}>
+                    <MicOff size={18} color="#EF4444" />
+                    <span>Microphone is currently MUTED / OFF</span>
+                  </div>
+                  <button
+                    onClick={activateMic}
+                    style={{
+                      padding: '0.45rem 1rem',
+                      borderRadius: '8px',
+                      backgroundColor: 'var(--accent-gold)',
+                      border: 'none',
+                      color: '#080808',
+                      fontSize: '0.8rem',
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Turn On Microphone
+                  </button>
+                </div>
+              )}
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'center', gap: '1rem' }}>
+              <button
+                onClick={onExitRoom}
+                style={{
+                  padding: '0.7rem 1.4rem',
+                  borderRadius: '10px',
+                  backgroundColor: 'transparent',
+                  border: '1px solid rgba(255, 255, 255, 0.15)',
+                  color: 'var(--text-secondary)',
+                  fontSize: '0.84rem',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                }}
+              >
+                Exit to Dashboard
               </button>
             </div>
           </div>

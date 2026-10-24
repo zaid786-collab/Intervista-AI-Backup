@@ -29,6 +29,10 @@ import {
   Mic,
   Loader2,
   AlertCircle,
+  AlertOctagon,
+  AlertTriangle,
+  Smartphone,
+  ShieldAlert,
 } from 'lucide-react';
 import { apiGetInterviewHistory } from '../utils/api';
 
@@ -136,6 +140,13 @@ export default function HistoryPage({
 
   useEffect(() => {
     fetchHistory();
+    const handleSync = () => fetchHistory();
+    window.addEventListener('storage', handleSync);
+    window.addEventListener('focus', handleSync);
+    return () => {
+      window.removeEventListener('storage', handleSync);
+      window.removeEventListener('focus', handleSync);
+    };
   }, [fetchHistory]);
 
   // Combine real data items
@@ -489,13 +500,28 @@ export default function HistoryPage({
           filteredItems.map((item) => {
             // Render Mock Interview Item
             if (item.type === 'mock') {
+              const isTerminated = item.status === 'TERMINATED_FOR_CHEATING' ||
+                item.status === 'TERMINATED_FOR_PROCTORING' ||
+                String(item.status || '').includes('TERMINATED') ||
+                (item.score === 0 && item.status !== 'Completed');
+              const isPhoneViolation = item.status === 'TERMINATED_FOR_CHEATING' ||
+                (item.terminationReason && String(item.terminationReason).toLowerCase().includes('phone'));
+
               return (
-                <div key={item.id} className="history-item-card mock-card">
+                <div
+                  key={item.id}
+                  className={`history-item-card mock-card ${isTerminated ? 'terminated-session-card' : ''}`}
+                  style={isTerminated ? {
+                    border: '1.5px solid rgba(239, 68, 68, 0.75)',
+                    boxShadow: '0 0 32px rgba(239, 68, 68, 0.16)',
+                    backgroundColor: '#120D0E',
+                  } : {}}
+                >
                   <div className="item-header-strip">
                     <div className="item-badge-left">
-                      <span className="item-type-badge mock">
+                      <span className="item-type-badge mock" style={isTerminated ? { color: '#EF4444', borderColor: 'rgba(239, 68, 68, 0.4)', backgroundColor: 'rgba(239, 68, 68, 0.1)' } : {}}>
                         <Mic size={12} />
-                        MOCK INTERVIEW SESSION
+                        {isTerminated ? 'PROCTORING TERMINATION' : 'MOCK INTERVIEW SESSION'}
                       </span>
                       <span className="item-date">
                         <Calendar size={12} />
@@ -503,11 +529,70 @@ export default function HistoryPage({
                       </span>
                     </div>
 
-                    <div className="item-status-badge">
-                      <CheckCircle2 size={13} color="#10B981" />
-                      <span>{item.status}</span>
-                    </div>
+                    {isTerminated ? (
+                      <div
+                        className="item-status-badge terminated"
+                        style={{
+                          backgroundColor: 'rgba(239, 68, 68, 0.18)',
+                          border: '1px solid rgba(239, 68, 68, 0.55)',
+                          color: '#EF4444',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '6px',
+                          padding: '4px 11px',
+                          borderRadius: '9999px',
+                          fontWeight: 700,
+                          fontSize: '0.72rem',
+                          letterSpacing: '0.04em',
+                          boxShadow: '0 0 10px rgba(239, 68, 68, 0.25)',
+                        }}
+                      >
+                        {isPhoneViolation ? (
+                          <>
+                            <Smartphone size={13} color="#EF4444" />
+                            <span>TERMINATED: MOBILE PHONE DETECTED</span>
+                          </>
+                        ) : (
+                          <>
+                            <AlertOctagon size={13} color="#EF4444" />
+                            <span>TERMINATED: PROCTORING LIMIT REACHED</span>
+                          </>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="item-status-badge">
+                        <CheckCircle2 size={13} color="#10B981" />
+                        <span>{item.status || 'Completed'}</span>
+                      </div>
+                    )}
                   </div>
+
+                  {/* Red Proctoring Incident Reason Box */}
+                  {isTerminated && (
+                    <div
+                      style={{
+                        backgroundColor: 'rgba(239, 68, 68, 0.08)',
+                        border: '1px solid rgba(239, 68, 68, 0.4)',
+                        borderRadius: '12px',
+                        padding: '0.85rem 1.15rem',
+                        marginTop: '0.5rem',
+                        marginBottom: '1rem',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.75rem',
+                        color: '#FCA5A5',
+                        fontSize: '0.84rem',
+                      }}
+                    >
+                      <AlertOctagon size={18} color="#EF4444" style={{ flexShrink: 0 }} />
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <strong style={{ color: '#EF4444', marginRight: '6px' }}>Termination Notice:</strong>
+                        <span>
+                          {item.terminationReason || item.details?.efficiencyNotes || (isPhoneViolation ? 'Interview session was terminated immediately due to unauthorized mobile phone usage.' : 'Interview terminated due to exceeding proctoring warning limits.')}
+                        </span>
+                      </div>
+                    </div>
+                  )}
 
                   <div className="item-main-content">
                     <div className="item-company-branding">
@@ -525,23 +610,45 @@ export default function HistoryPage({
                       {/* Overall Score */}
                       <div className="metric-cell">
                         <span className="cell-label">SCORE</span>
-                        <div className="cell-score" style={{ color: getScoreBadgeColor(item.score) }}>
-                          {item.score}
+                        <div className="cell-score" style={{ color: isTerminated ? '#EF4444' : getScoreBadgeColor(item.score) }}>
+                          {isTerminated ? 0 : item.score}
                           <span className="cell-denom">/100</span>
                         </div>
+                        {isTerminated && (
+                          <span
+                            style={{
+                              display: 'inline-block',
+                              marginTop: '2px',
+                              fontSize: '0.65rem',
+                              fontWeight: 800,
+                              letterSpacing: '0.06em',
+                              color: '#EF4444',
+                              textTransform: 'uppercase',
+                            }}
+                          >
+                            DISQUALIFIED
+                          </span>
+                        )}
                       </div>
 
                       {/* Efficiency Rating */}
                       <div className="metric-cell">
                         <span className="cell-label">EFFICIENCY</span>
-                        <div className="cell-score" style={{ color: getEfficiencyColor(item.efficiency) }}>
-                          {item.efficiency}%
+                        <div className="cell-score" style={{ color: isTerminated ? '#EF4444' : getEfficiencyColor(item.efficiency) }}>
+                          {isTerminated ? 0 : item.efficiency}%
                         </div>
                       </div>
 
                       {/* Efficiency Grade Pill */}
-                      <div className="efficiency-grade-pill">
-                        <Zap size={13} color="var(--accent-gold)" />
+                      <div
+                        className="efficiency-grade-pill"
+                        style={isTerminated ? {
+                          backgroundColor: 'rgba(239, 68, 68, 0.14)',
+                          borderColor: 'rgba(239, 68, 68, 0.4)',
+                          color: '#F87171',
+                        } : {}}
+                      >
+                        {isTerminated ? <AlertTriangle size={13} color="#EF4444" /> : <Zap size={13} color="var(--accent-gold)" />}
                         <span>{item.efficiencyGrade}</span>
                       </div>
                     </div>
@@ -552,52 +659,53 @@ export default function HistoryPage({
                     <div className="rubric-stat">
                       <span className="rubric-name">Communication</span>
                       <div className="rubric-track">
-                        <div className="rubric-fill" style={{ width: `${item.details?.scores?.communication ?? item.score}%`, backgroundColor: '#10B981' }} />
+                        <div className="rubric-fill" style={{ width: `${isTerminated ? 0 : (item.details?.scores?.communication ?? item.score)}%`, backgroundColor: isTerminated ? '#EF4444' : '#10B981' }} />
                       </div>
-                      <span className="rubric-num">{item.details?.scores?.communication ?? item.score}%</span>
+                      <span className="rubric-num" style={isTerminated ? { color: '#EF4444' } : {}}>{isTerminated ? 0 : (item.details?.scores?.communication ?? item.score)}%</span>
                     </div>
 
                     <div className="rubric-stat">
                       <span className="rubric-name">Technical Depth</span>
                       <div className="rubric-track">
-                        <div className="rubric-fill" style={{ width: `${item.details?.scores?.technicalDepth ?? item.score}%`, backgroundColor: 'var(--accent-gold)' }} />
+                        <div className="rubric-fill" style={{ width: `${isTerminated ? 0 : (item.details?.scores?.technicalDepth ?? item.score)}%`, backgroundColor: isTerminated ? '#EF4444' : 'var(--accent-gold)' }} />
                       </div>
-                      <span className="rubric-num">{item.details?.scores?.technicalDepth ?? item.score}%</span>
+                      <span className="rubric-num" style={isTerminated ? { color: '#EF4444' } : {}}>{isTerminated ? 0 : (item.details?.scores?.technicalDepth ?? item.score)}%</span>
                     </div>
 
                     <div className="rubric-stat">
                       <span className="rubric-name">Problem Solving</span>
                       <div className="rubric-track">
-                        <div className="rubric-fill" style={{ width: `${item.details?.scores?.problemSolving ?? item.score}%`, backgroundColor: '#60A5FA' }} />
+                        <div className="rubric-fill" style={{ width: `${isTerminated ? 0 : (item.details?.scores?.problemSolving ?? item.score)}%`, backgroundColor: isTerminated ? '#EF4444' : '#60A5FA' }} />
                       </div>
-                      <span className="rubric-num">{item.details?.scores?.problemSolving ?? item.score}%</span>
+                      <span className="rubric-num" style={isTerminated ? { color: '#EF4444' } : {}}>{isTerminated ? 0 : (item.details?.scores?.problemSolving ?? item.score)}%</span>
                     </div>
 
                     <div className="rubric-stat">
                       <span className="rubric-name">Confidence</span>
                       <div className="rubric-track">
-                        <div className="rubric-fill" style={{ width: `${item.details?.scores?.confidence ?? 80}%`, backgroundColor: '#FBBF24' }} />
+                        <div className="rubric-fill" style={{ width: `${isTerminated ? 0 : (item.details?.scores?.confidence ?? 80)}%`, backgroundColor: isTerminated ? '#EF4444' : '#FBBF24' }} />
                       </div>
-                      <span className="rubric-num">{item.details?.scores?.confidence ?? 80}%</span>
+                      <span className="rubric-num" style={isTerminated ? { color: '#EF4444' } : {}}>{isTerminated ? 0 : (item.details?.scores?.confidence ?? 80)}%</span>
                     </div>
                   </div>
 
                   {/* Efficiency Takeaway Notes */}
-                  <div className="item-efficiency-notes">
-                    <Zap size={14} color="var(--accent-gold)" className="flex-shrink-0" />
-                    <span><strong>Efficiency Analysis:</strong> {item.details?.efficiencyNotes || 'Session evaluation complete.'}</span>
+                  <div className="item-efficiency-notes" style={isTerminated ? { borderColor: 'rgba(239, 68, 68, 0.3)', color: '#FCA5A5' } : {}}>
+                    {isTerminated ? <AlertTriangle size={14} color="#EF4444" className="flex-shrink-0" /> : <Zap size={14} color="var(--accent-gold)" className="flex-shrink-0" />}
+                    <span><strong>{isTerminated ? 'Integrity Audit:' : 'Efficiency Analysis:'}</strong> {item.details?.efficiencyNotes || (isTerminated ? 'Disqualification recorded for proctoring violation.' : 'Session evaluation complete.')}</span>
                   </div>
 
                   {/* Card Action Footer */}
                   <div className="item-actions-footer">
                     <div className="strengths-preview">
-                      <span className="strength-dot" />
-                      <span>{item.details?.strengths?.[0] || 'Evaluated against industry standards'}</span>
+                      <span className="strength-dot" style={isTerminated ? { backgroundColor: '#EF4444' } : {}} />
+                      <span>{isTerminated ? 'Flagged under candidate proctoring integrity policy' : (item.details?.strengths?.[0] || 'Evaluated against industry standards')}</span>
                     </div>
 
                     <button
                       onClick={() => onViewReport && onViewReport(item.raw_report || item)}
                       className="view-audit-btn"
+                      style={isTerminated ? { borderColor: 'rgba(239, 68, 68, 0.45)', color: '#F87171' } : {}}
                     >
                       <BarChart2 size={14} />
                       <span>View Full Audit Report</span>

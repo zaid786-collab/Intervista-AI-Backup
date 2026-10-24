@@ -710,48 +710,108 @@ export function getLocalReports() {
   }
 }
 
+export function hasTerminatedInterviewOnRecord() {
+  try {
+    if (localStorage.getItem('intervista_has_termination') === 'true') return true;
+    const reports = getLocalReports();
+    if (reports.some((r) => r.status === 'TERMINATED_FOR_CHEATING' || r.status === 'TERMINATED_FOR_PROCTORING' || String(r.status || '').includes('TERMINATED') || (r.score === 0 && r.status !== 'Completed'))) {
+      localStorage.setItem('intervista_has_termination', 'true');
+      return true;
+    }
+    const dash = getLocalDashboardData();
+    if ((dash?.recent_interviews || []).some((i) => i.status === 'TERMINATED_FOR_CHEATING' || i.status === 'TERMINATED_FOR_PROCTORING' || String(i.status || '').includes('TERMINATED') || (i.score_num === 0 && i.status !== 'Completed'))) {
+      localStorage.setItem('intervista_has_termination', 'true');
+      return true;
+    }
+  } catch (_) {}
+  return false;
+}
+
+export function getLatestTerminatedSession() {
+  try {
+    const reports = getLocalReports();
+    const termReport = reports.find((r) => r.status === 'TERMINATED_FOR_CHEATING' || r.status === 'TERMINATED_FOR_PROCTORING' || String(r.status || '').includes('TERMINATED'));
+    if (termReport) return termReport;
+
+    const dash = getLocalDashboardData();
+    const termDash = (dash?.recent_interviews || []).find((i) => i.status === 'TERMINATED_FOR_CHEATING' || i.status === 'TERMINATED_FOR_PROCTORING' || String(i.status || '').includes('TERMINATED'));
+    if (termDash) return termDash;
+  } catch (_) {}
+  return null;
+}
+
 export async function apiSaveReport(reportPayload) {
   const reports = getLocalReports();
   const reportId = reportPayload.id || 'rep_' + Date.now();
+  const isTerminated = reportPayload.status === 'TERMINATED_FOR_CHEATING' ||
+                       reportPayload.status === 'TERMINATED_FOR_PROCTORING' ||
+                       String(reportPayload.status || '').includes('TERMINATED') ||
+                       reportPayload.isTerminated;
+
+  if (isTerminated) {
+    try {
+      localStorage.setItem('intervista_has_termination', 'true');
+    } catch (_) {}
+  }
+
+  const scoreNum = isTerminated ? 0 : (reportPayload.overallScore ?? reportPayload.score ?? 85);
+  const statusStr = isTerminated
+    ? (reportPayload.status || 'TERMINATED_FOR_PROCTORING')
+    : (reportPayload.status || 'Completed');
+  const termReason = reportPayload.terminationReason || reportPayload.termination_reason || null;
+
   const fullReport = {
     ...reportPayload,
     id: reportId,
+    overallScore: scoreNum,
+    score: scoreNum,
+    status: statusStr,
+    terminationReason: termReason,
     createdAt: reportPayload.createdAt || new Date().toISOString(),
   };
 
   const updated = [fullReport, ...reports.filter((r) => r.id !== reportId)];
   localStorage.setItem(REPORTS_KEY, JSON.stringify(updated));
 
-  // Also sync to dashboard
+  // Also sync to dashboard with accurate status & 0 score for terminated
   recordLocalInterviewSession({
     id: reportId,
     role: fullReport.role || 'Software Engineer',
     company: fullReport.company || 'Intervista AI',
-    score: fullReport.overallScore ?? fullReport.score ?? 85,
-    technical_score: fullReport.scores?.technicalDepth || 85,
-    communication_score: fullReport.scores?.communication || 88,
-    problem_solving_score: fullReport.scores?.problemSolving || 86,
-    duration_minutes: 30,
-    status: 'Completed',
+    score: scoreNum,
+    technical_score: isTerminated ? 0 : (fullReport.scores?.technicalDepth || 85),
+    communication_score: isTerminated ? 0 : (fullReport.scores?.communication || 88),
+    problem_solving_score: isTerminated ? 0 : (fullReport.scores?.problemSolving || 86),
+    duration_minutes: isTerminated ? 5 : (fullReport.duration || 30),
+    status: statusStr,
+    termination_reason: termReason,
+    feedback: isTerminated
+      ? `Interview terminated: ${termReason || 'Proctoring violation'}.`
+      : `Completed interview for ${fullReport.company}. Overall evaluation score: ${scoreNum}%.`,
   });
 
   return { success: true, report: fullReport };
 }
 
 export async function apiGetReports() {
+  let backendReports = [];
   try {
     const res = await request('GET', '/api/interviews/history');
     if (res?.interviews && Array.isArray(res.interviews) && res.interviews.length > 0) {
-      return res.interviews.map((item) => {
+      backendReports = res.interviews.map((item) => {
         const raw = item.raw_report || {};
         const det = item.details || {};
-        const scoreVal = item.score ?? raw.overallScore ?? 80;
-        const scores = det.scores || raw.scores || {
+        const isTerm = item.status === 'TERMINATED_FOR_CHEATING' || item.status === 'TERMINATED_FOR_PROCTORING' || String(item.status || '').includes('TERMINATED');
+        if (isTerm) {
+          try { localStorage.setItem('intervista_has_termination', 'true'); } catch (_) {}
+        }
+        const scoreVal = isTerm ? 0 : (item.score ?? raw.overallScore ?? 80);
+        const scores = isTerm ? { communication: 0, technicalDepth: 0, problemSolving: 0, confidence: 0 } : (det.scores || raw.scores || {
           communication: item.communication_score || scoreVal,
           technicalDepth: item.technical_score || scoreVal,
           problemSolving: item.problem_solving_score || scoreVal,
           confidence: Math.max(50, scoreVal - 4),
-        };
+        });
         return {
           id: item.id,
           sessionId: raw.id || item.id,
@@ -777,6 +837,7 @@ export async function apiGetReports() {
           vision_data: raw.vision_data,
           createdAt: item.date || item.created_at || new Date().toISOString(),
           status: item.status || 'Completed',
+          terminationReason: item.termination_reason || item.terminationReason || raw.terminationReason || null,
           raw_report: raw,
         };
       });
@@ -789,17 +850,32 @@ export async function apiGetReports() {
   const dashData = getLocalDashboardData();
   const recent = dashData?.recent_interviews || [];
 
-  // Merge recent dashboard interviews into report list if not already present
-  const merged = [...local];
+  // Merge backend + local reports + recent dashboard interviews without duplicates
+  const merged = [...backendReports];
+
+  local.forEach((loc) => {
+    const cleanLocId = String(loc.id).replace(/^(mock-|int_|rep_)/, '');
+    const exists = merged.some((m) => String(m.id).replace(/^(mock-|int_|rep_)/, '') === cleanLocId);
+    if (!exists) {
+      merged.push(loc);
+    }
+  });
+
   recent.forEach((item) => {
-    if (!merged.find((m) => String(m.id) === String(item.id))) {
+    const cleanItemId = String(item.id).replace(/^(mock-|int_|rep_)/, '');
+    const exists = merged.some((m) => String(m.id).replace(/^(mock-|int_|rep_)/, '') === cleanItemId);
+    if (!exists) {
+      const isTerm = item.status === 'TERMINATED_FOR_CHEATING' || item.status === 'TERMINATED_FOR_PROCTORING' || String(item.status || '').includes('TERMINATED');
+      const scoreNum = isTerm ? 0 : (item.score_num || parseInt(item.score, 10) || 85);
       merged.push({
         id: item.id,
         role: item.role,
         company: item.company,
-        overallScore: item.score_num || parseInt(item.score, 10) || 85,
-        score: item.score_num || parseInt(item.score, 10) || 85,
-        scores: {
+        overallScore: scoreNum,
+        score: scoreNum,
+        status: item.status || 'Completed',
+        terminationReason: item.termination_reason || item.terminationReason || null,
+        scores: isTerm ? { communication: 0, technicalDepth: 0, problemSolving: 0, confidence: 0 } : {
           communication: item.communication_score || 88,
           technicalDepth: item.technical_score || 85,
           problemSolving: item.problem_solving_score || 86,
@@ -816,22 +892,157 @@ export async function apiGetReports() {
 }
 
 export async function apiGetInterviewHistory() {
+  let backendInterviews = [];
+  let backendResources = [];
+  let backendFaqs = [];
+
   try {
     const res = await request('GET', '/api/interviews/history');
     if (res && res.success !== false) {
-      return res;
+      backendInterviews = Array.isArray(res.interviews) ? res.interviews : [];
+      backendResources = Array.isArray(res.resources) ? res.resources : [];
+      backendFaqs = Array.isArray(res.faqs) ? res.faqs : [];
     }
-    return {
-      success: true,
-      total_count: 0,
-      interviews: [],
-      resources: [],
-      faqs: [],
-    };
   } catch (err) {
-    console.error('Failed to fetch interview history from backend:', err);
-    throw err;
+    console.warn('[apiGetInterviewHistory] Backend unreachable, compiling local interview history:', err.message);
   }
+
+  // Merge with locally stored mock reports and dashboard sessions
+  const localReports = getLocalReports();
+  const dashData = getLocalDashboardData();
+  const dashInterviews = dashData?.recent_interviews || [];
+
+  const combinedMap = new Map();
+
+  // 1. Add backend interviews first
+  backendInterviews.forEach((item) => {
+    const rawKey = String(item.id).replace(/^(mock-|int_|rep_)/, '');
+    combinedMap.set(rawKey, item);
+  });
+
+  // 2. Add local reports
+  localReports.forEach((rep) => {
+    const rawKey = String(rep.id).replace(/^(mock-|int_|rep_)/, '');
+    const isTerm = rep.status === 'TERMINATED_FOR_CHEATING' || rep.status === 'TERMINATED_FOR_PROCTORING' || String(rep.status || '').includes('TERMINATED') || (rep.score === 0 && rep.status !== 'Completed');
+    if (isTerm) {
+      try { localStorage.setItem('intervista_has_termination', 'true'); } catch (_) {}
+    }
+    const scoreVal = isTerm ? 0 : (rep.overallScore ?? rep.score ?? 85);
+    const effVal = isTerm ? 0 : Math.min(100, Math.max(50, Math.round(((rep.scores?.technicalDepth || scoreVal) * 0.4) + ((rep.scores?.problemSolving || scoreVal) * 0.4) + ((rep.scores?.communication || scoreVal) * 0.2))));
+    const effGrade = isTerm ? 'Disqualified (Integrity Violation)' : (effVal >= 90 ? 'Exceptional Execution' : effVal >= 85 ? 'High Speed & Precision' : 'Strong Delivery');
+
+    const historyItem = {
+      id: rep.id.startsWith('mock-') ? rep.id : `mock-${rep.id}`,
+      type: 'mock',
+      company: rep.company || 'Intervista AI',
+      role: rep.role || 'Software Engineer',
+      track: rep.level || rep.interviewType || 'Technical Interview',
+      date: rep.createdAt ? (typeof rep.createdAt === 'string' && rep.createdAt.includes('T') ? new Date(rep.createdAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : rep.createdAt) : 'Recently',
+      duration: rep.duration ? (typeof rep.duration === 'number' ? `${rep.duration} mins` : rep.duration) : '30 mins',
+      score: scoreVal,
+      efficiency: effVal,
+      efficiencyGrade: effGrade,
+      status: isTerm ? (rep.status || 'TERMINATED_FOR_PROCTORING') : (rep.status || 'Completed'),
+      terminationReason: rep.terminationReason || rep.termination_reason || null,
+      details: {
+        scores: isTerm ? { communication: 0, technicalDepth: 0, problemSolving: 0, confidence: 0 } : (rep.scores || {
+          communication: scoreVal,
+          technicalDepth: scoreVal,
+          problemSolving: scoreVal,
+          confidence: Math.max(50, scoreVal - 4),
+        }),
+        strengths: rep.strengths || ['Demonstrated solid foundational awareness'],
+        improvements: rep.improvements || ['Discuss runtime complexity early'],
+        efficiencyNotes: isTerm ? (rep.terminationReason || 'Interview terminated for proctoring violations.') : (rep.summary || `Evaluated session with overall audit score: ${scoreVal}%.`),
+        detailed_feedback: rep.questionFeedback || [],
+      },
+      created_at: rep.createdAt || new Date().toISOString(),
+      raw_report: rep,
+    };
+
+    if (!combinedMap.has(rawKey)) {
+      combinedMap.set(rawKey, historyItem);
+    } else {
+      // If backend record exists but doesn't have detailed termination reason or raw_report, enrich it
+      const existing = combinedMap.get(rawKey);
+      combinedMap.set(rawKey, {
+        ...historyItem,
+        ...existing,
+        status: isTerm ? historyItem.status : (existing.status || historyItem.status),
+        score: isTerm ? 0 : (existing.score ?? scoreVal),
+        efficiency: isTerm ? 0 : (existing.efficiency ?? effVal),
+        efficiencyGrade: isTerm ? 'Disqualified (Integrity Violation)' : (existing.efficiencyGrade || effGrade),
+        terminationReason: historyItem.terminationReason || existing.terminationReason,
+        raw_report: rep,
+      });
+    }
+  });
+
+  // 3. Add dashboard recent interviews
+  dashInterviews.forEach((dash) => {
+    const rawKey = String(dash.id).replace(/^(mock-|int_|rep_)/, '');
+    const isTerm = dash.status === 'TERMINATED_FOR_CHEATING' || dash.status === 'TERMINATED_FOR_PROCTORING' || String(dash.status || '').includes('TERMINATED') || (dash.score_num === 0 && dash.status !== 'Completed');
+    if (isTerm) {
+      try { localStorage.setItem('intervista_has_termination', 'true'); } catch (_) {}
+    }
+    const scoreVal = isTerm ? 0 : (dash.score_num || parseInt(dash.score, 10) || 85);
+    const effVal = isTerm ? 0 : 86;
+    const effGrade = isTerm ? 'Disqualified (Integrity Violation)' : 'Strong Delivery';
+
+    if (!combinedMap.has(rawKey)) {
+      combinedMap.set(rawKey, {
+        id: `mock-${dash.id}`,
+        type: 'mock',
+        company: dash.company || 'Intervista AI',
+        role: dash.role || 'Software Engineer',
+        track: dash.role || 'Technical Interview',
+        date: dash.date || 'Recently',
+        duration: dash.duration_minutes ? `${dash.duration_minutes} mins` : '30 mins',
+        score: scoreVal,
+        efficiency: effVal,
+        efficiencyGrade: effGrade,
+        status: isTerm ? (dash.status || 'TERMINATED_FOR_PROCTORING') : (dash.status || 'Completed'),
+        terminationReason: dash.termination_reason || dash.terminationReason || null,
+        details: {
+          scores: isTerm ? { communication: 0, technicalDepth: 0, problemSolving: 0, confidence: 0 } : {
+            communication: dash.communication_score || scoreVal,
+            technicalDepth: dash.technical_score || scoreVal,
+            problemSolving: dash.problem_solving_score || scoreVal,
+            confidence: 80,
+          },
+          strengths: dash.strengths || ['Clear communication'],
+          improvements: dash.improvements || ['Discuss asymptotic complexity upfront'],
+          efficiencyNotes: isTerm ? (dash.termination_reason || 'Interview session terminated.') : (dash.feedback || `Scored ${scoreVal}% overall.`),
+          detailed_feedback: dash.detailed_feedback || [],
+        },
+        created_at: new Date().toISOString(),
+        raw_report: dash,
+      });
+    }
+  });
+
+  const mergedInterviews = Array.from(combinedMap.values());
+
+  // Check if any interview is terminated across all records
+  if (mergedInterviews.some((i) => i.status === 'TERMINATED_FOR_CHEATING' || i.status === 'TERMINATED_FOR_PROCTORING' || String(i.status || '').includes('TERMINATED') || (i.score === 0 && i.status !== 'Completed'))) {
+    try { localStorage.setItem('intervista_has_termination', 'true'); } catch (_) {}
+  }
+
+  // Sort interviews so most recent is on top
+  mergedInterviews.sort((a, b) => {
+    const timeA = a.created_at ? new Date(a.created_at).getTime() : 0;
+    const timeB = b.created_at ? new Date(b.created_at).getTime() : 0;
+    if (timeA && timeB && timeA !== timeB) return timeB - timeA;
+    return String(b.id).localeCompare(String(a.id));
+  });
+
+  return {
+    success: true,
+    total_count: mergedInterviews.length,
+    interviews: mergedInterviews,
+    resources: backendResources,
+    faqs: backendFaqs,
+  };
 }
 
 export async function apiGetReport(reportId) {

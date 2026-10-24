@@ -21,9 +21,20 @@ import {
   ShieldCheck,
   Check,
   Zap,
+  AlertOctagon,
+  AlertTriangle,
+  Smartphone,
+  ShieldAlert,
 } from 'lucide-react';
 import { getCurrentUser } from '../utils/auth';
-import { apiGetMe, apiUpdateProfile, fetchDashboardData, apiGetReports } from '../utils/api';
+import {
+  apiGetMe,
+  apiUpdateProfile,
+  fetchDashboardData,
+  apiGetReports,
+  hasTerminatedInterviewOnRecord,
+  getLatestTerminatedSession,
+} from '../utils/api';
 
 export default function ProfilePage({
   currentUser,
@@ -136,24 +147,86 @@ export default function ProfilePage({
       }
     }
     loadLatestProfile();
+
+    const handleSync = () => {
+      loadLatestProfile();
+    };
+    window.addEventListener('storage', handleSync);
+    window.addEventListener('focus', handleSync);
+
     return () => {
       active = false;
+      window.removeEventListener('storage', handleSync);
+      window.removeEventListener('focus', handleSync);
     };
   }, []);
 
-  // Recent Mock Sessions bound to actual database reports
+  // Check if candidate profile has any proctoring termination or disqualification on record
+  const isDisqualified = useMemo(() => {
+    if (hasTerminatedInterviewOnRecord()) return true;
+    if (dbReports && Array.isArray(dbReports)) {
+      return dbReports.some(
+        (r) =>
+          r.isTerminated ||
+          r.status?.toString().toUpperCase().includes('TERMINAT') ||
+          r.efficiencyGrade?.toString().toLowerCase().includes('disqualified')
+      );
+    }
+    return false;
+  }, [dbReports]);
+
+  // Retrieve the latest terminated session details for incident reporting
+  const latestTerminatedSession = useMemo(() => {
+    return (
+      getLatestTerminatedSession() ||
+      (dbReports && Array.isArray(dbReports)
+        ? dbReports.find(
+            (r) =>
+              r.isTerminated ||
+              r.status?.toString().toUpperCase().includes('TERMINAT') ||
+              r.efficiencyGrade?.toString().toLowerCase().includes('disqualified')
+          )
+        : null)
+    );
+  }, [dbReports]);
+
+  // Recent Mock Sessions bound to actual database reports with authentic proctoring statuses
   const recentSessions = useMemo(() => {
     if (dbReports && dbReports.length > 0) {
-      return dbReports.slice(0, 5).map((r) => ({
-        id: r.id,
-        company: r.company || 'Intervista AI',
-        role: r.role || 'Software Engineer',
-        date: r.createdAt ? (typeof r.createdAt === 'string' && r.createdAt.includes('T') ? new Date(r.createdAt).toLocaleDateString() : r.createdAt) : 'Recently',
-        score: r.overallScore ?? r.score ?? 80,
-        level: r.level || 'Mid Level',
-        status: (r.overallScore ?? r.score ?? 80) >= 80 ? 'Outstanding' : 'Evaluated',
-        rawReport: r,
-      }));
+      return dbReports.slice(0, 5).map((r) => {
+        const term = Boolean(
+          r.isTerminated ||
+          r.status?.toString().toUpperCase().includes('TERMINAT') ||
+          r.efficiencyGrade?.toString().toLowerCase().includes('disqualified')
+        );
+        const isPhone =
+          (r.terminationReason || r.status || '').toLowerCase().includes('phone') ||
+          (r.terminationReason || '').toLowerCase().includes('mobile');
+        return {
+          id: r.id,
+          company: r.company || 'Intervista AI',
+          role: r.role || 'Software Engineer',
+          date: r.createdAt
+            ? typeof r.createdAt === 'string' && r.createdAt.includes('T')
+              ? new Date(r.createdAt).toLocaleDateString()
+              : r.createdAt
+            : 'Recently',
+          score: term ? 0 : (r.overallScore ?? r.score ?? 80),
+          level: r.level || 'Mid Level',
+          isTerminated: term,
+          terminationReason:
+            r.terminationReason ||
+            (isPhone
+              ? 'Unauthorized mobile phone usage detected during technical assessment.'
+              : 'Proctoring security limit exceeded during technical session.'),
+          status: term
+            ? 'Terminated (Disqualified)'
+            : (r.overallScore ?? r.score ?? 80) >= 80
+            ? 'Outstanding'
+            : 'Evaluated',
+          rawReport: r,
+        };
+      });
     }
     return [];
   }, [dbReports]);
@@ -290,23 +363,26 @@ export default function ProfilePage({
 
         {/* ================= 1. HERO PROFILE CARD ================= */}
         <section
+          id="profile-hero-card"
           style={{
-            backgroundColor: '#121212',
-            border: '1px solid var(--border-card)',
+            backgroundColor: isDisqualified ? '#160909' : '#121212',
+            border: isDisqualified ? '2px solid rgba(239, 68, 68, 0.85)' : '1px solid var(--border-card)',
             borderRadius: '24px',
             padding: '2.5rem',
-            marginBottom: '2rem',
+            marginBottom: isDisqualified ? '1.25rem' : '2rem',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
             gap: '2rem',
             flexWrap: 'wrap',
-            boxShadow: '0 20px 50px rgba(0, 0, 0, 0.45)',
+            boxShadow: isDisqualified
+              ? '0 20px 50px rgba(239, 68, 68, 0.28), 0 0 35px rgba(239, 68, 68, 0.2)'
+              : '0 20px 50px rgba(0, 0, 0, 0.45)',
             position: 'relative',
             overflow: 'hidden',
           }}
         >
-          {/* Subtle gold ambient backdrop glow */}
+          {/* Subtle gold or red ambient backdrop glow */}
           <div
             style={{
               position: 'absolute',
@@ -315,7 +391,9 @@ export default function ProfilePage({
               width: '280px',
               height: '280px',
               borderRadius: '50%',
-              background: 'radial-gradient(circle, rgba(217, 183, 122, 0.12) 0%, transparent 70%)',
+              background: isDisqualified
+                ? 'radial-gradient(circle, rgba(239, 68, 68, 0.22) 0%, transparent 70%)'
+                : 'radial-gradient(circle, rgba(217, 183, 122, 0.12) 0%, transparent 70%)',
               pointerEvents: 'none',
             }}
           />
@@ -331,24 +409,29 @@ export default function ProfilePage({
               flex: '1 1 320px',
             }}
           >
-            {/* Avatar Circle */}
+            {/* Avatar Circle - Glowing Red Marked if Disqualified */}
             <div
+              id="profile-avatar-circle"
               style={{
                 width: '88px',
                 height: '88px',
                 borderRadius: '50%',
-                background: 'linear-gradient(135deg, #242424, #151515)',
-                border: '2px solid var(--accent-gold)',
-                boxShadow: '0 0 25px rgba(217, 183, 122, 0.35)',
+                background: isDisqualified
+                  ? 'linear-gradient(135deg, #2B1111, #180808)'
+                  : 'linear-gradient(135deg, #242424, #151515)',
+                border: isDisqualified ? '3px solid #EF4444' : '2px solid var(--accent-gold)',
+                boxShadow: isDisqualified
+                  ? '0 0 35px rgba(239, 68, 68, 0.85), inset 0 0 15px rgba(239, 68, 68, 0.4)'
+                  : '0 0 25px rgba(217, 183, 122, 0.35)',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                color: 'var(--accent-gold)',
+                color: isDisqualified ? '#EF4444' : 'var(--accent-gold)',
                 fontSize: '2.4rem',
                 fontFamily: 'var(--font-serif)',
                 fontWeight: 600,
                 flexShrink: 0,
-                overflow: 'hidden',
+                position: 'relative',
               }}
             >
               {user?.picture ? (
@@ -359,11 +442,38 @@ export default function ProfilePage({
                     width: '100%',
                     height: '100%',
                     objectFit: 'cover',
+                    borderRadius: '50%',
                   }}
                   referrerPolicy="no-referrer"
                 />
               ) : (
                 name.charAt(0).toUpperCase()
+              )}
+
+              {/* Red Disqualification Pin Badge */}
+              {isDisqualified && (
+                <div
+                  id="profile-avatar-disqualification-badge"
+                  title="Integrity Disqualification Flag"
+                  style={{
+                    position: 'absolute',
+                    bottom: '-4px',
+                    right: '-4px',
+                    backgroundColor: '#EF4444',
+                    borderRadius: '50%',
+                    width: '26px',
+                    height: '26px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    border: '2px solid #000',
+                    color: '#FFF',
+                    boxShadow: '0 0 10px rgba(239, 68, 68, 0.95)',
+                    zIndex: 5,
+                  }}
+                >
+                  <AlertOctagon size={14} />
+                </div>
               )}
             </div>
 
@@ -376,28 +486,51 @@ export default function ProfilePage({
                     fontWeight: 700,
                     letterSpacing: '0.12em',
                     textTransform: 'uppercase',
-                    color: 'var(--accent-gold)',
+                    color: isDisqualified ? '#EF4444' : 'var(--accent-gold)',
                   }}
                 >
-                  ✦ CANDIDATE PROFILE
+                  {isDisqualified ? '⚠ INTEGRITY AUDITED PROFILE' : '✦ CANDIDATE PROFILE'}
                 </span>
-                <span
-                  style={{
-                    backgroundColor: 'rgba(34, 197, 94, 0.12)',
-                    border: '1px solid rgba(34, 197, 94, 0.3)',
-                    color: '#4ADE80',
-                    fontSize: '0.72rem',
-                    fontWeight: 600,
-                    padding: '2px 9px',
-                    borderRadius: '9999px',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '4px',
-                  }}
-                >
-                  <span style={{ width: '6px', height: '6px', borderRadius: '50%', backgroundColor: '#4ADE80' }} />
-                  ACTIVE MEMBER
-                </span>
+                {isDisqualified ? (
+                  <span
+                    id="profile-disqualified-status-pill"
+                    style={{
+                      backgroundColor: 'rgba(239, 68, 68, 0.18)',
+                      border: '1px solid rgba(239, 68, 68, 0.65)',
+                      color: '#F87171',
+                      fontSize: '0.72rem',
+                      fontWeight: 700,
+                      padding: '2px 10px',
+                      borderRadius: '9999px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '5px',
+                      letterSpacing: '0.04em',
+                      boxShadow: '0 0 12px rgba(239, 68, 68, 0.35)',
+                    }}
+                  >
+                    <AlertOctagon size={12} color="#EF4444" />
+                    DISQUALIFICATION ON RECORD
+                  </span>
+                ) : (
+                  <span
+                    style={{
+                      backgroundColor: 'rgba(34, 197, 94, 0.12)',
+                      border: '1px solid rgba(34, 197, 94, 0.3)',
+                      color: '#4ADE80',
+                      fontSize: '0.72rem',
+                      fontWeight: 600,
+                      padding: '2px 9px',
+                      borderRadius: '9999px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                    }}
+                  >
+                    <span style={{ width: '6px', height: '6px', borderRadius: '50%', backgroundColor: '#4ADE80' }} />
+                    ACTIVE MEMBER
+                  </span>
+                )}
               </div>
 
               <h1
@@ -412,11 +545,11 @@ export default function ProfilePage({
                   wordBreak: 'break-word',
                 }}
               >
-                Welcome, <span style={{ color: 'var(--accent-gold)' }}>{name}</span>
+                Welcome, <span style={{ color: isDisqualified ? '#F87171' : 'var(--accent-gold)' }}>{name}</span>
               </h1>
               <p
                 style={{
-                  color: 'var(--text-secondary)',
+                  color: isDisqualified ? '#FFA4A4' : 'var(--text-secondary)',
                   fontSize: '0.88rem',
                   margin: 0,
                   maxWidth: '540px',
@@ -425,7 +558,9 @@ export default function ProfilePage({
                   wordBreak: 'break-word',
                 }}
               >
-                Manage your credentials, track technical milestones, and build your AI-evaluated interview portfolio.
+                {isDisqualified
+                  ? 'Your profile reflects an active proctoring integrity disqualification from a recent technical interview session.'
+                  : 'Manage your credentials, track technical milestones, and build your AI-evaluated interview portfolio.'}
               </p>
             </div>
           </div>
@@ -464,6 +599,97 @@ export default function ProfilePage({
             </button>
           </div>
         </section>
+
+        {/* ================= RED INTEGRITY DISQUALIFICATION BANNER ================= */}
+        {isDisqualified && (
+          <div
+            id="profile-integrity-warning-banner"
+            style={{
+              backgroundColor: 'rgba(239, 68, 68, 0.12)',
+              border: '1.5px solid rgba(239, 68, 68, 0.65)',
+              borderRadius: '16px',
+              padding: '1.35rem 1.75rem',
+              marginBottom: '2rem',
+              display: 'flex',
+              alignItems: 'flex-start',
+              gap: '1.25rem',
+              boxShadow: '0 10px 30px rgba(239, 68, 68, 0.22)',
+              position: 'relative',
+              overflow: 'hidden',
+            }}
+          >
+            <div
+              style={{
+                width: '42px',
+                height: '42px',
+                borderRadius: '12px',
+                backgroundColor: 'rgba(239, 68, 68, 0.22)',
+                border: '1px solid rgba(239, 68, 68, 0.55)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: '#EF4444',
+                flexShrink: 0,
+                marginTop: '2px',
+              }}
+            >
+              <AlertTriangle size={22} />
+            </div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', marginBottom: '0.35rem', flexWrap: 'wrap' }}>
+                <strong style={{ color: '#F87171', fontSize: '1rem', letterSpacing: '0.02em', textTransform: 'uppercase' }}>
+                  Proctoring Integrity Disqualification Flagged
+                </strong>
+                <span
+                  style={{
+                    fontSize: '0.7rem',
+                    padding: '2px 9px',
+                    borderRadius: '6px',
+                    backgroundColor: 'rgba(239, 68, 68, 0.3)',
+                    border: '1px solid rgba(239, 68, 68, 0.5)',
+                    color: '#FFA4A4',
+                    fontWeight: 700,
+                    letterSpacing: '0.05em',
+                  }}
+                >
+                  AUDIT SCORE: 0%
+                </span>
+              </div>
+              <p style={{ margin: '0 0 0.65rem 0', color: '#FCA5A5', fontSize: '0.86rem', lineHeight: 1.55 }}>
+                A recent technical mock interview was terminated immediately due to an automated proctoring security violation (
+                <strong>{latestTerminatedSession?.terminationReason || 'Unauthorized mobile device or multi-candidate presence'}</strong>
+                ). In accordance with Intervista AI integrity protocols, this session resulted in an instant disqualification with an audit score of 0 and has been permanently recorded on your candidate profile audit.
+              </p>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+                <button
+                  onClick={() => {
+                    if (onNavigate) onNavigate('history');
+                    else window.location.href = '/history';
+                  }}
+                  style={{
+                    background: 'none',
+                    border: '1px solid rgba(239, 68, 68, 0.55)',
+                    color: '#FFA4A4',
+                    padding: '0.4rem 0.95rem',
+                    borderRadius: '8px',
+                    fontSize: '0.8rem',
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                    transition: 'all 0.2s',
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.backgroundColor = 'rgba(239, 68, 68, 0.25)';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.backgroundColor = 'transparent';
+                  }}
+                >
+                  Review Incident in History →
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Notice upon Name Save */}
         {nameSaveNotice && (
@@ -1183,8 +1409,8 @@ export default function ProfilePage({
                 <div
                   key={session.id}
                   style={{
-                    backgroundColor: 'rgba(255, 255, 255, 0.02)',
-                    border: '1px solid var(--border-card)',
+                    backgroundColor: session.isTerminated ? 'rgba(239, 68, 68, 0.05)' : 'rgba(255, 255, 255, 0.02)',
+                    border: session.isTerminated ? '1.5px solid rgba(239, 68, 68, 0.6)' : '1px solid var(--border-card)',
                     borderRadius: '14px',
                     padding: '1.15rem 1.35rem',
                     display: 'flex',
@@ -1192,23 +1418,77 @@ export default function ProfilePage({
                     justifyContent: 'space-between',
                     gap: '1rem',
                     flexWrap: 'wrap',
+                    boxShadow: session.isTerminated ? '0 0 16px rgba(239, 68, 68, 0.15)' : 'none',
                   }}
                 >
                   <div style={{ minWidth: 0, flex: '1 1 200px' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.25rem', flexWrap: 'wrap' }}>
-                      <strong style={{ fontSize: '1.02rem', color: 'var(--text-primary)' }}>{session.company}</strong>
+                      <strong style={{ fontSize: '1.02rem', color: session.isTerminated ? '#FCA5A5' : 'var(--text-primary)' }}>
+                        {session.company}
+                      </strong>
                       <span style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)' }}>•</span>
-                      <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', overflowWrap: 'anywhere' }}>{session.role}</span>
+                      <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', overflowWrap: 'anywhere' }}>
+                        {session.role}
+                      </span>
+                      {session.isTerminated && (
+                        <span
+                          style={{
+                            fontSize: '0.68rem',
+                            padding: '2px 8px',
+                            borderRadius: '4px',
+                            backgroundColor: 'rgba(239, 68, 68, 0.25)',
+                            color: '#EF4444',
+                            fontWeight: 700,
+                            letterSpacing: '0.04em',
+                          }}
+                        >
+                          DISQUALIFIED
+                        </span>
+                      )}
                     </div>
                     <span style={{ fontSize: '0.78rem', color: 'var(--text-tertiary)' }}>{session.date}</span>
+                    {session.isTerminated && (
+                      <div
+                        style={{
+                          marginTop: '0.35rem',
+                          fontSize: '0.76rem',
+                          color: '#F87171',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '0.4rem',
+                        }}
+                      >
+                        <AlertOctagon size={13} color="#EF4444" />
+                        <span>{session.terminationReason}</span>
+                      </div>
+                    )}
                   </div>
 
                   <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexShrink: 0 }}>
                     <div style={{ textAlign: 'right' }}>
-                      <strong style={{ fontSize: '1.25rem', color: session.score >= 90 ? '#4ADE80' : 'var(--accent-gold)', display: 'block', lineHeight: 1.2 }}>
+                      <strong
+                        style={{
+                          fontSize: '1.25rem',
+                          color: session.isTerminated
+                            ? '#EF4444'
+                            : session.score >= 90
+                            ? '#4ADE80'
+                            : 'var(--accent-gold)',
+                          display: 'block',
+                          lineHeight: 1.2,
+                        }}
+                      >
                         {session.score}%
                       </strong>
-                      <span style={{ fontSize: '0.72rem', color: 'var(--text-tertiary)' }}>{session.status}</span>
+                      <span
+                        style={{
+                          fontSize: '0.72rem',
+                          color: session.isTerminated ? '#F87171' : 'var(--text-tertiary)',
+                          fontWeight: session.isTerminated ? 600 : 400,
+                        }}
+                      >
+                        {session.status}
+                      </span>
                     </div>
 
                     <button
@@ -1226,7 +1506,12 @@ export default function ProfilePage({
                         }
                       }}
                       className="btn-ghost-outline"
-                      style={{ padding: '0.45rem 0.85rem', fontSize: '0.78rem' }}
+                      style={{
+                        padding: '0.45rem 0.85rem',
+                        fontSize: '0.78rem',
+                        borderColor: session.isTerminated ? 'rgba(239, 68, 68, 0.5)' : undefined,
+                        color: session.isTerminated ? '#FFA4A4' : undefined,
+                      }}
                     >
                       View Report
                     </button>

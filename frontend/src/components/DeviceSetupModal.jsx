@@ -324,7 +324,22 @@ export default function DeviceSetupModal({
     initMicrophone(devId);
   };
 
+  const isCameraReady = cameraStatus === 'granted' && isCameraActive;
+  const isMicReady = micStatus === 'granted' && isMicActive;
+  const canStartInterview = Boolean(isCameraReady && isMicReady);
+
   const handleEnterInterview = () => {
+    if (!canStartInterview) {
+      setErrorMessage(
+        !isCameraReady && !isMicReady
+          ? 'Both camera and microphone are strictly mandatory to start the interview session.'
+          : !isCameraReady
+          ? 'Your camera must be turned on and granted to start the interview.'
+          : 'Your microphone must be turned on and active to start the interview.'
+      );
+      return;
+    }
+
     // Preserve stream references or state to hand off smoothly to the room
     const sessionSettings = {
       ...config,
@@ -529,10 +544,10 @@ export default function DeviceSetupModal({
                   <div style={{ fontSize: '0.9rem', fontWeight: 600, color: '#FFFFFF' }}>
                     {cameraStatus === 'denied' ? 'Camera Permission Denied' : 'Webcam Preview Off'}
                   </div>
-                  <div style={{ fontSize: '0.78rem', color: 'var(--text-tertiary)', maxWidth: '240px' }}>
+                  <div style={{ fontSize: '0.78rem', color: '#FCA5A5', maxWidth: '280px' }}>
                     {cameraStatus === 'denied'
-                      ? 'Enable camera permissions in your address bar to see your video preview.'
-                      : 'Camera preview is currently disabled. You can still test with microphone or text.'}
+                      ? 'Camera permission was denied. Please allow camera in your browser bar.'
+                      : 'Camera is currently off. Both camera and microphone are required to enter the interview.'}
                   </div>
                 </div>
               )}
@@ -610,11 +625,11 @@ export default function DeviceSetupModal({
                       width: '32px',
                       height: '32px',
                       borderRadius: '8px',
-                      backgroundColor: micStatus === 'granted' ? 'rgba(34, 197, 94, 0.15)' : 'rgba(239, 68, 68, 0.15)',
+                      backgroundColor: isMicActive && micStatus === 'granted' ? 'rgba(34, 197, 94, 0.15)' : 'rgba(239, 68, 68, 0.15)',
                       display: 'flex',
                       alignItems: 'center',
                       justifyContent: 'center',
-                      color: micStatus === 'granted' ? '#22C55E' : '#EF4444',
+                      color: isMicActive && micStatus === 'granted' ? '#22C55E' : '#EF4444',
                     }}
                   >
                     {isMicActive && micStatus === 'granted' ? <Mic size={16} /> : <MicOff size={16} />}
@@ -623,23 +638,55 @@ export default function DeviceSetupModal({
                     <div style={{ fontSize: '0.88rem', fontWeight: 600, color: '#FFFFFF' }}>
                       Microphone Activity Test
                     </div>
-                    <div style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)' }}>
-                      {hasVoiceDetected
+                    <div style={{ fontSize: '0.75rem', color: isMicActive && micStatus === 'granted' ? 'var(--text-tertiary)' : '#FCA5A5' }}>
+                      {!isMicActive
+                        ? 'Microphone is turned off. Required to start interview.'
+                        : hasVoiceDetected
                         ? 'Voice input calibrated successfully!'
                         : 'Speak into your microphone to verify detection'}
                     </div>
                   </div>
                 </div>
 
-                <span
-                  style={{
-                    fontSize: '0.75rem',
-                    fontWeight: 700,
-                    color: micVolume > 15 ? '#4ADE80' : 'var(--text-tertiary)',
-                  }}
-                >
-                  {micVolume}%
-                </span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!isMicActive) {
+                        setIsMicActive(true);
+                        initMicrophone();
+                      } else {
+                        setIsMicActive(false);
+                      }
+                    }}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '0.35rem',
+                      padding: '0.35rem 0.75rem',
+                      borderRadius: '8px',
+                      backgroundColor: isMicActive && micStatus === 'granted' ? 'rgba(255, 255, 255, 0.08)' : 'rgba(239, 68, 68, 0.18)',
+                      border: isMicActive && micStatus === 'granted' ? '1px solid rgba(255, 255, 255, 0.15)' : '1px solid rgba(239, 68, 68, 0.45)',
+                      color: isMicActive && micStatus === 'granted' ? '#FFFFFF' : '#F87171',
+                      fontSize: '0.75rem',
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {isMicActive ? <Mic size={13} /> : <MicOff size={13} />}
+                    <span>{isMicActive ? 'Mute Mic' : 'Enable Mic'}</span>
+                  </button>
+
+                  <span
+                    style={{
+                      fontSize: '0.75rem',
+                      fontWeight: 700,
+                      color: micVolume > 15 ? '#4ADE80' : 'var(--text-tertiary)',
+                    }}
+                  >
+                    {micVolume}%
+                  </span>
+                </div>
               </div>
 
               {/* Volume Indicator Bar */}
@@ -936,7 +983,33 @@ export default function DeviceSetupModal({
           </div>
 
           {/* Action Buttons */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.85rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.85rem', flexWrap: 'wrap' }}>
+            {!canStartInterview && (
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.5rem',
+                  backgroundColor: 'rgba(239, 68, 68, 0.12)',
+                  border: '1px solid rgba(239, 68, 68, 0.35)',
+                  borderRadius: '10px',
+                  padding: '0.55rem 0.95rem',
+                  color: '#F87171',
+                  fontSize: '0.8rem',
+                  fontWeight: 600,
+                }}
+              >
+                <AlertCircle size={15} color="#EF4444" style={{ flexShrink: 0 }} />
+                <span>
+                  {!isCameraReady && !isMicReady
+                    ? 'Camera & Microphone must both be active to enter'
+                    : !isCameraReady
+                    ? 'Camera must be active to enter'
+                    : 'Microphone must be active to enter'}
+                </span>
+              </div>
+            )}
+
             <button
               type="button"
               onClick={onClose}
@@ -958,19 +1031,22 @@ export default function DeviceSetupModal({
             <button
               type="button"
               onClick={handleEnterInterview}
+              disabled={!canStartInterview}
+              title={!canStartInterview ? 'Both Camera and Microphone must be active to start interview' : 'Enter Interview Room'}
               className="btn-primary"
               style={{
                 padding: '0.85rem 2.2rem',
                 borderRadius: '12px',
-                backgroundColor: 'var(--accent-gold)',
-                color: '#080808',
+                backgroundColor: canStartInterview ? 'var(--accent-gold)' : 'rgba(217, 183, 122, 0.22)',
+                color: canStartInterview ? '#080808' : 'rgba(255, 255, 255, 0.4)',
                 fontSize: '0.94rem',
                 fontWeight: 700,
-                cursor: 'pointer',
+                cursor: canStartInterview ? 'pointer' : 'not-allowed',
                 display: 'inline-flex',
                 alignItems: 'center',
                 gap: '0.65rem',
-                boxShadow: '0 4px 24px rgba(217, 183, 122, 0.45)',
+                boxShadow: canStartInterview ? '0 4px 24px rgba(217, 183, 122, 0.45)' : 'none',
+                opacity: canStartInterview ? 1 : 0.6,
                 transition: 'all 0.2s ease',
               }}
             >

@@ -271,7 +271,13 @@ export function saveLocalDashboardData(data) {
 
 export function recordLocalInterviewSession(session) {
   const current = getLocalDashboardData();
-  const scoreNum = typeof session.score === "number" ? session.score : parseInt(session.score, 10) || 0;
+  const isTerminated = session.status === 'TERMINATED_FOR_CHEATING' || session.status === 'TERMINATED_FOR_PROCTORING' || (session.status && String(session.status).includes('TERMINATED'));
+  if (isTerminated) {
+    try {
+      localStorage.setItem('intervista_has_termination', 'true');
+    } catch (_) {}
+  }
+  const scoreNum = isTerminated ? 0 : (typeof session.score === "number" ? session.score : parseInt(session.score, 10) || 0);
   const duration = typeof session.duration_minutes === "number" && session.duration_minutes > 0 ? session.duration_minutes : 1;
 
   const newInterview = {
@@ -281,20 +287,21 @@ export function recordLocalInterviewSession(session) {
     score: `${scoreNum}%`,
     score_num: scoreNum,
     duration_minutes: duration,
-    status: session.status || "Completed",
+    status: session.status || (isTerminated ? "TERMINATED_FOR_PROCTORING" : "Completed"),
     date: session.date || new Date().toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }),
     time: session.time || new Date().toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" }),
     mode: session.mode || "Virtual",
-    technical_score: session.technical_score,
-    communication_score: session.communication_score,
-    problem_solving_score: session.problem_solving_score,
-    grade: session.grade,
+    technical_score: isTerminated ? 0 : session.technical_score,
+    communication_score: isTerminated ? 0 : session.communication_score,
+    problem_solving_score: isTerminated ? 0 : session.problem_solving_score,
+    grade: session.grade || (isTerminated ? "Terminated (Integrity Violation)" : undefined),
     feedback: session.feedback,
     strengths: session.strengths,
     improvements: session.improvements,
     detailed_feedback: session.detailed_feedback,
     identified_keywords: session.identified_keywords,
     vision_data: session.vision_data || null,
+    termination_reason: session.termination_reason || session.terminationReason || null,
   };
 
   const updatedRecent = [newInterview, ...(current.recent_interviews || [])];
