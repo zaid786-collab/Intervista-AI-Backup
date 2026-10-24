@@ -6,7 +6,7 @@ import { apiTranscribeAudio } from '../utils/api';
  *
  * Implements real-time Speech-to-Text via Web Speech API (window.SpeechRecognition / window.webkitSpeechRecognition)
  * with robust resultIndex handling, finalized vs. interim text accumulation, manual editing support,
- * volume analysis, audio recording fallback, and seamless recovery from pauses and network drops.
+ * volume analysis, background silence fallback to Groq Whisper, and seamless recovery from pauses and network drops.
  */
 export function useSpeechRecognition({
   initialLanguage = 'en-IN',
@@ -16,7 +16,7 @@ export function useSpeechRecognition({
   onAudioData = null,
 } = {}) {
   // ─── State Machine ─────────────────────────────────────────────────────────
-  const [micState, setMicState] = useState('idle'); // 'idle' | 'requesting_permission' | 'listening' | 'processing' | 'transcript_ready' | 'error'
+  const [micState, setMicState] = useState('idle'); // 'idle' | 'requesting_permission' | 'listening' | 'paused' | 'processing' | 'transcript_ready' | 'error'
   const [isListening, setIsListening] = useState(false);
   const [transcript, setTranscript] = useState('');
   const [interimTranscript, setInterimTranscript] = useState('');
@@ -26,27 +26,35 @@ export function useSpeechRecognition({
   const [error, setError] = useState(null);
   const [isCandidateSpeaking, setIsCandidateSpeaking] = useState(false);
   const [isSupported, setIsSupported] = useState(true);
+  const [hasRecordedAudio, setHasRecordedAudio] = useState(false);
+  const [isTranscribing, setIsTranscribing] = useState(false);
 
   // ─── Internal Refs ─────────────────────────────────────────────────────────
   const recognitionRef = useRef(null);
   const streamRef = useRef(null);
   const audioContextRef = useRef(null);
   const analyserRef = useRef(null);
+  const sourceNodeRef = useRef(null);
   const animFrameRef = useRef(null);
   const timerIntervalRef = useRef(null);
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
   const restartTimeoutRef = useRef(null);
-  
+  const silenceTimeoutRef = useRef(null);
+
   // committedFinalRef stores all finalized sentences for the current answer
   const committedFinalRef = useRef('');
   // interimRef stores temporary non-final speech
   const interimRef = useRef('');
-  
+
   const isIntentionalRecordingRef = useRef(false);
   const isRecognitionStartingRef = useRef(false);
+  const isPausedBySystemRef = useRef(false);
   const consecutiveErrorsRef = useRef(0);
   const activeLangRef = useRef(initialLanguage || 'en-IN');
+  const lastSpeechTimeRef = useRef(0);
+  const candidateHadVoiceRef = useRef(false);
+  const isBackgroundTranscribingRef = useRef(false);
 
   useEffect(() => {
     activeLangRef.current = selectedLanguage;
@@ -118,6 +126,48 @@ export function useSpeechRecognition({
     return stream;
   }, [selectedMicId]);
 
+  // ─── Background Server Fallback Trigger ────────────────────────────────────
+  const attemptBackgroundTranscribe = useCallback(async () => {
+    if (isBackgroundTranscribingRef.current || !audioChunksRef.current.length) return;
+    const currentText = committedFinalRef.current.trim();
+    // Only trigger auto-transcribe fallback if Web Speech produced no text or very little
+    if (currentText.length > 25) return;
+
+    const mime = mediaRecorderRef.current?.mimeType || 'audio/webm';
+    const audioBlob = new Blob(audioChunksRef.current, { type: mime });
+    if (audioBlob.size < 2000) return;
+
+    isBackgroundTranscribingRef.current = true;
+    setIsTranscribing(true);
+    try {
+      const res = await apiTranscribeAudio({
+        audioBlob,
+        language: activeLangRef.current || selectedLanguage,
+        sessionId,
+        questionId,
+      });
+
+      if (res?.success && res.transcript && res.transcript.trim()) {
+        const serverText = res.transcript.trim();
+        // Discard short hallucination phrases like "Thank you." on silence
+        if (serverText.length > 3 && !/^(thank you\.?|you|bye)$/i.test(serverText)) {
+          if (!committedFinalRef.current.trim()) {
+            committedFinalRef.current = serverText;
+            setTranscript(serverText);
+          } else if (serverText.length > committedFinalRef.current.length * 1.5) {
+            committedFinalRef.current = serverText;
+            setTranscript(serverText);
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('[useSpeechRecognition] Auto-transcribe background error:', e);
+    } finally {
+      isBackgroundTranscribingRef.current = false;
+      setIsTranscribing(false);
+    }
+  }, [selectedLanguage, sessionId, questionId]);
+
   // ─── Setup Audio Context & Volume Analyser ──────────────────────────────────
   const setupAudioAnalyser = useCallback((stream) => {
     try {
@@ -130,6 +180,16 @@ export function useSpeechRecognition({
         ctx.resume().catch(() => {});
       }
 
+      if (sourceNodeRef.current) {
+        try { sourceNodeRef.current.disconnect(); } catch (_) {}
+        sourceNodeRef.current = null;
+      }
+
+      if (animFrameRef.current) {
+        cancelAnimationFrame(animFrameRef.current);
+        animFrameRef.current = null;
+      }
+
       const analyser = ctx.createAnalyser();
       analyser.fftSize = 256;
       analyser.smoothingTimeConstant = 0.8;
@@ -137,6 +197,7 @@ export function useSpeechRecognition({
 
       const source = ctx.createMediaStreamSource(stream);
       source.connect(analyser);
+      sourceNodeRef.current = source;
 
       if (onAudioData) {
         onAudioData(analyser);
@@ -157,10 +218,17 @@ export function useSpeechRecognition({
         const vol = Math.min(100, Math.round((avg / 128) * 100));
         setVolume(vol);
 
-        if (vol > 15 && isIntentionalRecordingRef.current) {
+        if (vol > 14 && isIntentionalRecordingRef.current && !isPausedBySystemRef.current) {
           setIsCandidateSpeaking(true);
+          lastSpeechTimeRef.current = Date.now();
+          candidateHadVoiceRef.current = true;
         } else if (vol <= 8) {
           setIsCandidateSpeaking(false);
+          // If candidate was speaking and has now paused for 1.8 seconds, check fallback
+          if (candidateHadVoiceRef.current && (Date.now() - lastSpeechTimeRef.current > 1800)) {
+            candidateHadVoiceRef.current = false;
+            attemptBackgroundTranscribe();
+          }
         }
 
         animFrameRef.current = requestAnimationFrame(trackAudioLevel);
@@ -170,12 +238,19 @@ export function useSpeechRecognition({
     } catch (err) {
       console.warn('[useSpeechRecognition] Analyser setup error:', err);
     }
-  }, [onAudioData]);
+  }, [onAudioData, attemptBackgroundTranscribe]);
 
   // ─── Setup MediaRecorder for Backup Audio Blob ─────────────────────────────
   const setupMediaRecorder = useCallback((stream) => {
     try {
       if (!window.MediaRecorder) return;
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+        return; // already actively recording
+      }
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+        try { mediaRecorderRef.current.stop(); } catch (_) {}
+      }
+
       audioChunksRef.current = [];
       const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
         ? 'audio/webm;codecs=opus'
@@ -192,6 +267,7 @@ export function useSpeechRecognition({
       recorder.ondataavailable = (event) => {
         if (event.data && event.data.size > 0) {
           audioChunksRef.current.push(event.data);
+          setHasRecordedAudio(true);
         }
       };
 
@@ -204,10 +280,12 @@ export function useSpeechRecognition({
 
   // ─── Start / Restart Browser Speech Recognition Engine ────────────────────
   const startSpeechEngine = useCallback(() => {
+    if (isPausedBySystemRef.current) return false;
+
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) {
       setIsSupported(false);
-      setError('Browser speech recognition is not supported in this browser. Please use Google Chrome, Brave, Edge, or Safari.');
+      // Client-side Web Speech not available, but audio recorder + backend Whisper will handle speech
       return false;
     }
 
@@ -230,7 +308,7 @@ export function useSpeechRecognition({
       recognition.continuous = true;
       recognition.interimResults = true;
       recognition.maxAlternatives = 1;
-      
+
       const lang = activeLangRef.current || 'en-IN';
       recognition.lang = lang;
 
@@ -281,6 +359,7 @@ export function useSpeechRecognition({
 
         if (combined) {
           setIsCandidateSpeaking(true);
+          lastSpeechTimeRef.current = Date.now();
         }
       };
 
@@ -297,12 +376,6 @@ export function useSpeechRecognition({
           setSelectedLanguage('en-US');
         } else if (errType === 'network') {
           consecutiveErrorsRef.current += 1;
-          // Soft network warning; don't terminate immediately, let onend handle graceful backoff
-          if (consecutiveErrorsRef.current >= 4) {
-            console.warn('[useSpeechRecognition] Repeated network status from speech engine.');
-          }
-        } else if (errType !== 'no-speech' && errType !== 'aborted') {
-          console.warn('[useSpeechRecognition] status:', errType);
         }
       };
 
@@ -310,15 +383,26 @@ export function useSpeechRecognition({
         isRecognitionStartingRef.current = false;
         recognitionRef.current = null;
 
-        // If candidate intentionally wants to record, automatically restart engine to maintain continuous listening
-        if (isIntentionalRecordingRef.current) {
-          const delay = consecutiveErrorsRef.current > 0 ? 500 : 120;
+        // Commit any pending interim transcript before restart so candidate words aren't lost
+        if (interimRef.current && interimRef.current.trim()) {
+          const existing = committedFinalRef.current ? committedFinalRef.current.trim() : '';
+          committedFinalRef.current = existing
+            ? `${existing} ${interimRef.current.trim()}`
+            : interimRef.current.trim();
+          interimRef.current = '';
+          setInterimTranscript('');
+          setTranscript(committedFinalRef.current);
+        }
+
+        // If candidate intentionally wants to record and not paused by system, maintain continuous listening
+        if (isIntentionalRecordingRef.current && !isPausedBySystemRef.current) {
+          const delay = consecutiveErrorsRef.current > 0 ? 400 : 70;
           restartTimeoutRef.current = setTimeout(() => {
-            if (isIntentionalRecordingRef.current) {
+            if (isIntentionalRecordingRef.current && !isPausedBySystemRef.current) {
               startSpeechEngine();
             }
           }, delay);
-        } else {
+        } else if (!isPausedBySystemRef.current) {
           setIsListening(false);
           setMicState('transcript_ready');
         }
@@ -330,17 +414,15 @@ export function useSpeechRecognition({
       return true;
     } catch (err) {
       isRecognitionStartingRef.current = false;
-      if (err.name !== 'InvalidStateError') {
-        console.warn('[useSpeechRecognition] Failed to start recognition engine:', err);
-      }
       return false;
     }
   }, []);
 
   // ─── Start Recording (Action) ──────────────────────────────────────────────
   const startRecording = useCallback(async () => {
+    isPausedBySystemRef.current = false;
     setError(null);
-    setMicState('requesting_permission');
+    setMicState('listening');
     isIntentionalRecordingRef.current = true;
     consecutiveErrorsRef.current = 0;
 
@@ -369,7 +451,6 @@ export function useSpeechRecognition({
 
       // 5. Start Speech Engine
       startSpeechEngine();
-      setMicState('listening');
       setIsListening(true);
     } catch (err) {
       console.error('[useSpeechRecognition] startRecording error:', err);
@@ -385,18 +466,45 @@ export function useSpeechRecognition({
     }
   }, [acquireAudioStream, setupAudioAnalyser, setupMediaRecorder, startSpeechEngine]);
 
-  // ─── Stop Recording (Action) ───────────────────────────────────────────────
-  const stopRecording = useCallback(async () => {
+  // ─── Pause Listening (used when Interviewer is speaking) ───────────────────
+  const pauseListening = useCallback(() => {
+    isPausedBySystemRef.current = true;
+    if (restartTimeoutRef.current) {
+      clearTimeout(restartTimeoutRef.current);
+      restartTimeoutRef.current = null;
+    }
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current.onstart = null;
+        recognitionRef.current.onresult = null;
+        recognitionRef.current.onerror = null;
+        recognitionRef.current.onend = null;
+        recognitionRef.current.stop();
+      } catch (_) {}
+      recognitionRef.current = null;
+    }
+    setIsListening(false);
+    setMicState('paused');
+  }, []);
+
+  // ─── Resume Listening (used when Interviewer finishes speaking) ────────────
+  const resumeListening = useCallback(() => {
+    isPausedBySystemRef.current = false;
+    startRecording();
+  }, [startRecording]);
+
+  // ─── Stop Recording And Transcribe (Action with Full Fallback) ─────────────
+  const stopRecordingAndTranscribe = useCallback(async () => {
     isIntentionalRecordingRef.current = false;
     isRecognitionStartingRef.current = false;
+    isPausedBySystemRef.current = false;
     setMicState('processing');
+    setIsTranscribing(true);
 
     if (restartTimeoutRef.current) {
       clearTimeout(restartTimeoutRef.current);
       restartTimeoutRef.current = null;
     }
-
-    // Stop Duration Timer
     if (timerIntervalRef.current) {
       clearInterval(timerIntervalRef.current);
       timerIntervalRef.current = null;
@@ -414,15 +522,8 @@ export function useSpeechRecognition({
       recognitionRef.current = null;
     }
 
-    // Stop MediaRecorder
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-      try {
-        mediaRecorderRef.current.stop();
-      } catch (_) {}
-    }
-
     // Promote any leftover interim speech to committed text
-    if (interimRef.current) {
+    if (interimRef.current && interimRef.current.trim()) {
       const existing = committedFinalRef.current ? committedFinalRef.current.trim() : '';
       committedFinalRef.current = existing
         ? `${existing} ${interimRef.current.trim()}`
@@ -430,25 +531,39 @@ export function useSpeechRecognition({
       interimRef.current = '';
     }
 
-    const finalAnswer = committedFinalRef.current ? committedFinalRef.current.trim() : '';
-    setTranscript(finalAnswer);
-    setInterimTranscript('');
+    // Flush final audio data from MediaRecorder
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      try {
+        mediaRecorderRef.current.requestData();
+        mediaRecorderRef.current.stop();
+      } catch (_) {}
+    }
 
-    // If Web Speech produced no text, attempt server-backed audio transcription fallback
-    if (!finalAnswer && audioChunksRef.current.length > 0) {
+    // Short wait for MediaRecorder ondataavailable to receive final chunk
+    await new Promise(r => setTimeout(r, 160));
+
+    let finalAnswer = committedFinalRef.current ? committedFinalRef.current.trim() : '';
+
+    // If Web Speech produced no text or very short response, request Groq Whisper server transcription
+    if ((!finalAnswer || finalAnswer.length < 15) && audioChunksRef.current.length > 0) {
       try {
         const mime = mediaRecorderRef.current?.mimeType || 'audio/webm';
         const audioBlob = new Blob(audioChunksRef.current, { type: mime });
-        if (audioBlob.size > 2000) {
+        if (audioBlob.size > 1500) {
           const sttRes = await apiTranscribeAudio({
             audioBlob,
             language: activeLangRef.current || selectedLanguage,
             sessionId,
             questionId,
           });
-          if (sttRes?.success && sttRes.transcript) {
-            committedFinalRef.current = sttRes.transcript;
-            setTranscript(sttRes.transcript);
+          if (sttRes?.success && sttRes.transcript && sttRes.transcript.trim()) {
+            const serverText = sttRes.transcript.trim();
+            if (!/^(thank you\.?|you|bye)$/i.test(serverText)) {
+              if (!finalAnswer || serverText.length > finalAnswer.length) {
+                finalAnswer = serverText;
+                committedFinalRef.current = serverText;
+              }
+            }
           }
         }
       } catch (err) {
@@ -456,10 +571,20 @@ export function useSpeechRecognition({
       }
     }
 
+    setTranscript(finalAnswer);
+    setInterimTranscript('');
     setIsListening(false);
     setIsCandidateSpeaking(false);
+    setIsTranscribing(false);
     setMicState('transcript_ready');
+
+    return finalAnswer;
   }, [selectedLanguage, sessionId, questionId]);
+
+  // ─── Stop Recording (Simple) ───────────────────────────────────────────────
+  const stopRecording = useCallback(() => {
+    return stopRecordingAndTranscribe();
+  }, [stopRecordingAndTranscribe]);
 
   // ─── Toggle Recording ──────────────────────────────────────────────────────
   const toggleRecording = useCallback(() => {
@@ -474,6 +599,8 @@ export function useSpeechRecognition({
   const clearTranscript = useCallback(() => {
     committedFinalRef.current = '';
     interimRef.current = '';
+    audioChunksRef.current = [];
+    setHasRecordedAudio(false);
     setTranscript('');
     setInterimTranscript('');
     setRecordingDuration(0);
@@ -492,7 +619,7 @@ export function useSpeechRecognition({
     setSelectedLanguage(langCode);
     activeLangRef.current = langCode;
 
-    if (isIntentionalRecordingRef.current) {
+    if (isIntentionalRecordingRef.current && !isPausedBySystemRef.current) {
       if (recognitionRef.current) {
         try {
           recognitionRef.current.onend = null;
@@ -500,10 +627,10 @@ export function useSpeechRecognition({
         } catch (_) {}
       }
       setTimeout(() => {
-        if (isIntentionalRecordingRef.current) {
+        if (isIntentionalRecordingRef.current && !isPausedBySystemRef.current) {
           startSpeechEngine();
         }
-      }, 100);
+      }, 80);
     }
   }, [startSpeechEngine]);
 
@@ -511,6 +638,8 @@ export function useSpeechRecognition({
   const resetSession = useCallback(() => {
     committedFinalRef.current = '';
     interimRef.current = '';
+    audioChunksRef.current = [];
+    setHasRecordedAudio(false);
     setTranscript('');
     setInterimTranscript('');
     setRecordingDuration(0);
@@ -523,9 +652,16 @@ export function useSpeechRecognition({
     return () => {
       isIntentionalRecordingRef.current = false;
       isRecognitionStartingRef.current = false;
+      isPausedBySystemRef.current = false;
       if (restartTimeoutRef.current) clearTimeout(restartTimeoutRef.current);
+      if (silenceTimeoutRef.current) clearTimeout(silenceTimeoutRef.current);
       if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
       if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
+
+      if (sourceNodeRef.current) {
+        try { sourceNodeRef.current.disconnect(); } catch (_) {}
+        sourceNodeRef.current = null;
+      }
 
       if (recognitionRef.current) {
         try {
@@ -568,8 +704,13 @@ export function useSpeechRecognition({
     error,
     isCandidateSpeaking,
     isSupported,
+    hasRecordedAudio,
+    isTranscribing,
     startRecording,
     stopRecording,
+    stopRecordingAndTranscribe,
+    pauseListening,
+    resumeListening,
     toggleRecording,
     clearTranscript,
     setManualTranscript,

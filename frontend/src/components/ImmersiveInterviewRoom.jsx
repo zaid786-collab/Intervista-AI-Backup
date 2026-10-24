@@ -606,17 +606,27 @@ export default function ImmersiveInterviewRoom({
       if (femaleVoice) utterance.voice = femaleVoice;
     }
 
+    // Pause candidate microphone while interviewer is speaking to isolate candidate's voice from computer echo
+    if (speech && typeof speech.pauseListening === 'function') {
+      speech.pauseListening();
+    }
+    setIsInterviewerSpeaking(true);
+
     let safetyTimer = null;
+    const estimatedDuration = Math.max(12000, cleanSpeech.length * 85);
 
     // Fallback timer: ensure mic is activated even if browser speech ends unexpectedly, hangs, or is blocked
     safetyTimer = setTimeout(() => {
       setIsInterviewerSpeaking(false);
       interviewerFinishedSpeakingAtRef.current = Date.now();
       activateMic();
-    }, 4500);
+    }, estimatedDuration);
 
     utterance.onstart = () => {
       setIsInterviewerSpeaking(true);
+      if (speech && typeof speech.pauseListening === 'function') {
+        speech.pauseListening();
+      }
     };
 
     utterance.onend = () => {
@@ -1042,9 +1052,28 @@ export default function ImmersiveInterviewRoom({
 
   // ─── 7. Submit Candidate Answer ─────────────────────────────────────────────
   const handleSubmitAnswer = async () => {
-    if (!candidateAnswer.trim() || isSubmittingAnswer) return;
+    let answerText = candidateAnswer.trim();
 
-    const answerText = candidateAnswer.trim();
+    // Voice Answer Fallback: If text input is empty, but candidate spoke or audio chunks exist
+    if (!answerText) {
+      if (speech.hasRecordedAudio || speech.recordingDuration > 0 || speech.isCandidateSpeaking || speech.isListening) {
+        setIsSubmittingAnswer(true);
+        try {
+          const transcribed = await speech.stopRecordingAndTranscribe();
+          if (transcribed && transcribed.trim()) {
+            answerText = transcribed.trim();
+            setCandidateAnswer(answerText);
+          }
+        } catch (e) {
+          console.warn('[ROOM] Voice submission auto-transcribe error:', e);
+        } finally {
+          setIsSubmittingAnswer(false);
+        }
+      }
+    }
+
+    if (!answerText || isSubmittingAnswer) return;
+
     setIsSubmittingAnswer(true);
     speech.stopRecording();
     speech.setMicState('analyzing');
@@ -3189,8 +3218,12 @@ export default function ImmersiveInterviewRoom({
               ref={textareaRef}
               rows={2}
               placeholder={
-                speech.isListening
-                  ? '🎙️ Listening... Speak naturally into your microphone. Words will appear here in real-time. (You can also type or edit anytime)'
+                isInterviewerSpeaking
+                  ? '🤖 Interviewer is speaking... Listen to question. Microphone will activate automatically as soon as it finishes.'
+                  : speech.isListening
+                  ? speech.isCandidateSpeaking
+                    ? '🎙️ Voice detected! Speak your answer naturally; words are appearing live... (You can also type or edit anytime)'
+                    : '🎙️ Listening... Speak your answer into the microphone. (You can also type or edit anytime)'
                   : 'Microphone is paused. Click "Start Speaking (Mic)" or type your response here...'
               }
               value={candidateAnswer}
@@ -3312,28 +3345,28 @@ export default function ImmersiveInterviewRoom({
               </span>
             </div>
 
-            {/* Right: Submit Button */}
+            {/* Right: Submit Button (Supports both typed and spoken answers) */}
             <button
               id="send-answer-btn"
               type="button"
               onClick={handleSubmitAnswer}
-              disabled={!candidateAnswer.trim() || isSubmittingAnswer}
+              disabled={(!candidateAnswer.trim() && !speech.hasRecordedAudio && speech.recordingDuration === 0) || isSubmittingAnswer || speech.isTranscribing}
               style={{
                 display: 'inline-flex',
                 alignItems: 'center',
                 gap: '0.45rem',
                 padding: '0.48rem 1.35rem',
                 borderRadius: '10px',
-                backgroundColor: candidateAnswer.trim()
+                backgroundColor: (candidateAnswer.trim() || speech.hasRecordedAudio || speech.recordingDuration > 0)
                   ? 'var(--accent-gold)'
                   : 'rgba(255, 255, 255, 0.08)',
                 border: 'none',
-                color: candidateAnswer.trim() ? '#080808' : 'var(--text-tertiary)',
+                color: (candidateAnswer.trim() || speech.hasRecordedAudio || speech.recordingDuration > 0) ? '#080808' : 'var(--text-tertiary)',
                 fontSize: '0.86rem',
                 fontWeight: 700,
-                cursor: candidateAnswer.trim() ? 'pointer' : 'default',
+                cursor: (candidateAnswer.trim() || speech.hasRecordedAudio || speech.recordingDuration > 0) ? 'pointer' : 'default',
                 transition: 'all 0.15s ease',
-                boxShadow: candidateAnswer.trim()
+                boxShadow: (candidateAnswer.trim() || speech.hasRecordedAudio || speech.recordingDuration > 0)
                   ? '0 4px 16px rgba(217, 183, 122, 0.35)'
                   : 'none',
                 flexShrink: 0,
@@ -3342,7 +3375,17 @@ export default function ImmersiveInterviewRoom({
               {isSubmittingAnswer ? (
                 <>
                   <Loader2 size={14} className="spin" />
-                  <span>Evaluating...</span>
+                  <span>Evaluating Answer...</span>
+                </>
+              ) : speech.isTranscribing ? (
+                <>
+                  <Loader2 size={14} className="spin" />
+                  <span>Transcribing Voice...</span>
+                </>
+              ) : !candidateAnswer.trim() && (speech.hasRecordedAudio || speech.recordingDuration > 0) ? (
+                <>
+                  <Mic size={14} />
+                  <span>Send Voice Answer</span>
                 </>
               ) : questionIndex >= totalQuestions ? (
                 <>
