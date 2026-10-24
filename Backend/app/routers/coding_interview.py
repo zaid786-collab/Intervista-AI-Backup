@@ -240,6 +240,9 @@ def run_coding_code(
         "executionTimeMs": execution_result.get("execution_time_ms", 0),
         "results": execution_result.get("results", []),
         "logs": execution_result.get("logs", []),
+        "stdout": execution_result.get("stdout", ""),
+        "stderr": execution_result.get("stderr", ""),
+        "terminal_output": execution_result.get("terminal_output", ""),
     }
 
 
