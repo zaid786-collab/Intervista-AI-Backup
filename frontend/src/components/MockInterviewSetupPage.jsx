@@ -16,6 +16,7 @@ import {
   X,
   FileCheck,
 } from 'lucide-react';
+import { apiParseResumeFile } from '../utils/api';
 
 const COMPANIES = [
   'Google',
@@ -177,15 +178,27 @@ export default function MockInterviewSetupPage({ onLaunchSession, onBackToOvervi
     }
   };
 
-  const handleResumeFileUpload = (e) => {
+  const handleResumeFileUpload = async (e) => {
     const file = e.target.files && e.target.files[0];
     if (file) {
       setResumeFileName(file.name);
       setIsAnalyzingResume(true);
-      setTimeout(() => {
-        setIsAnalyzingResume(false);
+      try {
+        const res = await apiParseResumeFile(file);
+        if (res.success && res.text) {
+          setResumeText(res.text);
+          setResumeParsed(true);
+        } else {
+          setResumeText(`[Resume: ${file.name}]`);
+          setResumeParsed(true);
+        }
+      } catch (err) {
+        console.warn('Resume parse notice:', err.message);
+        setResumeText(`[Resume: ${file.name}]`);
         setResumeParsed(true);
-      }, 700);
+      } finally {
+        setIsAnalyzingResume(false);
+      }
     }
   };
 

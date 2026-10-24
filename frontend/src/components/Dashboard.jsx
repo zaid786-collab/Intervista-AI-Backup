@@ -3,6 +3,7 @@ import MockInterviewSetupPage from './MockInterviewSetupPage';
 import CareerPrepDSAPage from './CareerPrepDSAPage';
 import HistoryPage from './HistoryPage';
 import ProfilePage from './ProfilePage';
+import ResumeATS from '../pages/ResumeATS';
 import { useAuth } from '../context/useAuth';
 import { apiGetSessions, apiGetReport } from '../utils/api';
 import {
@@ -160,6 +161,7 @@ export default function Dashboard({
   const [activeNav, setActiveNav] = useState(() => {
     if (typeof window !== 'undefined') {
       const h = window.location.hash.toLowerCase();
+      if (h.includes('resume') || h.includes('ats')) return 'Resume ATS';
       if (h.includes('profile')) return 'My Profile';
       if (h.includes('history')) return 'History';
       if (h.includes('mock')) return 'Mock Interview';
@@ -214,6 +216,8 @@ export default function Dashboard({
       const h = window.location.hash.toLowerCase();
       if (h.includes('profile')) {
         setActiveNav('My Profile');
+      } else if (h.includes('resume') || h.includes('ats')) {
+        setActiveNav('Resume ATS');
       } else if (h.includes('history')) {
         setActiveNav('History');
       } else if (h.includes('mock')) {
@@ -464,6 +468,16 @@ export default function Dashboard({
       action: () => {
         setActiveNav('Mock Interview');
         window.location.hash = '#dashboard/mock-interview';
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      },
+    },
+    {
+      label: 'Resume ATS',
+      icon: FileText,
+      id: 'resume-ats',
+      action: () => {
+        setActiveNav('Resume ATS');
+        window.location.hash = '#dashboard/resume-ats';
         window.scrollTo({ top: 0, behavior: 'smooth' });
       },
     },
@@ -746,6 +760,8 @@ export default function Dashboard({
                 window.scrollTo({ top: 0, behavior: 'smooth' });
               }}
             />
+          ) : activeNav === 'Resume ATS' ? (
+            <ResumeATS onStartInterview={onStartInterview} />
           ) : activeNav === 'Career Prep' ? (
             <CareerPrepDSAPage
               onStartInterview={(title) => {
