@@ -133,10 +133,10 @@ export class VisionAnalyzer {
               "https://storage.googleapis.com/mediapipe-models/object_detector/efficientdet_lite0/float16/1/efficientdet_lite0.tflite",
             delegate: "GPU",
           },
-          scoreThreshold: 0.30,
+          scoreThreshold: 0.35,
           runningMode: "VIDEO",
         });
-        console.log("[ComputerVision] MediaPipe ObjectDetector active with GPU delegate (Threshold: 0.30).");
+        console.log("[ComputerVision] MediaPipe ObjectDetector active with GPU delegate (scoreThreshold: 0.35).");
       } catch (objGpuErr) {
         try {
           this.objectDetector = await ObjectDetector.createFromOptions(filesetResolver, {
@@ -145,10 +145,10 @@ export class VisionAnalyzer {
                 "https://storage.googleapis.com/mediapipe-models/object_detector/efficientdet_lite0/float16/1/efficientdet_lite0.tflite",
               delegate: "CPU",
             },
-            scoreThreshold: 0.30,
+            scoreThreshold: 0.35,
             runningMode: "VIDEO",
           });
-          console.log("[ComputerVision] MediaPipe ObjectDetector active with CPU delegate (Threshold: 0.30).");
+          console.log("[ComputerVision] MediaPipe ObjectDetector active with CPU delegate (scoreThreshold: 0.35).");
         } catch (objCpuErr) {
           console.warn("[ComputerVision] ObjectDetector init failed:", objCpuErr.message);
         }
@@ -183,10 +183,10 @@ export class VisionAnalyzer {
                 "https://storage.googleapis.com/mediapipe-models/object_detector/efficientdet_lite0/float16/1/efficientdet_lite0.tflite",
               delegate: "CPU",
             },
-            scoreThreshold: 0.18,
+            scoreThreshold: 0.35,
             runningMode: "VIDEO",
           });
-          console.log("[ComputerVision] MediaPipe ObjectDetector active with CPU delegate.");
+          console.log("[ComputerVision] MediaPipe ObjectDetector active with CPU delegate (scoreThreshold: 0.35).");
         } catch (objErr) {
           console.warn("[ComputerVision] ObjectDetector CPU fallback error:", objErr.message);
         }
@@ -219,34 +219,105 @@ export class VisionAnalyzer {
     const currentTime = timestampMs > this.lastProcessedTimestamp ? timestampMs : this.lastProcessedTimestamp + 1;
     this.lastProcessedTimestamp = currentTime;
 
-    // Real-time mobile phone detection inference
+    // Real-time mobile phone detection inference with balanced geometry filter
     let phoneDetected = false;
     let phoneConfidence = 0;
-    let candidateBoundingBox = null;
+    let phoneBoundingBox = null;
+    let passedGeometryValidation = false;
 
     if (this.objectDetector && videoElement) {
       try {
         const objResults = this.objectDetector.detectForVideo(videoElement, currentTime);
         if (objResults && objResults.detections && objResults.detections.length > 0) {
+          const videoW = videoElement.videoWidth || 640;
+          const videoH = videoElement.videoHeight || 480;
+          const frameArea = videoW * videoH;
+          const minConf = this.config.mobilePhone?.minConfidence || 0.45;
+          const minAspect = this.config.mobilePhone?.minAspectRatio || 1.38;
+          const maxAspect = this.config.mobilePhone?.maxAspectRatio || 3.0;
+          const minArea = this.config.mobilePhone?.minAreaRatio || 0.015;
+          const maxArea = this.config.mobilePhone?.maxAreaRatio || 0.42;
+          const minDim = this.config.mobilePhone?.minDimensionPx || 36;
+
+          // Non-phone objects explicitly excluded
+          const excludedCategories = [
+            "book", "laptop", "tv", "cup", "bottle", "keyboard", "mouse",
+            "chair", "person", "couch", "bed", "dining table", "clock",
+            "potted plant", "scissors", "vase", "bowl", "sink", "toaster", "microwave"
+          ];
+
           for (const d of objResults.detections) {
-            for (const cat of d.categories) {
-              const name = (cat.categoryName || cat.displayName || "").toLowerCase().trim();
-              // MediaPipe COCO model labels mobile phones as "cell phone" (or "mobile phone")
-              // Match candidate cell phone with candidate threshold >= 0.35
-              if (name === "cell phone" || name === "mobile phone" || name === "phone" || name.includes("cell phone")) {
-                if (cat.score >= 0.35) {
-                  phoneDetected = true;
-                  phoneConfidence = Math.max(phoneConfidence, cat.score);
-                  if (d.boundingBox) {
-                    candidateBoundingBox = {
-                      originX: d.boundingBox.originX || 0,
-                      originY: d.boundingBox.originY || 0,
-                      width: d.boundingBox.width || 0,
-                      height: d.boundingBox.height || 0,
-                    };
-                  }
-                }
+            if (!d.categories || d.categories.length === 0) continue;
+
+            // MediaPipe categories are sorted descending by confidence score
+            const topCat = d.categories[0];
+            const topName = (topCat.categoryName || topCat.displayName || "").toLowerCase().trim();
+            const topScore = topCat.score || 0;
+
+            // Reject if top category is recognized as book/laptop/cup/etc.
+            if (excludedCategories.includes(topName)) {
+              continue;
+            }
+
+            // Find phone category
+            let phoneCat = null;
+            if (topName === "cell phone" || topName === "mobile phone") {
+              phoneCat = topCat;
+            } else {
+              const candidate = d.categories.find(c => {
+                const n = (c.categoryName || c.displayName || "").toLowerCase().trim();
+                return n === "cell phone" || n === "mobile phone";
+              });
+              if (candidate && candidate.score >= minConf && candidate.score >= topScore * 0.85) {
+                phoneCat = candidate;
               }
+            }
+
+            if (!phoneCat || phoneCat.score < minConf) {
+              continue;
+            }
+
+            // Bounding box geometry validation
+            const box = d.boundingBox;
+            if (!box) continue;
+
+            const w = box.width || 0;
+            const h = box.height || 0;
+            if (w < minDim || h < minDim) continue;
+
+            const longerSide = Math.max(w, h);
+            const shorterSide = Math.min(w, h);
+            if (shorterSide <= 0) continue;
+
+            // Aspect ratio: Smartphones are ~1.78 to ~2.22 (1.38 to 3.0 when tilted)
+            // Square sticky notes, square notepads, drink coasters, and wallets have aspect ratio < 1.35
+            const aspectRatio = longerSide / shorterSide;
+            if (aspectRatio < minAspect || aspectRatio > maxAspect) {
+              // Rejected: Square shape or ultra-wide non-phone strip
+              continue;
+            }
+
+            // Screen coverage: handheld phone covers 1.5% to 42% of webcam
+            const boxArea = (w * h) / frameArea;
+            if (boxArea < minArea || boxArea > maxArea) {
+              // Rejected: Noise (< 1.5%) or giant monitor/wall (> 42%)
+              continue;
+            }
+
+            // Confirmed balanced mobile phone detection
+            phoneDetected = true;
+            passedGeometryValidation = true;
+            if (phoneCat.score > phoneConfidence) {
+              phoneConfidence = phoneCat.score;
+              phoneBoundingBox = {
+                originX: box.originX,
+                originY: box.originY,
+                width: Math.round(w),
+                height: Math.round(h),
+                aspectRatio: Math.round(aspectRatio * 100) / 100,
+                boxAreaRatio: Math.round(boxArea * 1000) / 1000,
+                score: Math.round(phoneCat.score * 100) / 100,
+              };
             }
           }
         }
@@ -255,8 +326,12 @@ export class VisionAnalyzer {
       }
     }
 
-    const phoneInfo = { phoneDetected, phoneConfidence, candidateBoundingBox };
-
+    const phoneInfo = {
+      phoneDetected,
+      phoneConfidence,
+      phoneBoundingBox,
+      passedGeometryValidation,
+    };
 
     // If MediaPipe is active, run FaceLandmarker inference
     if (this.usingMediaPipe && this.landmarker) {
@@ -304,6 +379,8 @@ export class VisionAnalyzer {
         faceCount: 0,
         phoneDetected,
         phoneConfidence,
+        phoneBoundingBox: phoneInfo.phoneBoundingBox || null,
+        passedGeometryValidation: !!phoneInfo.passedGeometryValidation,
         direction: "face_missing",
         smoothedDirection: smoothedDir,
         expression: "neutral",
@@ -430,6 +507,8 @@ export class VisionAnalyzer {
       faceCount,
       phoneDetected,
       phoneConfidence,
+      phoneBoundingBox: phoneInfo.phoneBoundingBox || null,
+      passedGeometryValidation: !!phoneInfo.passedGeometryValidation,
       direction: rawDirection,
       smoothedDirection,
       expression: smoothedExpression,
@@ -439,9 +518,7 @@ export class VisionAnalyzer {
       informationalTip,
       headPose: { yaw: Math.round(yaw), pitch: Math.round(pitch), roll: Math.round(roll) },
       expressivenessMag: Math.round(expressivenessMag * 100),
-      candidateBoundingBox: phoneInfo.candidateBoundingBox || null,
     };
-
   }
 
   /**
@@ -523,6 +600,10 @@ export class VisionAnalyzer {
         timestamp: now,
         faceDetected: false,
         faceCount: 0,
+        phoneDetected,
+        phoneConfidence,
+        phoneBoundingBox: phoneInfo.phoneBoundingBox || null,
+        passedGeometryValidation: !!phoneInfo.passedGeometryValidation,
         direction: "face_missing",
         smoothedDirection: smoothedDir,
         expression: "neutral",
@@ -614,6 +695,8 @@ export class VisionAnalyzer {
       faceCount,
       phoneDetected,
       phoneConfidence,
+      phoneBoundingBox: phoneInfo.phoneBoundingBox || null,
+      passedGeometryValidation: !!phoneInfo.passedGeometryValidation,
       direction: rawDirection,
       smoothedDirection,
       expression: smoothedExpression,
@@ -623,7 +706,6 @@ export class VisionAnalyzer {
       informationalTip,
       headPose: { yaw: approxYaw, pitch: approxPitch, roll: 0 },
       expressivenessMag: Math.round(expressivenessMag * 100),
-      candidateBoundingBox: phoneInfo.candidateBoundingBox || null,
     };
   }
 

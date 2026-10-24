@@ -45,6 +45,17 @@ export const VISION_CONFIG = {
     },
   },
 
+  // Mobile Phone Detection & Geometry Filter (Balanced to detect actual phones while rejecting squares/other shapes)
+  mobilePhone: {
+    minConfidence: 0.45,
+    minAspectRatio: 1.38, // Standard phone aspect ratio is 1.78 to 2.2; strictly rejects squares (< 1.35) and notepads
+    maxAspectRatio: 3.0,  // Rejects excessively long bars/laptop bezels
+    minAreaRatio: 0.015,  // Rejects tiny noise (< 1.5% of frame)
+    maxAreaRatio: 0.42,   // Rejects full monitors / walls / open binders (> 42% of frame)
+    minDimensionPx: 36,   // Minimum width and height
+    sustainedFrames: 3,   // Number of positive frames needed (~750ms at 250ms interval)
+  },
+
   // Informational User Messages (Strictly non-punitive, auto-clearing)
   messages: {
     faceMissing: "Please keep your face visible to the camera.",

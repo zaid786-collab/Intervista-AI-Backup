@@ -207,68 +207,25 @@ export default function ImmersiveInterviewRoom({
     },
   });
 
-  const [isVerifyingPhone, setIsVerifyingPhone] = useState(false);
   const isVerifyingPhoneRef = useRef(false);
 
-  // Helper to snapshot candidate video frame and crop candidate object with surrounding context
-  const captureCandidateCropAndFrame = useCallback((boundingBox = null) => {
+  // Helper to snapshot candidate video frame for LLM verification
+  const captureCandidateFrame = useCallback(() => {
     try {
       const video = candidateVideoRef.current;
       if (!video || !video.videoWidth || !video.videoHeight) return null;
-      const vw = video.videoWidth;
-      const vh = video.videoHeight;
-
-      // 1. Full Frame Context (scaled to max 640px)
-      const fullCanvas = document.createElement('canvas');
-      const targetWidth = Math.min(640, vw);
-      const scale = targetWidth / vw;
-      const targetHeight = Math.round(vh * scale);
-      fullCanvas.width = targetWidth;
-      fullCanvas.height = targetHeight;
-      const fullCtx = fullCanvas.getContext('2d');
-      if (!fullCtx) return null;
-      fullCtx.drawImage(video, 0, 0, targetWidth, targetHeight);
-      const fullFrameB64 = fullCanvas.toDataURL('image/jpeg', 0.85);
-
-      // 2. Crop candidate object with +25% padding on each side for surrounding context
-      let cropB64 = fullFrameB64;
-      if (boundingBox && (boundingBox.width > 5 || (boundingBox.width > 0 && boundingBox.width <= 1.0))) {
-        let originX = boundingBox.originX || 0;
-        let originY = boundingBox.originY || 0;
-        let boxW = boundingBox.width || 0;
-        let boxH = boundingBox.height || 0;
-
-        // If coordinates are normalized [0..1], scale up to video pixel space
-        if (boxW > 0 && boxW <= 1.0 && boxH <= 1.0) {
-          originX *= vw;
-          originY *= vh;
-          boxW *= vw;
-          boxH *= vh;
-        }
-
-        const cropCanvas = document.createElement('canvas');
-        const padX = boxW * 0.25;
-        const padY = boxH * 0.25;
-
-        const sx = Math.max(0, Math.floor(originX - padX));
-        const sy = Math.max(0, Math.floor(originY - padY));
-        const sw = Math.min(vw - sx, Math.ceil(boxW + padX * 2));
-        const sh = Math.min(vh - sy, Math.ceil(boxH + padY * 2));
-
-        if (sw > 10 && sh > 10) {
-          cropCanvas.width = sw;
-          cropCanvas.height = sh;
-          const cropCtx = cropCanvas.getContext('2d');
-          if (cropCtx) {
-            cropCtx.drawImage(video, sx, sy, sw, sh, 0, 0, sw, sh);
-            cropB64 = cropCanvas.toDataURL('image/jpeg', 0.90);
-          }
-        }
-      }
-
-      return { cropB64, fullFrameB64 };
+      const canvas = document.createElement('canvas');
+      const targetWidth = Math.min(640, video.videoWidth);
+      const scale = targetWidth / video.videoWidth;
+      const targetHeight = Math.round(video.videoHeight * scale);
+      canvas.width = targetWidth;
+      canvas.height = targetHeight;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return null;
+      ctx.drawImage(video, 0, 0, targetWidth, targetHeight);
+      return canvas.toDataURL('image/jpeg', 0.85);
     } catch (e) {
-      console.error('[ROOM] Failed to capture frame/crop for verification:', e);
+      console.error('[ROOM] Failed to capture frame for verification:', e);
       return null;
     }
   }, []);
@@ -287,8 +244,6 @@ export default function ImmersiveInterviewRoom({
       // Manual test simulation via shortcut (Alt+P)
       if (details?.isSimulation) {
         console.warn('[ROOM] Simulation triggered mobile phone termination.');
-        setSessionPhase('ended');
-        sessionPhaseRef.current = 'ended';
         stopAllMedia();
         stopSpeechSynthesis();
         if (speech && typeof speech.stopRecording === 'function') {
@@ -310,77 +265,110 @@ export default function ImmersiveInterviewRoom({
       // Concurrency lock for AI verification request
       if (isVerifyingPhoneRef.current) return;
       isVerifyingPhoneRef.current = true;
-      setIsVerifyingPhone(true);
 
-      console.warn('[ROOM] Mobile phone candidate observed. Initiating multi-stage AI Vision LLM verification...');
+      console.warn('[ROOM] Sustained mobile phone suspected. Requesting AI Vision LLM verification before taking action...');
 
-      const captureData = captureCandidateCropAndFrame(details?.candidateBoundingBox);
-      if (!captureData) {
+      const frameData = captureCandidateFrame();
+      if (!frameData) {
         console.warn('[ROOM] Could not snapshot candidate camera frame. Skipping termination to prevent false positive.');
         if (typeof details?.resetSuspicion === 'function') details.resetSuspicion();
         isVerifyingPhoneRef.current = false;
-        setIsVerifyingPhone(false);
         return;
       }
 
       try {
         const verifyRes = await apiVerifyPhone({
-          imageBase64: captureData.cropB64,
-          fullFrameBase64: captureData.fullFrameB64,
-          boundingBox: details?.candidateBoundingBox,
-          sessionId: sessionState?.id || null,
+          imageBase64: frameData,
           interviewId: sessionState?.id || null,
-          consecutiveCount: details?.consecutiveCount || 1,
         });
 
-        console.log('[ROOM] AI Phone Verification classification result:', verifyRes);
+        console.log('[ROOM] AI Phone Verification response:', verifyRes);
 
-        // Terminate session immediately if LLM confirms an actual phone
-        if (verifyRes?.phone_detected === true || verifyRes?.session_terminated === true) {
-          console.error('[ROOM] AI LLM CONFIRMED MOBILE PHONE DETECTED! Terminating interview session immediately.', verifyRes.reason);
-          setSessionPhase('ended');
-          sessionPhaseRef.current = 'ended';
+        // Case 1: AI Vision LLM is active and provided a verified ruling
+        if (verifyRes && verifyRes.verified === true) {
+          if (verifyRes.phone_detected === true && (verifyRes.confidence == null || verifyRes.confidence >= 0.70)) {
+            console.error('[ROOM] AI LLM CONFIRMED MOBILE PHONE DETECTED! Terminating interview.', verifyRes.reason);
+            stopAllMedia();
+            stopSpeechSynthesis();
+            if (speech && typeof speech.stopRecording === 'function') {
+              speech.stopRecording();
+            }
+
+            const reasonMsg = verifyRes.reason || 'Unauthorized mobile phone was detected in view.';
+            if (proctorRef.current) {
+              proctorRef.current.handleMobilePhoneDetected({ ...details, message: reasonMsg });
+            }
+
+            setTerminatedModalData({
+              reason: reasonMsg,
+              warningCount: 0,
+              maxWarnings: 3,
+              isPhoneViolation: true,
+              violations: [{ type: 'MOBILE_PHONE_DETECTED', message: reasonMsg }],
+            });
+          } else {
+            // Explicit false alarm dismissed by AI Vision LLM
+            console.log('[ROOM] AI LLM cleared suspected phone (False alarm dismissed):', verifyRes?.reason);
+            if (typeof details?.resetSuspicion === 'function') {
+              details.resetSuspicion();
+            }
+          }
+        } else {
+          // Case 2: AI Vision LLM service unconfigured or offline (verified === false)
+          // Rely on verified on-device Computer Vision geometry filter
+          if (details?.passedGeometryValidation) {
+            console.error('[ROOM] Mobile phone confirmed via Computer Vision geometry validation. Terminating interview.');
+            stopAllMedia();
+            stopSpeechSynthesis();
+            if (speech && typeof speech.stopRecording === 'function') {
+              speech.stopRecording();
+            }
+
+            const reasonMsg = 'Unauthorized mobile phone detected in camera view.';
+            if (proctorRef.current) {
+              proctorRef.current.handleMobilePhoneDetected({ ...details, message: reasonMsg });
+            }
+
+            setTerminatedModalData({
+              reason: reasonMsg,
+              warningCount: 0,
+              maxWarnings: 3,
+              isPhoneViolation: true,
+              violations: [{ type: 'MOBILE_PHONE_DETECTED', message: reasonMsg }],
+            });
+          } else {
+            if (typeof details?.resetSuspicion === 'function') {
+              details.resetSuspicion();
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('[ROOM] Phone verification error, utilizing verified client CV decision:', err);
+        if (details?.passedGeometryValidation) {
           stopAllMedia();
           stopSpeechSynthesis();
           if (speech && typeof speech.stopRecording === 'function') {
             speech.stopRecording();
           }
-
-          const reasonMsg = verifyRes.reason || 'Unauthorized mobile phone was visually confirmed in view.';
+          const reasonMsg = 'Unauthorized mobile phone detected in camera view.';
           if (proctorRef.current) {
             proctorRef.current.handleMobilePhoneDetected({ ...details, message: reasonMsg });
           }
-
           setTerminatedModalData({
             reason: reasonMsg,
             warningCount: 0,
             maxWarnings: 3,
             isPhoneViolation: true,
-            violations: [{
-              type: 'MOBILE_PHONE_DETECTED',
-              message: reasonMsg,
-              evidence: verifyRes.visual_evidence || 'Smartphone screen & bezel verified by AI vision.',
-            }],
+            violations: [{ type: 'MOBILE_PHONE_DETECTED', message: reasonMsg }],
           });
-        } else {
-          // Object is non_phone or uncertain (book, laptop, hand, dark object, etc.) -> False alarm cleared!
-          console.log(`[ROOM] AI LLM cleared suspicion (Classification: ${verifyRes?.classification}): ${verifyRes?.reason}`);
-          if (typeof details?.resetSuspicion === 'function') {
-            details.resetSuspicion();
-          }
-        }
-      } catch (err) {
-        console.error('[ROOM] Failed to verify phone with AI:', err);
-        if (typeof details?.resetSuspicion === 'function') {
+        } else if (typeof details?.resetSuspicion === 'function') {
           details.resetSuspicion();
         }
       } finally {
         isVerifyingPhoneRef.current = false;
-        setIsVerifyingPhone(false);
       }
     },
   });
-
 
   // Developer/Examiner testing shortcut: Alt+P triggers immediate mobile phone termination
   useEffect(() => {
@@ -730,8 +718,6 @@ export default function ImmersiveInterviewRoom({
       },
       onTerminate: (data) => {
         console.warn('[PROCTORING] Terminated by proctoring engine:', data);
-        setSessionPhase('ended');
-        sessionPhaseRef.current = 'ended';
         const isPhone = (typeof data === 'object' && (data.violationType === 'MOBILE_PHONE_DETECTED' || data.isImmediateTermination));
         const termReason = (typeof data === 'object' && data.terminationReason)
           ? data.terminationReason
@@ -741,7 +727,10 @@ export default function ImmersiveInterviewRoom({
                   ? 'Interview terminated immediately due to unauthorized mobile phone usage.'
                   : 'Maximum proctoring warnings reached (3/3).'));
         
+        setSessionPhase('ended');
+        sessionPhaseRef.current = 'ended';
         stopAllMedia();
+        stopSpeechSynthesis();
         setTerminatedModalData({
           reason: termReason,
           warningCount: isPhone ? 0 : 3,
@@ -2495,7 +2484,6 @@ export default function ImmersiveInterviewRoom({
               faceDetected={visionCV.faceDetected}
               faceCount={visionCV.faceCount}
               phoneDetected={visionCV.phoneDetected}
-              isVerifyingPhone={isVerifyingPhone}
               direction={visionCV.direction}
               expression={visionCV.expression}
               activeTip={visionCV.activeTip}

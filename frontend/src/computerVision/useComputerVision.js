@@ -39,8 +39,7 @@ export function useComputerVision({
   const onMultipleUsersDetectedRef = useRef(onMultipleUsersDetected);
 
   const sustainedPhoneStartRef = useRef(null);
-  const phoneConsecutiveFramesRef = useRef(0);
-  const lastPhoneDetectionTimeRef = useRef(0);
+  const consecutivePhoneFramesRef = useRef(0);
   const hasTriggeredPhoneTerminationRef = useRef(false);
   const onMobilePhoneDetectedRef = useRef(onMobilePhoneDetected);
 
@@ -143,40 +142,39 @@ export function useComputerVision({
 
       const now = Date.now();
 
-      // Responsive Mobile Phone Verification Check (Prevents false positives from single frame jitter)
-      if (frameResult.phoneDetected) {
-        lastPhoneDetectionTimeRef.current = now;
-        phoneConsecutiveFramesRef.current += 1;
+      // Sustained Mobile Phone Verification Check (Balanced consecutive frames with geometry validation)
+      if (frameResult.phoneDetected && frameResult.passedGeometryValidation) {
         if (!sustainedPhoneStartRef.current) {
           sustainedPhoneStartRef.current = now;
         }
+        consecutivePhoneFramesRef.current += 1;
 
-        // Require at least 2 candidate detections or >= 400ms sustained presence
-        // Stage 2 Multimodal AI Vision LLM will verify whether it is actually a real mobile phone
-        const sustainedDuration = now - sustainedPhoneStartRef.current;
-        if ((phoneConsecutiveFramesRef.current >= 2 || sustainedDuration >= 400) && !hasTriggeredPhoneTerminationRef.current) {
-          hasTriggeredPhoneTerminationRef.current = true;
-          console.warn(`[useComputerVision] Mobile phone candidate observed (${phoneConsecutiveFramesRef.current} frames, ${sustainedDuration}ms). Requesting multi-stage AI verification.`);
-          if (typeof onMobilePhoneDetectedRef.current === "function") {
-            onMobilePhoneDetectedRef.current({
-              confidence: frameResult.phoneConfidence || 0.85,
-              timestamp: now,
-              candidateBoundingBox: frameResult.candidateBoundingBox || null,
-              consecutiveCount: phoneConsecutiveFramesRef.current,
-              resetSuspicion: () => {
-                hasTriggeredPhoneTerminationRef.current = false;
-                sustainedPhoneStartRef.current = null;
-                phoneConsecutiveFramesRef.current = 0;
-                setPhoneDetected(false);
-              },
-            });
+        // Require 3 positive frames (~750ms at 250ms interval) to prevent single-frame blips
+        if (consecutivePhoneFramesRef.current >= (config.mobilePhone?.sustainedFrames || 3)) {
+          if (!hasTriggeredPhoneTerminationRef.current) {
+            hasTriggeredPhoneTerminationRef.current = true;
+            console.warn("[useComputerVision] Mobile phone verified across consecutive frames with geometry check. Triggering proctoring handler.");
+            if (typeof onMobilePhoneDetectedRef.current === "function") {
+              onMobilePhoneDetectedRef.current({
+                confidence: frameResult.phoneConfidence || 0.85,
+                boundingBox: frameResult.phoneBoundingBox || null,
+                passedGeometryValidation: true,
+                timestamp: now,
+                resetSuspicion: () => {
+                  hasTriggeredPhoneTerminationRef.current = false;
+                  consecutivePhoneFramesRef.current = 0;
+                  sustainedPhoneStartRef.current = null;
+                  setPhoneDetected(false);
+                },
+              });
+            }
           }
         }
       } else {
-        // Allow a 600ms grace window for camera jitter before resetting candidate streak
-        if (now - lastPhoneDetectionTimeRef.current > 600) {
+        // Leaky bucket decay: gracefully step down by 1 frame instead of wiping to zero on a single motion blur
+        consecutivePhoneFramesRef.current = Math.max(0, consecutivePhoneFramesRef.current - 1);
+        if (consecutivePhoneFramesRef.current === 0) {
           sustainedPhoneStartRef.current = null;
-          phoneConsecutiveFramesRef.current = 0;
         }
       }
 
@@ -215,6 +213,7 @@ export function useComputerVision({
       isRunningRef.current = false;
       multipleUsersStartRef.current = null;
       sustainedPhoneStartRef.current = null;
+      consecutivePhoneFramesRef.current = 0;
     };
   }, [isInterviewActive, isCameraActive, isModelReady, videoRef, tipExpiresAt]);
 
