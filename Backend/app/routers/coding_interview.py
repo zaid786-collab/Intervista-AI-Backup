@@ -102,20 +102,28 @@ def start_coding_interview(
     """
     session_id = f"coding_{payload.company.lower()}_{int(time.time())}"
     
-    # Generate 1st coding question
-    first_question = get_coding_question(
-        language=payload.language.lower(),
-        difficulty=payload.difficulty,
-        role=payload.role,
-        experience=payload.experience,
-        topic=payload.topic or "Data Structures & Algorithms",
-        company=payload.company,
-        question_index=0,
-    )
+    # Generate all coding questions for the session up-front
+    all_raw_questions = []
+    all_client_questions = []
+    total_q = max(1, min(payload.total_questions or 3, 5))
+    for q_idx in range(total_q):
+        raw_q = get_coding_question(
+            language=payload.language.lower(),
+            difficulty=payload.difficulty,
+            role=payload.role,
+            experience=payload.experience,
+            topic=payload.topic or "Data Structures & Algorithms",
+            company=payload.company,
+            question_index=q_idx,
+        )
+        all_raw_questions.append(raw_q)
+        cq = dict(raw_q)
+        cq.pop("hidden_test_cases", None)
+        cq["id"] = q_idx + 1
+        all_client_questions.append(cq)
 
-    # Sanitize question for client (ensure hidden test cases are NOT exposed)
-    client_question = dict(first_question)
-    client_question.pop("hidden_test_cases", None)
+    first_question = all_raw_questions[0]
+    client_question = all_client_questions[0]
 
     # Announce coding round introduction
     persona_title = "Hiring Manager" if payload.interviewer_persona == "chen" else "VP of Engineering"
@@ -139,11 +147,11 @@ def start_coding_interview(
         "difficulty": payload.difficulty,
         "experience": payload.experience,
         "duration_minutes": payload.duration_minutes,
-        "total_questions": payload.total_questions,
+        "total_questions": total_q,
         "topic": payload.topic,
         "interviewer_persona": payload.interviewer_persona,
         "current_index": 0,
-        "questions": [first_question],
+        "questions": all_raw_questions,
         "submissions": [],
         "attempts": {},
         "created_at": time.time(),
@@ -189,6 +197,7 @@ def start_coding_interview(
         "questionIndex": 1,
         "totalQuestions": payload.total_questions,
         "currentQuestion": client_question,
+        "questions": all_client_questions,
         "status": "ACTIVE",
     }
 

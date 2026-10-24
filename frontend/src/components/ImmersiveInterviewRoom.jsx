@@ -879,7 +879,11 @@ export default function ImmersiveInterviewRoom({
         setSessionId(response.sessionId);
         setIsDemoMode(false);
 
-        if (response.currentQuestion) {
+        if (response.questions && Array.isArray(response.questions) && response.questions.length > 0) {
+          setCurrentQuestionObj(response.questions[0]);
+          setInterviewQuestions(response.questions);
+          setTotalQuestions(response.questions.length);
+        } else if (response.currentQuestion) {
           setCurrentQuestionObj(response.currentQuestion);
           setInterviewQuestions([response.currentQuestion]);
         }
@@ -1083,7 +1087,7 @@ export default function ImmersiveInterviewRoom({
     trackerRef.current?.recordSpeechChunk(answerText);
 
     const currentQText = currentQuestionText || (currentQuestionObj?.question) || `Technical Question #${questionIndex}`;
-    const currentQId = currentQuestionObj?.id || questionIndex;
+    const currentQId = questionIndex;
 
     // Append candidate message to transcript
     const updatedMessages = [
@@ -1205,25 +1209,24 @@ export default function ImmersiveInterviewRoom({
       }
 
       // ─── Advance to Next Question (1 -> 2 -> ... -> totalQuestions) ───
-      const nextQIndex = questionIndex; // array index for next question (questionIndex is 1-based, so for Q1 index is 1, which is Q2)
-      const nextQObj = res?.nextQuestionData || (interviewQuestions && interviewQuestions[nextQIndex]) || null;
-      let nextQuestionPrompt = res?.nextQuestion || nextQObj?.question || nextQObj?.title || nextQObj?.description;
+      const nextQIndex = questionIndex; // array index for next question: Q1 answered -> index 1 (Q2)
+      const nextQObj = (interviewQuestions && interviewQuestions[nextQIndex]) || res?.nextQuestionData || null;
+      let nextQuestionPrompt = nextQObj?.question || nextQObj?.title || res?.nextQuestion;
 
-      if (!nextQuestionPrompt) {
+      if (!nextQuestionPrompt || nextQuestionPrompt === currentQuestionText) {
         const defaultTopics = [
           "Can you explain your strategy for managing concurrency, caching, and state synchronization at scale?",
           "How would you approach automated testing, telemetry observability, and zero-downtime canary deployment?",
           "Walk me through how you isolate and profile performance bottlenecks in production microservices.",
-          "How do you design database schema migrations and handle eventual consistency trade-offs?"
+          "How do you design database schema migrations and handle eventual consistency trade-offs?",
+          "How do you implement distributed locking, idempotent API requests, and rate limiting in microservices?"
         ];
-        nextQuestionPrompt = defaultTopics[Math.min(questionIndex - 1, defaultTopics.length - 1)];
+        nextQuestionPrompt = defaultTopics[Math.min(nextQIndex - 1, defaultTopics.length - 1)];
       }
 
-      // Ensure spoken reply does not mistakenly announce interview wrap-up if questions remain
-      let replyToUse = res?.message || res?.reply || 'Thank you for your response.';
-      if (/conclude|assessment report|interview questions today|completed all questions/i.test(replyToUse) || !replyToUse.trim()) {
-        replyToUse = `Great explanation. Let's move on to Question ${questionIndex + 1} of ${totalQuestions}:\n\n${nextQuestionPrompt}`;
-      }
+      // Format spoken reply: constructive feedback on previous answer, followed by clearly asking Question X of Y
+      const evalAck = res?.aiFeedback || (evalData?.score >= 70 ? "Excellent points covered." : evalData?.score >= 40 ? "Good start on that technical explanation." : "Understood, thank you for your response.");
+      const replyToUse = `${evalAck} Let's proceed to Question ${nextQIndex + 1} of ${totalQuestions}:\n\n${nextQuestionPrompt}`;
 
       setMessages([
         ...updatedMessages,
@@ -1231,9 +1234,7 @@ export default function ImmersiveInterviewRoom({
       ]);
 
       setCurrentQuestionText(nextQuestionPrompt);
-      if (nextQObj) {
-        setCurrentQuestionObj(nextQObj);
-      }
+      setCurrentQuestionObj(nextQObj || { id: nextQIndex + 1, question: nextQuestionPrompt });
       setQuestionIndex(prev => prev + 1);
 
       if (res?.adaptiveLevel) {
@@ -1318,9 +1319,7 @@ export default function ImmersiveInterviewRoom({
         { role: 'interviewer', text: nextFollowUp, timestamp: Date.now(), evaluatedAnswer: evaluatedItem },
       ]);
       setCurrentQuestionText(nextQText);
-      if (nextQObj) {
-        setCurrentQuestionObj(nextQObj);
-      }
+      setCurrentQuestionObj(nextQObj || { id: nextQIndex + 1, question: nextQText });
       setQuestionIndex(prev => prev + 1);
       speakText(nextFollowUp);
     } finally {

@@ -1722,44 +1722,15 @@ def generate_interviewer_turn(
     missing = eval_res.get("missing_concepts", [])
     status = eval_res.get("status", "CORRECT")
 
-    # 3. Dynamic probing follow-up (if partial score and first turn on this question)
-    if turn_count_on_question == 1 and 25 <= score < 75 and missing:
-        target_point = missing[0]
-        # Clean target point
-        target_clean = re.sub(r'^[0-9\.\-\s]+', '', target_point).strip()
-        follow_up = f"You touched on the initial mechanics. How would you specifically address {target_clean} or handle failure modes under heavy load?"
-        speech = f"Good start on the initial approach. Let's dig one layer deeper: {follow_up}"
-
-        return {
-            "success": True,
-            "question_id": q_id,
-            "status": status,
-            "score": score,
-            "marks": score,
-            "evaluation": eval_res,
-            "identified_keywords": identified,
-            "missing_concepts": missing,
-            "interviewer_reaction": "Good start on the initial approach.",
-            "message": speech,
-            "next_question": follow_up,
-            "next_question_id": q_id,
-            "is_follow_up": True,
-            "is_hint": False,
-            "completed": False,
-            "feedback_summary": eval_res.get("feedback", "Partial answer provided; follow-up asked."),
-            "technical_score": eval_res.get("technical_accuracy", 75),
-            "communication_score": eval_res.get("communication_clarity", 80),
-        }
-
-    # 4. Advance to Next Question or Conclude
+    # 3. Always Advance to Next Question (Never trap candidate on same question)
     if score >= 75:
         reaction = "Excellent explanation! You clearly articulated the core principles and trade-offs."
         if identified:
             reaction = f"Great insights on {identified[0]}. You clearly articulated the core design and trade-offs."
     elif score >= 50:
-        reaction = "Solid breakdown. You covered the foundational requirements."
+        reaction = "Solid breakdown. You covered the foundational requirements well."
     else:
-        reaction = "I see your line of reasoning. In a high-scale production setting, edge-case resilience is key."
+        reaction = "Good attempt. In a production environment, considering edge-case resilience and scalability is key."
 
     if next_question_dict:
         next_q = next_question_dict.get("question", "")
