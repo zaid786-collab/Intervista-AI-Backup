@@ -1,4 +1,4 @@
-import { FilesetResolver, FaceLandmarker } from "@mediapipe/tasks-vision";
+import { FilesetResolver, FaceLandmarker, ObjectDetector } from "@mediapipe/tasks-vision";
 import { VISION_CONFIG } from "./visionConfig.js";
 
 /**
@@ -44,11 +44,16 @@ export class VisionAnalyzer {
   constructor(config = {}) {
     this.config = { ...VISION_CONFIG, ...config };
     this.landmarker = null;
+    this.objectDetector = null;
     this.isReady = false;
     this.isLoading = false;
     this.usingMediaPipe = false;
     this.hasFailed = false;
     this.failureReason = null;
+
+    // Mobile Phone tracking
+    this.phoneDetectedSamples = 0;
+    this.phonePosturalSamples = 0;
 
     // Offscreen canvas for luminance, lighting, and fallback frame processing
     this.offscreenCanvas = null;
@@ -117,8 +122,37 @@ export class VisionAnalyzer {
         outputFaceBlendshapes: true,
         outputFacialTransformationMatrixes: true,
         runningMode: "VIDEO",
-        numFaces: 2,
+        numFaces: 4,
       });
+
+      // Initialize real-time ObjectDetector for mobile phone detection
+      try {
+        this.objectDetector = await ObjectDetector.createFromOptions(filesetResolver, {
+          baseOptions: {
+            modelAssetPath:
+              "https://storage.googleapis.com/mediapipe-models/object_detector/efficientdet_lite0/float16/1/efficientdet_lite0.tflite",
+            delegate: "GPU",
+          },
+          scoreThreshold: 0.30,
+          runningMode: "VIDEO",
+        });
+        console.log("[ComputerVision] MediaPipe ObjectDetector active with GPU delegate.");
+      } catch (objGpuErr) {
+        try {
+          this.objectDetector = await ObjectDetector.createFromOptions(filesetResolver, {
+            baseOptions: {
+              modelAssetPath:
+                "https://storage.googleapis.com/mediapipe-models/object_detector/efficientdet_lite0/float16/1/efficientdet_lite0.tflite",
+              delegate: "CPU",
+            },
+            scoreThreshold: 0.30,
+            runningMode: "VIDEO",
+          });
+          console.log("[ComputerVision] MediaPipe ObjectDetector active with CPU delegate.");
+        } catch (objCpuErr) {
+          console.warn("[ComputerVision] ObjectDetector init failed:", objCpuErr.message);
+        }
+      }
 
       this.usingMediaPipe = true;
       this.isLoading = false;
@@ -139,8 +173,24 @@ export class VisionAnalyzer {
           outputFaceBlendshapes: true,
           outputFacialTransformationMatrixes: true,
           runningMode: "VIDEO",
-          numFaces: 2,
+          numFaces: 4,
         });
+
+        try {
+          this.objectDetector = await ObjectDetector.createFromOptions(filesetResolver, {
+            baseOptions: {
+              modelAssetPath:
+                "https://storage.googleapis.com/mediapipe-models/object_detector/efficientdet_lite0/float16/1/efficientdet_lite0.tflite",
+              delegate: "CPU",
+            },
+            scoreThreshold: 0.30,
+            runningMode: "VIDEO",
+          });
+          console.log("[ComputerVision] MediaPipe ObjectDetector active with CPU delegate.");
+        } catch (objErr) {
+          console.warn("[ComputerVision] ObjectDetector CPU fallback error:", objErr.message);
+        }
+
         this.usingMediaPipe = true;
         this.isLoading = false;
         console.log("[ComputerVision] MediaPipe FaceLandmarker active with CPU fallback.");
@@ -169,28 +219,62 @@ export class VisionAnalyzer {
     const currentTime = timestampMs > this.lastProcessedTimestamp ? timestampMs : this.lastProcessedTimestamp + 1;
     this.lastProcessedTimestamp = currentTime;
 
+    // Real-time mobile phone detection inference
+    let phoneDetected = false;
+    let phoneConfidence = 0;
+
+    if (this.objectDetector && videoElement) {
+      try {
+        const objResults = this.objectDetector.detectForVideo(videoElement, currentTime);
+        if (objResults && objResults.detections && objResults.detections.length > 0) {
+          for (const d of objResults.detections) {
+            for (const cat of d.categories) {
+              const name = (cat.categoryName || cat.displayName || "").toLowerCase();
+              if (
+                name.includes("cell phone") ||
+                name.includes("phone") ||
+                name.includes("mobile") ||
+                name.includes("telephone")
+              ) {
+                if (cat.score >= 0.30) {
+                  phoneDetected = true;
+                  phoneConfidence = Math.max(phoneConfidence, cat.score);
+                }
+              }
+            }
+          }
+        }
+      } catch (detErr) {
+        // Continue without interrupting face analysis
+      }
+    }
+
+    const phoneInfo = { phoneDetected, phoneConfidence };
+
     // If MediaPipe is active, run FaceLandmarker inference
     if (this.usingMediaPipe && this.landmarker) {
       try {
         const results = this.landmarker.detectForVideo(videoElement, currentTime);
-        return this._processMediaPipeResults(results, videoElement);
+        return this._processMediaPipeResults(results, videoElement, phoneInfo);
       } catch (err) {
         console.warn("[ComputerVision] MediaPipe frame error, utilizing canvas fallback:", err.message);
-        return this._processCanvasFallback(videoElement);
+        return this._processCanvasFallback(videoElement, phoneInfo);
       }
     }
 
     // Otherwise, run lightweight canvas-based vision engine
-    return this._processCanvasFallback(videoElement);
+    return this._processCanvasFallback(videoElement, phoneInfo);
   }
 
   /**
    * Process high-precision MediaPipe FaceLandmarker results
    */
-  _processMediaPipeResults(results, videoElement) {
+  _processMediaPipeResults(results, videoElement, phoneInfo = {}) {
     this.totalSamples++;
     const now = Date.now();
     const faceCount = results.faceLandmarks ? results.faceLandmarks.length : 0;
+    let phoneDetected = phoneInfo.phoneDetected || false;
+    let phoneConfidence = phoneInfo.phoneConfidence || 0;
 
     // Sample lighting via offscreen canvas
     const lighting = this._sampleLighting(videoElement);
@@ -211,6 +295,8 @@ export class VisionAnalyzer {
         timestamp: now,
         faceDetected: false,
         faceCount: 0,
+        phoneDetected,
+        phoneConfidence,
         direction: "face_missing",
         smoothedDirection: smoothedDir,
         expression: "neutral",
@@ -325,10 +411,31 @@ export class VisionAnalyzer {
       informationalTip = this.config.messages.attentionAway;
     }
 
+    // Secondary check: phone-to-ear talking posture
+    if (!phoneDetected && results.faceLandmarks && results.faceLandmarks.length > 0) {
+      const rollDeg = Math.abs(roll);
+      const yawDeg = Math.abs(yaw);
+      if (rollDeg > 26 && yawDeg > 18) {
+        this.phonePosturalSamples = (this.phonePosturalSamples || 0) + 1;
+        if (this.phonePosturalSamples >= 4) {
+          phoneDetected = true;
+          phoneConfidence = 0.78;
+        }
+      } else {
+        this.phonePosturalSamples = 0;
+      }
+    }
+
+    if (phoneDetected) {
+      this.phoneDetectedSamples++;
+    }
+
     return {
       timestamp: now,
       faceDetected: true,
       faceCount,
+      phoneDetected,
+      phoneConfidence,
       direction: rawDirection,
       smoothedDirection,
       expression: smoothedExpression,
@@ -344,9 +451,11 @@ export class VisionAnalyzer {
   /**
    * Process frame using HTML5 Canvas pixel heuristics (instant, lightweight fallback)
    */
-  _processCanvasFallback(videoElement) {
+  _processCanvasFallback(videoElement, phoneInfo = {}) {
     this.totalSamples++;
     const now = Date.now();
+    let phoneDetected = phoneInfo.phoneDetected || false;
+    let phoneConfidence = phoneInfo.phoneConfidence || 0;
 
     if (!this.offscreenCanvas && typeof document !== "undefined") {
       this.offscreenCanvas = document.createElement("canvas");
@@ -365,10 +474,12 @@ export class VisionAnalyzer {
     const imgData = ctx.getImageData(0, 0, 160, 120);
     const data = imgData.data;
 
-    // 1. Measure lighting
+    // 1. Measure lighting & skin clusters
     let totalLum = 0;
     let samplePixels = 0;
     let skinX = 0, skinY = 0, skinCount = 0;
+    let leftSkinX = 0, leftSkinCount = 0;
+    let rightSkinX = 0, rightSkinCount = 0;
 
     for (let y = 10; y < 110; y += 4) {
       for (let x = 15; x < 145; x += 4) {
@@ -383,6 +494,14 @@ export class VisionAnalyzer {
           skinX += x;
           skinY += y;
           skinCount++;
+
+          if (x < 75) {
+            leftSkinX += x;
+            leftSkinCount++;
+          } else if (x > 85) {
+            rightSkinX += x;
+            rightSkinCount++;
+          }
         }
       }
     }
@@ -471,16 +590,42 @@ export class VisionAnalyzer {
     const smoothedExpression = this._smoothExpression(rawExpression);
 
     this._recordGazeStats(smoothedDirection, rawDirection, now);
-    this.expressionDistribution[smoothedExpression] = (this.expressionDistribution[smoothedExpression] || 0) + 1;
+    let faceCount = 1;
+    if (leftSkinCount >= 20 && rightSkinCount >= 20) {
+      const leftCx = leftSkinX / leftSkinCount;
+      const rightCx = rightSkinX / rightSkinCount;
+      if (rightCx - leftCx >= 40) {
+        faceCount = 2;
+        this.multipleFacesSamples++;
+      }
+    }
+
+    if (!phoneDetected && approxYaw && Math.abs(approxYaw) > 34) {
+      this.phonePosturalSamples = (this.phonePosturalSamples || 0) + 1;
+      if (this.phonePosturalSamples >= 5) {
+        phoneDetected = true;
+        phoneConfidence = 0.72;
+      }
+    } else if (!phoneDetected) {
+      this.phonePosturalSamples = 0;
+    }
+
+    if (phoneDetected) {
+      this.phoneDetectedSamples++;
+    }
 
     const awayDuration = this.currentAttentionAwayStart ? now - this.currentAttentionAwayStart : 0;
     const isSustainedAway = awayDuration >= this.config.attentionThresholdMs;
-    const informationalTip = isSustainedAway ? this.config.messages.attentionAway : null;
+    const informationalTip = faceCount > 1 
+      ? this.config.messages.multipleFaces 
+      : (isSustainedAway ? this.config.messages.attentionAway : null);
 
     return {
       timestamp: now,
       faceDetected: true,
-      faceCount: 1,
+      faceCount,
+      phoneDetected,
+      phoneConfidence,
       direction: rawDirection,
       smoothedDirection,
       expression: smoothedExpression,
@@ -773,6 +918,14 @@ export class VisionAnalyzer {
         // ignore
       }
       this.landmarker = null;
+    }
+    if (this.objectDetector) {
+      try {
+        this.objectDetector.close();
+      } catch {
+        // ignore
+      }
+      this.objectDetector = null;
     }
     this.isReady = false;
     this.isLoading = false;

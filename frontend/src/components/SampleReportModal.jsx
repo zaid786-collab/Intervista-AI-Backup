@@ -346,6 +346,85 @@ export default function SampleReportModal({ isOpen, onClose, reportData, onRetak
           </button>
         </div>
 
+        {/* Disqualification / Termination Alert Banner */}
+        {reportData?.status === 'TERMINATED_FOR_CHEATING' && (
+          <div
+            style={{
+              backgroundColor: 'rgba(239, 68, 68, 0.12)',
+              border: '1px solid #EF4444',
+              borderRadius: '16px',
+              padding: '1.2rem 1.5rem',
+              marginBottom: '2rem',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '1rem',
+            }}
+          >
+            <div
+              style={{
+                width: '42px',
+                height: '42px',
+                borderRadius: '10px',
+                backgroundColor: 'rgba(239, 68, 68, 0.2)',
+                color: '#EF4444',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                flexShrink: 0,
+              }}
+            >
+              <AlertTriangle size={22} />
+            </div>
+            <div>
+              <div style={{ color: '#EF4444', fontWeight: 700, fontSize: '0.95rem', letterSpacing: '0.02em' }}>
+                SESSION DISQUALIFIED: UNAUTHORIZED MOBILE PHONE USAGE
+              </div>
+              <div style={{ color: '#FCA5A5', fontSize: '0.84rem', marginTop: '2px', lineHeight: 1.45 }}>
+                {reportData?.terminationReason || 'This interview was terminated immediately without warnings due to a zero-tolerance mobile phone violation detected by the proctoring engine.'}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {reportData?.status === 'TERMINATED_FOR_PROCTORING' && (
+          <div
+            style={{
+              backgroundColor: 'rgba(239, 68, 68, 0.12)',
+              border: '1px solid #EF4444',
+              borderRadius: '16px',
+              padding: '1.2rem 1.5rem',
+              marginBottom: '2rem',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '1rem',
+            }}
+          >
+            <div
+              style={{
+                width: '42px',
+                height: '42px',
+                borderRadius: '10px',
+                backgroundColor: 'rgba(239, 68, 68, 0.2)',
+                color: '#EF4444',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                flexShrink: 0,
+              }}
+            >
+              <AlertTriangle size={22} />
+            </div>
+            <div>
+              <div style={{ color: '#EF4444', fontWeight: 700, fontSize: '0.95rem', letterSpacing: '0.02em' }}>
+                SESSION TERMINATED: MAXIMUM PROCTORING WARNINGS REACHED
+              </div>
+              <div style={{ color: '#FCA5A5', fontSize: '0.84rem', marginTop: '2px', lineHeight: 1.45 }}>
+                {reportData?.terminationReason || 'This interview was terminated because 3 proctoring warnings were accumulated.'}
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* 1. Top Summary Banner */}
         <div
           style={{

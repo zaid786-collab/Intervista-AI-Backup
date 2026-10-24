@@ -473,7 +473,7 @@ def start_mock_interview(
         "role": payload.role,
         "difficulty": payload.difficulty,
         "warning_count": 0,
-        "max_warnings": 5,
+        "max_warnings": 3,
         "status": "ACTIVE",
         "violations": [],
         "last_violation_time": 0.0,
@@ -519,9 +519,9 @@ def record_proctoring_violation(
     Authoritative backend proctoring violation registrar:
     - Validates interview session
     - Deduplicates cascading browser events within 2.0s
-    - Increments authoritative warning count (1-5)
+    - Increments authoritative warning count (1-3)
     - Emits structured proctoring logs
-    - On 5th violation: terminates session and permanently persists state to DB
+    - On 3rd violation: terminates session and permanently persists state to DB
     """
     session_id = payload.session_id
     now_ts = time.time()
@@ -535,7 +535,7 @@ def record_proctoring_violation(
             "role": payload.role or "Software Engineer",
             "difficulty": payload.difficulty or "Medium",
             "warning_count": 0,
-            "max_warnings": 5,
+            "max_warnings": 3,
             "status": "ACTIVE",
             "violations": [],
             "last_violation_time": 0.0,
@@ -573,35 +573,64 @@ def record_proctoring_violation(
             interview_id=session["interview_id"],
         )
 
-    # 3. Increment authoritative warning count
-    session["warning_count"] += 1
-    session["last_violation_time"] = now_ts
-    current_warning = session["warning_count"]
+    # 3. Check for Zero-Tolerance Immediate Disqualification (e.g. MOBILE_PHONE_DETECTED)
+    is_mobile_phone = payload.violation_type == "MOBILE_PHONE_DETECTED"
 
-    violation_entry = {
-        "warning_number": current_warning,
-        "type": payload.violation_type,
-        "message": payload.message,
-        "severity": payload.severity or "HIGH",
-        "timestamp": payload.timestamp or datetime.now().isoformat(),
-    }
-    session["violations"].append(violation_entry)
+    if is_mobile_phone:
+        current_warning = session["warning_count"]
+        session["last_violation_time"] = now_ts
+        violation_entry = {
+            "warning_number": "TERMINATED",
+            "type": payload.violation_type,
+            "message": payload.message or "Unauthorized mobile phone usage detected. Zero-tolerance disqualification.",
+            "severity": "CRITICAL",
+            "timestamp": payload.timestamp or datetime.now().isoformat(),
+        }
+        session["violations"].append(violation_entry)
+        session["status"] = "TERMINATED_FOR_CHEATING"
+        session["termination_reason"] = (
+            "Interview terminated immediately due to unauthorized mobile phone usage detected during the interview session."
+        )
+        is_terminated = True
+        print(f"[PROCTORING] CRITICAL: MOBILE PHONE DETECTED on {session_id}! Immediate disqualification & termination!")
+    else:
+        # Standard warning accumulation
+        session["warning_count"] += 1
+        session["last_violation_time"] = now_ts
+        current_warning = session["warning_count"]
 
-    print(f"[PROCTORING] Violation detected")
-    print(f"[PROCTORING] Type: {payload.violation_type}")
-    print(f"[PROCTORING] Warning: {current_warning}/{session['max_warnings']}")
-    print(f"[PROCTORING] Interview: {session_id}")
+        violation_entry = {
+            "warning_number": current_warning,
+            "type": payload.violation_type,
+            "message": payload.message,
+            "severity": payload.severity or "HIGH",
+            "timestamp": payload.timestamp or datetime.now().isoformat(),
+        }
+        session["violations"].append(violation_entry)
 
-    # 4. Check if 5th warning was reached -> TERMINATE
-    is_terminated = current_warning >= session["max_warnings"]
+        print(f"[PROCTORING] Violation detected")
+        print(f"[PROCTORING] Type: {payload.violation_type}")
+        print(f"[PROCTORING] Warning: {current_warning}/{session['max_warnings']}")
+        print(f"[PROCTORING] Interview: {session_id}")
+
+        # Check if 3rd warning was reached -> TERMINATE
+        is_terminated = current_warning >= session["max_warnings"]
+        if is_terminated:
+            session["status"] = "TERMINATED_FOR_PROCTORING"
+            session["termination_reason"] = (
+                f"Maximum proctoring warnings reached ({current_warning}/{session['max_warnings']}). "
+                "Interview was terminated due to repeated proctoring violations."
+            )
+            print(f"[PROCTORING] Interview terminated")
 
     if is_terminated:
-        session["status"] = "TERMINATED_FOR_PROCTORING"
-        session["termination_reason"] = (
-            f"Maximum proctoring warnings reached ({current_warning}/{session['max_warnings']}). "
-            "Interview was terminated due to repeated proctoring violations."
+        term_status = session["status"]
+        term_grade = "Terminated (Unauthorized Mobile Phone Usage)" if is_mobile_phone else "Terminated (Proctoring Violation)"
+        term_feedback = (
+            "Interview session was terminated immediately due to unauthorized mobile phone usage. Zero-tolerance integrity policy enforced."
+            if is_mobile_phone else
+            "Interview session was terminated due to exceeding 3 proctoring warnings."
         )
-        print(f"[PROCTORING] Interview terminated")
 
         # Persist terminated interview record to database
         user_id = current_user.id if current_user else None
@@ -614,19 +643,19 @@ def record_proctoring_violation(
             technical_score=0,
             communication_score=0,
             problem_solving_score=0,
-            grade="Terminated (Proctoring Violation)",
+            grade=term_grade,
             duration_minutes=payload.duration_minutes or 45,
-            status="TERMINATED_FOR_PROCTORING",
+            status=term_status,
             date=datetime.now().strftime("%d %b %Y"),
             time=datetime.now().strftime("%I:%M %p"),
             mode="Virtual",
-            feedback="Interview session was terminated due to exceeding 5 proctoring violations.",
+            feedback=term_feedback,
             warning_count=current_warning,
             termination_reason=session["termination_reason"],
             proctoring_data=json.dumps({
                 "warning_count": current_warning,
                 "max_warnings": session["max_warnings"],
-                "status": "TERMINATED_FOR_PROCTORING",
+                "status": term_status,
                 "termination_reason": session["termination_reason"],
                 "violations": session["violations"],
             }),
@@ -639,14 +668,14 @@ def record_proctoring_violation(
         db.add(models.Activity(
             user_id=user_id,
             title=f"Mock Interview Terminated: {session['company']}",
-            company=f"Terminated for Proctoring Violations • {session['role']}",
+            company=f"Terminated for {'Mobile Phone Usage' if is_mobile_phone else 'Proctoring Violations'} • {session['role']}",
             time="Just now",
             color="#ef4444",
         ))
         db.add(models.Notification(
             user_id=user_id,
             title=f"{session['company']} Interview Terminated",
-            desc=f"Interview was terminated because 5 proctoring warnings were reached.",
+            desc=f"{'Interview was terminated immediately because unauthorized mobile phone usage was detected.' if is_mobile_phone else 'Interview was terminated because 3 proctoring warnings were reached.'}",
             color="#ef4444",
             time="Just now",
             is_read=False,
@@ -657,9 +686,9 @@ def record_proctoring_violation(
             session_id=session_id,
             warning_count=current_warning,
             max_warnings=session["max_warnings"],
-            status="TERMINATED_FOR_PROCTORING",
+            status=term_status,
             terminated=True,
-            message="Interview terminated due to repeated proctoring violations.",
+            message="Interview terminated immediately due to unauthorized mobile phone usage." if is_mobile_phone else "Interview terminated due to repeated proctoring violations.",
             violations=[schemas.ViolationDetail(**v) for v in session["violations"]],
             termination_reason=session["termination_reason"],
             interview_id=session["interview_id"],
@@ -698,7 +727,7 @@ def get_session_proctoring_status(
         return schemas.ProctoringStatusResponse(
             session_id=session_id,
             warning_count=0,
-            max_warnings=5,
+            max_warnings=3,
             status="ACTIVE",
             terminated=False,
             violations=[],
@@ -1086,7 +1115,7 @@ def submit_mock_interview(
                 warning_count=existing_interview.warning_count or 0,
                 proctoring_summary=rep.get("proctoring_summary", {
                     "warning_count": existing_interview.warning_count or 0,
-                    "max_warnings": 5,
+                    "max_warnings": 3,
                     "status": "Completed",
                     "violations": [],
                 }),
@@ -1229,7 +1258,7 @@ def submit_mock_interview(
 
     proctoring_summary = {
         "warning_count": warning_count,
-        "max_warnings": 5,
+        "max_warnings": 3,
         "status": "Completed",
         "violations": violations_history,
     }

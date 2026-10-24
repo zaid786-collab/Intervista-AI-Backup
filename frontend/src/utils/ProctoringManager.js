@@ -20,10 +20,12 @@ export const PROCTORING_VIOLATION_TYPES = {
   CAMERA_DISCONNECTED: "CAMERA_DISCONNECTED",
   MIC_DISCONNECTED: "MIC_DISCONNECTED",
   PASTE_DETECTED: "PASTE_DETECTED",
+  MULTIPLE_USERS_DETECTED: "MULTIPLE_USERS_DETECTED",
+  MOBILE_PHONE_DETECTED: "MOBILE_PHONE_DETECTED",
 };
 
 export const DEFAULT_PROCTORING_CONFIG = {
-  maxWarnings: 5,
+  maxWarnings: 3,
   detectTabSwitch: true,
   detectWindowBlur: false, // Window blur is suppressed in favor of authoritative visibilitychange
   requireFullscreen: false, // Default: soft fullscreen warning if user entered fullscreen
@@ -54,6 +56,7 @@ export class ProctoringManager {
     this.isTerminated = false;
     this.isActive = false;
     this.isRequestingPermissions = false;
+    this.pendingTabReturnWarning = null;
 
     // Deduplication tracking
     this.lastIncidentTime = 0;
@@ -170,7 +173,8 @@ export class ProctoringManager {
   isDebounced(type) {
     const now = Date.now();
     const timeSinceLast = now - this.lastIncidentTime;
-    if (timeSinceLast < this.config.incidentDebounceMs) {
+    const threshold = type === PROCTORING_VIOLATION_TYPES.MULTIPLE_USERS_DETECTED ? 4500 : this.config.incidentDebounceMs;
+    if (timeSinceLast < threshold) {
       console.log(`[PROCTORING] Deduplicated event '${type}' - within ${timeSinceLast}ms of incident '${this.lastIncidentType}'`);
       return true;
     }
@@ -188,11 +192,16 @@ export class ProctoringManager {
       console.log("[PROCTORING] TAB_SWITCH detected");
       this.registerViolation({
         type: PROCTORING_VIOLATION_TYPES.TAB_SWITCH,
-        message: "You left the interview window.",
+        message: "Tab switch detected. You navigated away from the interview room.",
         severity: "HIGH",
       });
     } else if (document.visibilityState === "visible") {
-      console.log("[PROCTORING] User returned to interview tab (interview continues without additional warning)");
+      console.log("[PROCTORING] User returned to interview tab");
+      if (this.pendingTabReturnWarning) {
+        console.log("[PROCTORING] Presenting pending tab return warning to candidate:", this.pendingTabReturnWarning);
+        this.onWarning(this.pendingTabReturnWarning);
+        this.pendingTabReturnWarning = null;
+      }
     }
   }
 
@@ -347,7 +356,7 @@ export class ProctoringManager {
     this.lastIncidentTime = now;
     this.lastIncidentType = type;
 
-    console.log("[PROCTORING] Registering violation");
+    console.log("[PROCTORING] Registering violation:", type);
 
     // Optimistic, authoritative local increment
     this.warningCount += 1;
@@ -365,20 +374,27 @@ export class ProctoringManager {
 
     console.log(`[PROCTORING] Warning count: ${currentWarning}/${this.config.maxWarnings}`);
 
-    // Check if 5th warning was reached -> IMMEDIATE TERMINATION
+    const warningPayload = {
+      warningNumber: currentWarning,
+      maxWarnings: this.config.maxWarnings,
+      type,
+      message,
+      violations: this.violations,
+    };
+
+    // If candidate is currently away from the tab, save warning so it re-displays immediately upon returning
+    if (document.visibilityState === "hidden") {
+      this.pendingTabReturnWarning = warningPayload;
+    }
+
+    // Check if 3rd warning was reached -> IMMEDIATE TERMINATION
     if (currentWarning >= this.config.maxWarnings) {
-      console.log("[PROCTORING] MAX WARNINGS REACHED");
+      console.log("[PROCTORING] MAX WARNINGS REACHED (3/3)");
       console.log("[PROCTORING] TERMINATING INTERVIEW");
       this.terminateInterview();
     } else {
       console.log("[PROCTORING] Warning UI displayed");
-      this.onWarning({
-        warningNumber: currentWarning,
-        maxWarnings: this.config.maxWarnings,
-        type,
-        message,
-        violations: this.violations,
-      });
+      this.onWarning(warningPayload);
     }
 
     // Synchronize authoritatively with Backend in background without blocking UI
@@ -439,7 +455,59 @@ export class ProctoringManager {
   }
 
   /**
-   * Final Termination Action on 5th Violation
+   * Multiple users/faces detected in camera stream
+   */
+  handleMultipleUsers(faceCount = 2) {
+    if (!this.isActive || this.isTerminated || this.isRequestingPermissions) return;
+
+    this.registerViolation({
+      type: PROCTORING_VIOLATION_TYPES.MULTIPLE_USERS_DETECTED,
+      message: `Multiple persons detected (${faceCount} faces in camera view). Only the candidate is allowed during the interview.`,
+      severity: "HIGH",
+    });
+  }
+
+  /**
+   * Immediate Zero-Tolerance Termination: Mobile Phone Detected & In Use
+   * Does NOT give any warnings; directly terminates and removes the candidate from the interview.
+   */
+  handleMobilePhoneDetected(details = {}) {
+    if (this.isTerminated || !this.isActive) return;
+
+    console.warn("[PROCTORING] CRITICAL VIOLATION: MOBILE PHONE DETECTED! Immediate termination without warnings.");
+
+    const message = details.message || "Unauthorized mobile phone detected in use during the interview session.";
+    const violation = {
+      type: PROCTORING_VIOLATION_TYPES.MOBILE_PHONE_DETECTED,
+      timestamp: new Date().toISOString(),
+      warningNumber: "IMMEDIATE_TERMINATION",
+      message,
+      severity: "CRITICAL",
+    };
+    this.violations.push(violation);
+
+    this.isTerminated = true;
+    this.stop();
+    this.persistSessionState();
+
+    const terminationReason = "Zero-tolerance integrity violation: Unauthorized mobile phone usage detected during the interview session.";
+
+    this.onTerminate({
+      status: "TERMINATED_FOR_CHEATING",
+      terminationReason,
+      isImmediateTermination: true,
+      violationType: PROCTORING_VIOLATION_TYPES.MOBILE_PHONE_DETECTED,
+      violations: this.violations,
+      warningCount: this.warningCount,
+      maxWarnings: this.config.maxWarnings,
+    });
+
+    // Synchronize immediate termination with backend
+    this.syncViolationWithBackend(violation, this.warningCount);
+  }
+
+  /**
+   * Final Termination Action on 3rd Violation
    */
   terminateInterview(serverData = null) {
     if (this.isTerminated) return;
@@ -453,7 +521,7 @@ export class ProctoringManager {
       warningCount: Math.min(this.warningCount, this.config.maxWarnings),
       maxWarnings: this.config.maxWarnings,
       status: "TERMINATED_FOR_PROCTORING",
-      terminationReason: serverData?.termination_reason || "Interview terminated due to repeated proctoring violations.",
+      terminationReason: serverData?.termination_reason || `Interview terminated due to exceeding maximum allowed proctoring warnings (${this.config.maxWarnings}/${this.config.maxWarnings}).`,
       violations: this.violations,
       interviewId: serverData?.interview_id || null,
     });

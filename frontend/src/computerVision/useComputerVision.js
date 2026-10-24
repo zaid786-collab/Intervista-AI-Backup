@@ -16,11 +16,14 @@ export function useComputerVision({
   isCameraActive,
   videoRef,
   config = {},
+  onMultipleUsersDetected,
+  onMobilePhoneDetected,
 }) {
   const [isModelReady, setIsModelReady] = useState(false);
   const [isModelLoading, setIsModelLoading] = useState(false);
   const [faceDetected, setFaceDetected] = useState(false);
   const [faceCount, setFaceCount] = useState(0);
+  const [phoneDetected, setPhoneDetected] = useState(false);
   const [direction, setDirection] = useState(isCameraActive ? "camera_facing" : "camera_off");
   const [expression, setExpression] = useState("neutral");
   const [lighting, setLighting] = useState("optimal");
@@ -31,6 +34,21 @@ export function useComputerVision({
   const analyzerRef = useRef(null);
   const intervalIdRef = useRef(null);
   const isRunningRef = useRef(false);
+  const multipleUsersStartRef = useRef(null);
+  const lastMultipleUsersWarningTimeRef = useRef(0);
+  const onMultipleUsersDetectedRef = useRef(onMultipleUsersDetected);
+
+  const sustainedPhoneStartRef = useRef(null);
+  const hasTriggeredPhoneTerminationRef = useRef(false);
+  const onMobilePhoneDetectedRef = useRef(onMobilePhoneDetected);
+
+  useEffect(() => {
+    onMultipleUsersDetectedRef.current = onMultipleUsersDetected;
+  }, [onMultipleUsersDetected]);
+
+  useEffect(() => {
+    onMobilePhoneDetectedRef.current = onMobilePhoneDetected;
+  }, [onMobilePhoneDetected]);
 
   // Initialize analyzer on mount
   useEffect(() => {
@@ -77,6 +95,7 @@ export function useComputerVision({
         intervalIdRef.current = null;
       }
       isRunningRef.current = false;
+      multipleUsersStartRef.current = null;
       setDirection("camera_off");
       setFaceDetected(false);
       setActiveTip(null);
@@ -91,6 +110,7 @@ export function useComputerVision({
         intervalIdRef.current = null;
       }
       isRunningRef.current = false;
+      multipleUsersStartRef.current = null;
       setActiveTip(null);
       return;
     }
@@ -113,13 +133,55 @@ export function useComputerVision({
 
       setFaceDetected(frameResult.faceDetected);
       setFaceCount(frameResult.faceCount);
+      setPhoneDetected(!!frameResult.phoneDetected);
       setDirection(frameResult.smoothedDirection);
       setExpression(frameResult.expression);
       if (frameResult.lighting) setLighting(frameResult.lighting);
       if (frameResult.headPose) setHeadPose(frameResult.headPose);
 
-      // Handle non-punitive informational tip (auto-clears)
       const now = Date.now();
+
+      // Zero-Tolerance Mobile Phone Detection (Direct termination, no warnings)
+      if (frameResult.phoneDetected) {
+        if (!sustainedPhoneStartRef.current) {
+          sustainedPhoneStartRef.current = now;
+        }
+        // Require 350ms sustained detection (at least 2 consecutive analysis frames) to guarantee validity
+        if (now - sustainedPhoneStartRef.current >= 350) {
+          if (!hasTriggeredPhoneTerminationRef.current) {
+            hasTriggeredPhoneTerminationRef.current = true;
+            console.warn("[useComputerVision] MOBILE PHONE USAGE DETECTED! Triggering immediate direct termination.");
+            if (typeof onMobilePhoneDetectedRef.current === "function") {
+              onMobilePhoneDetectedRef.current({
+                confidence: frameResult.phoneConfidence || 0.85,
+                timestamp: now,
+              });
+            }
+          }
+        }
+      } else {
+        sustainedPhoneStartRef.current = null;
+      }
+
+      // Multiple users / multiple faces proctoring check
+      if (frameResult.faceCount > 1) {
+        if (!multipleUsersStartRef.current) {
+          multipleUsersStartRef.current = now;
+        }
+        // Require at least 1.0 second of sustained multiple faces to avoid accidental glitches
+        if (now - multipleUsersStartRef.current >= 1000) {
+          if (now - lastMultipleUsersWarningTimeRef.current >= 4500) {
+            lastMultipleUsersWarningTimeRef.current = now;
+            if (typeof onMultipleUsersDetectedRef.current === "function") {
+              onMultipleUsersDetectedRef.current(frameResult.faceCount);
+            }
+          }
+        }
+      } else {
+        multipleUsersStartRef.current = null;
+      }
+
+      // Handle non-punitive informational tip (auto-clears)
       if (frameResult.informationalTip) {
         setActiveTip(frameResult.informationalTip);
         setTipExpiresAt(now + VISION_CONFIG.tipDisplayDurationMs);
@@ -134,6 +196,8 @@ export function useComputerVision({
         intervalIdRef.current = null;
       }
       isRunningRef.current = false;
+      multipleUsersStartRef.current = null;
+      sustainedPhoneStartRef.current = null;
     };
   }, [isInterviewActive, isCameraActive, isModelReady, videoRef, tipExpiresAt]);
 
@@ -175,6 +239,7 @@ export function useComputerVision({
     isModelLoading,
     faceDetected,
     faceCount,
+    phoneDetected,
     direction,
     expression,
     lighting,

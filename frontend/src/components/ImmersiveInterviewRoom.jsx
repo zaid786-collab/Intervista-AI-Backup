@@ -23,6 +23,9 @@ import {
   Edit3,
   HelpCircle,
   ShieldCheck,
+  ShieldAlert,
+  AlertTriangle,
+  AlertOctagon,
   Maximize2,
   Minimize2,
   Zap,
@@ -31,6 +34,7 @@ import {
   Square,
   Loader2,
   Radio,
+  Smartphone,
 } from 'lucide-react';
 
 import { useSpeechRecognition } from '../hooks/useSpeechRecognition';
@@ -103,6 +107,8 @@ export default function ImmersiveInterviewRoom({
   const [currentQuestionObj, setCurrentQuestionObj] = useState(null);
   const [warningCount, setWarningCount] = useState(0);
   const [activeWarning, setActiveWarning] = useState(null);
+  const [terminatedModalData, setTerminatedModalData] = useState(null);
+  const warningTimerRef = useRef(null);
 
   // Adaptive Difficulty Engine Live HUD State
   const [adaptiveState, setAdaptiveState] = useState({
@@ -190,6 +196,16 @@ export default function ImmersiveInterviewRoom({
     isInterviewActive: sessionPhase === 'active',
     isCameraActive: !isCameraOff,
     videoRef: candidateVideoRef,
+    onMultipleUsersDetected: (count) => {
+      if (proctorRef.current && sessionPhaseRef.current === 'active') {
+        proctorRef.current.handleMultipleUsers(count);
+      }
+    },
+    onMobilePhoneDetected: (details) => {
+      if (proctorRef.current && sessionPhaseRef.current === 'active') {
+        proctorRef.current.handleMobilePhoneDetected(details);
+      }
+    },
   });
 
   // ─── Dragging handler for Candidate Video PIP ───────────────────────────────
@@ -496,39 +512,84 @@ export default function ImmersiveInterviewRoom({
       company: targetCompany,
       role: targetRole,
       config: {
+        maxWarnings: 3,
         detectTabSwitch: true,
         detectWindowBlur: false,
         incidentDebounceMs: 2500,
       },
-      onWarning: (violation, currentCount, maxAllowed) => {
+      onWarning: (data, maybeCount, maybeMax) => {
+        const currentCount = (typeof data === 'object' && data.warningNumber !== undefined)
+          ? data.warningNumber
+          : (maybeCount ?? (typeof data === 'number' ? data : 1));
+        const maxAllowed = (typeof data === 'object' && data.maxWarnings !== undefined)
+          ? data.maxWarnings
+          : (maybeMax ?? 3);
+        const type = (typeof data === 'object' && data.type) || 'PROCTORING_VIOLATION';
+        const message = (typeof data === 'object' && data.message) || 'Proctoring violation detected.';
+
         setWarningCount(currentCount);
         setActiveWarning({
-          type: violation.type,
-          message: violation.message,
+          type,
+          message,
           count: currentCount,
           max: maxAllowed,
         });
-        setTimeout(() => {
-          setActiveWarning(prev => (prev?.count === currentCount ? null : prev));
-        }, 6000);
+
+        if (warningTimerRef.current) clearTimeout(warningTimerRef.current);
+        // Toast stays visible for 8s of active user attention or until acknowledged
+        warningTimerRef.current = setTimeout(() => {
+          setActiveWarning(null);
+        }, 8000);
       },
-      onTerminate: (reason) => {
-        console.warn('[PROCTORING] Terminated by proctoring engine:', reason);
-        alert(`Interview Session Terminated: Maximum proctoring violations reached (${reason}). Finalizing evaluation...`);
-        handleEndInterview();
+      onTerminate: (data) => {
+        console.warn('[PROCTORING] Terminated by proctoring engine:', data);
+        const isPhone = (typeof data === 'object' && (data.violationType === 'MOBILE_PHONE_DETECTED' || data.isImmediateTermination));
+        const termReason = (typeof data === 'object' && data.terminationReason)
+          ? data.terminationReason
+          : (typeof data === 'string'
+              ? data
+              : (isPhone
+                  ? 'Interview terminated immediately due to unauthorized mobile phone usage.'
+                  : 'Maximum proctoring warnings reached (3/3).'));
+        
+        stopAllMedia();
+        setTerminatedModalData({
+          reason: termReason,
+          warningCount: isPhone ? 0 : 3,
+          maxWarnings: 3,
+          isPhoneViolation: isPhone,
+          violations: data?.violations || [],
+        });
       },
     });
 
     proctor.start();
+    // Synchronize warning count from session storage state in case of reload
+    setWarningCount(proctor.getWarningCount());
     proctorRef.current = proctor;
 
     return () => {
+      if (warningTimerRef.current) clearTimeout(warningTimerRef.current);
       if (proctorRef.current) {
         proctorRef.current.stop();
         proctorRef.current = null;
       }
     };
-  }, [sessionPhase, sessionId]);
+  }, [sessionPhase, sessionId, targetCompany, targetRole]);
+
+  // Keep warning visible upon candidate returning to tab
+  useEffect(() => {
+    const handleVis = () => {
+      if (document.visibilityState === 'visible' && activeWarning) {
+        if (warningTimerRef.current) clearTimeout(warningTimerRef.current);
+        warningTimerRef.current = setTimeout(() => {
+          setActiveWarning(null);
+        }, 8000);
+      }
+    };
+    document.addEventListener('visibilitychange', handleVis);
+    return () => document.removeEventListener('visibilitychange', handleVis);
+  }, [activeWarning]);
 
   // Handle Mute/Unmute toggle
   const toggleMicrophone = useCallback(() => {
@@ -959,8 +1020,12 @@ export default function ImmersiveInterviewRoom({
   };
 
   // ─── 8. Conclude Interview & Generate Report ─────────────────────────────────
-  const handleEndInterview = async () => {
+  const handleEndInterview = async (endOptions = {}) => {
+    const isCheating = endOptions?.isCheating || proctorRef.current?.isCheating || false;
+    const isProctoringTerminated = endOptions?.isTerminated || proctorRef.current?.isTerminated || isCheating || false;
+    const terminationReason = endOptions?.terminationReason || (isCheating ? "Interview session was terminated directly due to unauthorized mobile phone usage." : "Interview terminated due to exceeding 3 proctoring warnings.");
     setConfirmEndModalOpen(false);
+    setTerminatedModalData(null);
     setSessionPhase('ending');
     stopAllMedia();
 
@@ -1092,12 +1157,15 @@ export default function ImmersiveInterviewRoom({
       role: targetRole,
       company: targetCompany,
       level: experienceLevel,
-      overallScore: overall,
+      overallScore: isProctoringTerminated ? 0 : overall,
+      status: isCheating ? 'TERMINATED_FOR_CHEATING' : (isProctoringTerminated ? 'TERMINATED_FOR_PROCTORING' : 'COMPLETED'),
+      terminationReason: isProctoringTerminated ? terminationReason : null,
+      warning_count: isCheating ? 0 : (proctorRef.current?.getWarningCount() || warningCount),
       scores: {
-        communication: comm,
-        technicalDepth: tech,
-        problemSolving: prob,
-        confidence: conf,
+        communication: isProctoringTerminated ? 0 : comm,
+        technicalDepth: isProctoringTerminated ? 0 : tech,
+        problemSolving: isProctoringTerminated ? 0 : prob,
+        confidence: isProctoringTerminated ? 0 : conf,
       },
       criterionScores: {
         technicalKnowledge: tech,
@@ -1343,19 +1411,27 @@ export default function ImmersiveInterviewRoom({
             style={{
               display: 'inline-flex',
               alignItems: 'center',
-              gap: '0.35rem',
-              backgroundColor: warningCount > 0 ? 'rgba(239, 68, 68, 0.15)' : 'rgba(56, 189, 248, 0.12)',
-              border: warningCount > 0 ? '1px solid rgba(239, 68, 68, 0.4)' : '1px solid rgba(56, 189, 248, 0.28)',
-              padding: '0.35rem 0.75rem',
+              gap: '0.45rem',
+              backgroundColor: warningCount > 0 ? 'rgba(239, 68, 68, 0.22)' : 'rgba(56, 189, 248, 0.12)',
+              border: warningCount > 0 ? '1px solid rgba(239, 68, 68, 0.6)' : '1px solid rgba(56, 189, 248, 0.28)',
+              padding: '0.35rem 0.85rem',
               borderRadius: '9999px',
-              color: warningCount > 0 ? '#F87171' : '#38BDF8',
-              fontSize: '0.72rem',
-              fontWeight: 600,
+              color: warningCount > 0 ? '#EF4444' : '#38BDF8',
+              fontSize: '0.74rem',
+              fontWeight: 700,
               backdropFilter: 'blur(12px)',
+              boxShadow: warningCount > 0 ? '0 0 10px rgba(239, 68, 68, 0.35)' : 'none',
+              animation: warningCount > 0 ? 'pulseGlow 2s infinite' : 'none',
             }}
           >
-            <ShieldCheck size={12} />
-            Proctoring Active {warningCount > 0 ? `(${warningCount}/5 Warnings)` : ''}
+            {warningCount > 0 ? (
+              <ShieldAlert size={14} color="#EF4444" />
+            ) : (
+              <ShieldCheck size={13} color="#38BDF8" />
+            )}
+            <span>
+              {warningCount > 0 ? `⚠️ Proctoring: Warning ${warningCount}/3` : 'Proctoring Active'}
+            </span>
           </span>
 
           {/* Adaptive Difficulty Engine Live HUD */}
@@ -1514,42 +1590,87 @@ export default function ImmersiveInterviewRoom({
             zIndex: 99999,
             display: 'flex',
             alignItems: 'center',
-            gap: '0.85rem',
-            backgroundColor: 'rgba(24, 12, 12, 0.95)',
-            border: '1px solid #EF4444',
-            boxShadow: '0 12px 36px rgba(239, 68, 68, 0.35)',
-            backdropFilter: 'blur(16px)',
-            padding: '0.85rem 1.4rem',
-            borderRadius: '14px',
+            gap: '1rem',
+            backgroundColor: 'rgba(20, 8, 8, 0.97)',
+            border: '2px solid #EF4444',
+            boxShadow: '0 16px 48px rgba(239, 68, 68, 0.5), 0 0 24px rgba(239, 68, 68, 0.25)',
+            backdropFilter: 'blur(20px)',
+            padding: '1rem 1.6rem',
+            borderRadius: '16px',
             color: '#FFFFFF',
-            maxWidth: '90vw',
-            animation: 'fadeIn 0.3s ease-out',
+            maxWidth: '92vw',
+            animation: 'fadeInSlideDown 0.3s ease-out',
           }}
         >
-          <AlertCircle size={22} color="#EF4444" style={{ flexShrink: 0 }} />
+          <div style={{
+            width: '42px',
+            height: '42px',
+            borderRadius: '12px',
+            backgroundColor: 'rgba(239, 68, 68, 0.22)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            flexShrink: 0,
+            border: '1px solid rgba(239, 68, 68, 0.45)',
+          }}>
+            <AlertTriangle size={24} color="#EF4444" />
+          </div>
           <div>
-            <div style={{ fontWeight: 700, fontSize: '0.9rem', color: '#FCA5A5' }}>
-              Proctoring Warning ({activeWarning.count}/5)
+            <div style={{ fontWeight: 800, fontSize: '0.95rem', color: '#F87171', display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+              <span>PROCTORING WARNING</span>
+              <span style={{
+                backgroundColor: '#EF4444',
+                color: '#FFFFFF',
+                padding: '0.15rem 0.6rem',
+                borderRadius: '9999px',
+                fontSize: '0.78rem',
+                fontWeight: 800,
+                letterSpacing: '0.04em'
+              }}>
+                {activeWarning.count}/{activeWarning.max || 3}
+              </span>
+              {activeWarning.count === 2 && (
+                <span style={{
+                  color: '#FCD34D',
+                  fontSize: '0.75rem',
+                  fontWeight: 700,
+                  backgroundColor: 'rgba(245, 158, 11, 0.2)',
+                  border: '1px solid rgba(245, 158, 11, 0.4)',
+                  padding: '0.1rem 0.5rem',
+                  borderRadius: '6px',
+                }}>
+                  FINAL WARNING BEFORE TERMINATION
+                </span>
+              )}
             </div>
-            <div style={{ fontSize: '0.8rem', color: '#E2E8F0', marginTop: '2px' }}>
+            <div style={{ fontSize: '0.86rem', color: '#F1F5F9', marginTop: '4px', fontWeight: 600 }}>
               {activeWarning.message || 'Window blur or tab switch detected. Please remain focused on the interview room.'}
+            </div>
+            <div style={{ fontSize: '0.75rem', color: '#94A3B8', marginTop: '3px' }}>
+              {activeWarning.count >= (activeWarning.max || 3)
+                ? 'Maximum violations reached. Interview session will terminate immediately.'
+                : 'Notice: A total of 3 warnings will terminate and end this interview session.'}
             </div>
           </div>
           <button
             onClick={() => setActiveWarning(null)}
             style={{
-              marginLeft: '0.8rem',
+              marginLeft: '1rem',
               backgroundColor: 'rgba(239, 68, 68, 0.25)',
               border: '1px solid #EF4444',
               color: '#FFFFFF',
-              padding: '0.3rem 0.75rem',
+              padding: '0.45rem 1.1rem',
               borderRadius: '8px',
-              fontSize: '0.75rem',
-              fontWeight: 600,
+              fontSize: '0.8rem',
+              fontWeight: 700,
               cursor: 'pointer',
+              flexShrink: 0,
+              transition: 'all 0.15s ease',
             }}
+            onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = '#EF4444'; }}
+            onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = 'rgba(239, 68, 68, 0.25)'; }}
           >
-            Acknowledge
+            I Understand
           </button>
         </div>
       )}
@@ -2173,6 +2294,8 @@ export default function ImmersiveInterviewRoom({
               isModelReady={visionCV.isModelReady}
               isModelLoading={visionCV.isModelLoading}
               faceDetected={visionCV.faceDetected}
+              faceCount={visionCV.faceCount}
+              phoneDetected={visionCV.phoneDetected}
               direction={visionCV.direction}
               expression={visionCV.expression}
               activeTip={visionCV.activeTip}
@@ -3509,6 +3632,126 @@ export default function ImmersiveInterviewRoom({
                 End & Generate Report
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Proctoring Max Warnings Terminated Modal */}
+      {terminatedModalData && (
+        <div
+          id="proctoring-terminated-modal"
+          style={{
+            position: 'fixed',
+            inset: 0,
+            backgroundColor: 'rgba(10, 4, 4, 0.94)',
+            backdropFilter: 'blur(16px)',
+            zIndex: 100000,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '1.5rem',
+          }}
+        >
+          <div
+            style={{
+              backgroundColor: '#0F0909',
+              border: '2px solid #EF4444',
+              borderRadius: '24px',
+              maxWidth: '520px',
+              width: '100%',
+              padding: '2.5rem 2rem',
+              boxShadow: '0 24px 80px rgba(239, 68, 68, 0.4), 0 0 40px rgba(0, 0, 0, 0.9)',
+              textAlign: 'center',
+              animation: 'fadeIn 0.3s ease-out',
+            }}
+          >
+            <div
+              style={{
+                width: '64px',
+                height: '64px',
+                borderRadius: '50%',
+                backgroundColor: 'rgba(239, 68, 68, 0.18)',
+                color: '#EF4444',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                margin: '0 auto 1.5rem auto',
+                border: '2px solid rgba(239, 68, 68, 0.5)',
+                boxShadow: '0 0 20px rgba(239, 68, 68, 0.4)',
+              }}
+            >
+              {terminatedModalData.isPhoneViolation ? <Smartphone size={34} /> : <AlertOctagon size={34} />}
+            </div>
+
+            <div style={{
+              display: 'inline-block',
+              backgroundColor: 'rgba(239, 68, 68, 0.25)',
+              border: '1px solid #EF4444',
+              color: '#FCA5A5',
+              padding: '0.25rem 0.85rem',
+              borderRadius: '9999px',
+              fontSize: '0.78rem',
+              fontWeight: 800,
+              letterSpacing: '0.05em',
+              marginBottom: '0.75rem',
+            }}>
+              {terminatedModalData.isPhoneViolation ? 'ZERO TOLERANCE • IMMEDIATE DISQUALIFICATION' : 'INTEGRITY POLICY ENFORCED'}
+            </div>
+
+            <h2 style={{ fontSize: '1.45rem', fontWeight: 800, margin: '0 0 0.6rem 0', color: '#FFFFFF' }}>
+              {terminatedModalData.isPhoneViolation ? 'Interview Terminated: Phone Detected' : 'Interview Terminated'}
+            </h2>
+            <p style={{ fontSize: '0.9rem', color: '#E2E8F0', margin: '0 0 1.25rem 0', lineHeight: 1.55 }}>
+              {terminatedModalData.isPhoneViolation ? (
+                <>
+                  An unauthorized <strong>mobile phone was detected in use</strong> during this interview session. In accordance with zero-tolerance integrity policies, your session has been terminated directly without warnings.
+                </>
+              ) : (
+                <>
+                  The interview session was automatically terminated because <strong>3 proctoring warnings</strong> were accumulated (e.g. tab switching or multiple persons detected).
+                </>
+              )}
+            </p>
+
+            <div style={{
+              backgroundColor: 'rgba(255, 255, 255, 0.04)',
+              border: '1px solid rgba(239, 68, 68, 0.3)',
+              borderRadius: '12px',
+              padding: '0.85rem 1rem',
+              marginBottom: '1.75rem',
+              fontSize: '0.82rem',
+              color: '#F87171',
+              textAlign: 'left',
+            }}>
+              <strong>Reason:</strong> {terminatedModalData.reason}
+            </div>
+
+            <button
+              type="button"
+              onClick={() => {
+                const termReason = terminatedModalData.reason;
+                const isPhone = !!terminatedModalData.isPhoneViolation;
+                setTerminatedModalData(null);
+                handleEndInterview({ isTerminated: true, terminationReason: termReason, isCheating: isPhone });
+              }}
+              style={{
+                width: '100%',
+                padding: '0.85rem 1.6rem',
+                borderRadius: '12px',
+                backgroundColor: '#EF4444',
+                border: 'none',
+                color: '#FFFFFF',
+                fontSize: '0.92rem',
+                fontWeight: 700,
+                cursor: 'pointer',
+                boxShadow: '0 4px 20px rgba(239, 68, 68, 0.45)',
+                transition: 'all 0.2s ease',
+              }}
+              onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = '#DC2626'; }}
+              onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = '#EF4444'; }}
+            >
+              {terminatedModalData.isPhoneViolation ? 'Acknowledge Disqualification & Exit' : 'Finalize Evaluation & View Report'}
+            </button>
           </div>
         </div>
       )}

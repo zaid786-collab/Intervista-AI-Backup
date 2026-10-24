@@ -538,7 +538,7 @@ class RecordViolationRequest(BaseModel):
 class RecordViolationResponse(BaseModel):
     session_id: str
     warning_count: int
-    max_warnings: int = 5
+    max_warnings: int = 3
     status: str  # "ACTIVE" | "TERMINATED_FOR_CHEATING"
     terminated: bool
     message: str
@@ -550,7 +550,7 @@ class RecordViolationResponse(BaseModel):
 class ProctoringStatusResponse(BaseModel):
     session_id: str
     warning_count: int
-    max_warnings: int = 5
+    max_warnings: int = 3
     status: str
     terminated: bool
     violations: List[ViolationDetail]

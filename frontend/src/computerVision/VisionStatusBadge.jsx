@@ -5,6 +5,8 @@ export function VisionStatusBadge({
   isModelReady,
   isModelLoading,
   faceDetected,
+  faceCount = 1,
+  phoneDetected = false,
   direction,
   expression,
   activeTip,
@@ -50,6 +52,8 @@ export function VisionStatusBadge({
   const isLookingAtScreen = direction === "camera_facing";
   const dotClass = isCameraOff
     ? "dot-paused"
+    : phoneDetected
+    ? "dot-away"
     : faceDetected
     ? isLookingAtScreen
       ? "dot-active"
@@ -72,6 +76,10 @@ export function VisionStatusBadge({
           WebkitBackdropFilter: "blur(8px)",
           border: isCameraOff
             ? "1px solid rgba(255, 255, 255, 0.15)"
+            : phoneDetected
+            ? "2px solid #EF4444"
+            : faceCount > 1
+            ? "1px solid rgba(239, 68, 68, 0.7)"
             : isLookingAtScreen && faceDetected
             ? "1px solid rgba(16, 185, 129, 0.4)"
             : "1px solid rgba(245, 158, 11, 0.4)",
@@ -80,7 +88,7 @@ export function VisionStatusBadge({
           fontSize: "0.74rem",
           fontWeight: 600,
           color: "#F8FAFC",
-          boxShadow: "0 4px 14px rgba(0, 0, 0, 0.45)",
+          boxShadow: (phoneDetected || faceCount > 1) ? "0 4px 14px rgba(239, 68, 68, 0.45)" : "0 4px 14px rgba(0, 0, 0, 0.45)",
           transition: "border-color 0.25s ease, background-color 0.25s ease",
         }}
       >
@@ -93,6 +101,8 @@ export function VisionStatusBadge({
             flexShrink: 0,
             backgroundColor: isCameraOff
               ? "#94A3B8"
+              : (phoneDetected || faceCount > 1)
+              ? "#EF4444"
               : faceDetected
               ? isLookingAtScreen
                 ? "#10B981"
@@ -100,6 +110,8 @@ export function VisionStatusBadge({
               : "#F59E0B",
             boxShadow: isCameraOff
               ? "none"
+              : (phoneDetected || faceCount > 1)
+              ? "0 0 8px #EF4444"
               : faceDetected
               ? isLookingAtScreen
                 ? "0 0 8px #10B981"
@@ -111,6 +123,10 @@ export function VisionStatusBadge({
         <span className="vision-status-text" style={{ letterSpacing: "0.2px" }}>
           {isCameraOff
             ? "Camera Paused"
+            : phoneDetected
+            ? "Phone Detected!"
+            : faceCount > 1
+            ? `${faceCount} Faces Detected`
             : isModelLoading && !faceDetected
             ? "Vision Initializing..."
             : faceDetected
@@ -118,7 +134,47 @@ export function VisionStatusBadge({
             : "Looking for face..."}
         </span>
 
-        {faceDetected && !isCameraOff && (
+        {phoneDetected && !isCameraOff && (
+          <span
+            style={{
+              fontSize: "0.64rem",
+              fontWeight: 800,
+              color: "#FFFFFF",
+              background: "#EF4444",
+              padding: "1px 6px",
+              borderRadius: "4px",
+              boxShadow: "0 0 8px rgba(239, 68, 68, 0.7)",
+              display: "inline-flex",
+              alignItems: "center",
+              gap: "3px",
+            }}
+            title="Mobile phone detected in view!"
+          >
+            📱 Phone In Use
+          </span>
+        )}
+
+        {faceCount > 1 && !isCameraOff && (
+          <span
+            style={{
+              fontSize: "0.64rem",
+              fontWeight: 700,
+              color: "#FFFFFF",
+              background: "#EF4444",
+              padding: "1px 6px",
+              borderRadius: "4px",
+              boxShadow: "0 0 6px rgba(239, 68, 68, 0.6)",
+              display: "inline-flex",
+              alignItems: "center",
+              gap: "3px",
+            }}
+            title="Multiple faces detected in camera"
+          >
+            ⚠️ Alert
+          </span>
+        )}
+
+        {faceDetected && !isCameraOff && faceCount <= 1 && (
           <span
             className="vision-expression-tag"
             title="Facial expressiveness indicator"
