@@ -40,6 +40,7 @@ export function useComputerVision({
 
   const sustainedPhoneStartRef = useRef(null);
   const phoneConsecutiveFramesRef = useRef(0);
+  const lastPhoneDetectionTimeRef = useRef(0);
   const hasTriggeredPhoneTerminationRef = useRef(false);
   const onMobilePhoneDetectedRef = useRef(onMobilePhoneDetected);
 
@@ -142,37 +143,41 @@ export function useComputerVision({
 
       const now = Date.now();
 
-      // Sustained Mobile Phone Verification Check (Prevents false positives from single frame jitter)
+      // Responsive Mobile Phone Verification Check (Prevents false positives from single frame jitter)
       if (frameResult.phoneDetected) {
+        lastPhoneDetectionTimeRef.current = now;
         phoneConsecutiveFramesRef.current += 1;
         if (!sustainedPhoneStartRef.current) {
           sustainedPhoneStartRef.current = now;
         }
 
-        // Require at least 2 consecutive positive detections and >= 2.0s sustained observation
-        if (phoneConsecutiveFramesRef.current >= 2 && (now - sustainedPhoneStartRef.current >= 2000)) {
-          if (!hasTriggeredPhoneTerminationRef.current) {
-            hasTriggeredPhoneTerminationRef.current = true;
-            console.warn(`[useComputerVision] Sustained mobile phone candidate (${phoneConsecutiveFramesRef.current} frames). Requesting multi-stage AI verification.`);
-            if (typeof onMobilePhoneDetectedRef.current === "function") {
-              onMobilePhoneDetectedRef.current({
-                confidence: frameResult.phoneConfidence || 0.85,
-                timestamp: now,
-                candidateBoundingBox: frameResult.candidateBoundingBox || null,
-                consecutiveCount: phoneConsecutiveFramesRef.current,
-                resetSuspicion: () => {
-                  hasTriggeredPhoneTerminationRef.current = false;
-                  sustainedPhoneStartRef.current = null;
-                  phoneConsecutiveFramesRef.current = 0;
-                  setPhoneDetected(false);
-                },
-              });
-            }
+        // Require at least 2 candidate detections or >= 400ms sustained presence
+        // Stage 2 Multimodal AI Vision LLM will verify whether it is actually a real mobile phone
+        const sustainedDuration = now - sustainedPhoneStartRef.current;
+        if ((phoneConsecutiveFramesRef.current >= 2 || sustainedDuration >= 400) && !hasTriggeredPhoneTerminationRef.current) {
+          hasTriggeredPhoneTerminationRef.current = true;
+          console.warn(`[useComputerVision] Mobile phone candidate observed (${phoneConsecutiveFramesRef.current} frames, ${sustainedDuration}ms). Requesting multi-stage AI verification.`);
+          if (typeof onMobilePhoneDetectedRef.current === "function") {
+            onMobilePhoneDetectedRef.current({
+              confidence: frameResult.phoneConfidence || 0.85,
+              timestamp: now,
+              candidateBoundingBox: frameResult.candidateBoundingBox || null,
+              consecutiveCount: phoneConsecutiveFramesRef.current,
+              resetSuspicion: () => {
+                hasTriggeredPhoneTerminationRef.current = false;
+                sustainedPhoneStartRef.current = null;
+                phoneConsecutiveFramesRef.current = 0;
+                setPhoneDetected(false);
+              },
+            });
           }
         }
       } else {
-        sustainedPhoneStartRef.current = null;
-        phoneConsecutiveFramesRef.current = 0;
+        // Allow a 600ms grace window for camera jitter before resetting candidate streak
+        if (now - lastPhoneDetectionTimeRef.current > 600) {
+          sustainedPhoneStartRef.current = null;
+          phoneConsecutiveFramesRef.current = 0;
+        }
       }
 
       // Multiple users / multiple faces proctoring check

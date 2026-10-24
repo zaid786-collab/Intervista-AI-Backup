@@ -232,15 +232,28 @@ export default function ImmersiveInterviewRoom({
 
       // 2. Crop candidate object with +25% padding on each side for surrounding context
       let cropB64 = fullFrameB64;
-      if (boundingBox && boundingBox.width > 5 && boundingBox.height > 5) {
-        const cropCanvas = document.createElement('canvas');
-        const padX = boundingBox.width * 0.25;
-        const padY = boundingBox.height * 0.25;
+      if (boundingBox && (boundingBox.width > 5 || (boundingBox.width > 0 && boundingBox.width <= 1.0))) {
+        let originX = boundingBox.originX || 0;
+        let originY = boundingBox.originY || 0;
+        let boxW = boundingBox.width || 0;
+        let boxH = boundingBox.height || 0;
 
-        const sx = Math.max(0, Math.floor(boundingBox.originX - padX));
-        const sy = Math.max(0, Math.floor(boundingBox.originY - padY));
-        const sw = Math.min(vw - sx, Math.ceil(boundingBox.width + padX * 2));
-        const sh = Math.min(vh - sy, Math.ceil(boundingBox.height + padY * 2));
+        // If coordinates are normalized [0..1], scale up to video pixel space
+        if (boxW > 0 && boxW <= 1.0 && boxH <= 1.0) {
+          originX *= vw;
+          originY *= vh;
+          boxW *= vw;
+          boxH *= vh;
+        }
+
+        const cropCanvas = document.createElement('canvas');
+        const padX = boxW * 0.25;
+        const padY = boxH * 0.25;
+
+        const sx = Math.max(0, Math.floor(originX - padX));
+        const sy = Math.max(0, Math.floor(originY - padY));
+        const sw = Math.min(vw - sx, Math.ceil(boxW + padX * 2));
+        const sh = Math.min(vh - sy, Math.ceil(boxH + padY * 2));
 
         if (sw > 10 && sh > 10) {
           cropCanvas.width = sw;
@@ -274,6 +287,8 @@ export default function ImmersiveInterviewRoom({
       // Manual test simulation via shortcut (Alt+P)
       if (details?.isSimulation) {
         console.warn('[ROOM] Simulation triggered mobile phone termination.');
+        setSessionPhase('ended');
+        sessionPhaseRef.current = 'ended';
         stopAllMedia();
         stopSpeechSynthesis();
         if (speech && typeof speech.stopRecording === 'function') {
@@ -297,7 +312,7 @@ export default function ImmersiveInterviewRoom({
       isVerifyingPhoneRef.current = true;
       setIsVerifyingPhone(true);
 
-      console.warn('[ROOM] Sustained mobile phone candidate observed. Initiating multi-stage AI Vision LLM verification...');
+      console.warn('[ROOM] Mobile phone candidate observed. Initiating multi-stage AI Vision LLM verification...');
 
       const captureData = captureCandidateCropAndFrame(details?.candidateBoundingBox);
       if (!captureData) {
@@ -320,9 +335,11 @@ export default function ImmersiveInterviewRoom({
 
         console.log('[ROOM] AI Phone Verification classification result:', verifyRes);
 
-        // Terminate ONLY if LLM strictly confirms an actual phone with high confidence
-        if (verifyRes?.phone_detected === true && (verifyRes?.confidence == null || verifyRes.confidence >= 0.75)) {
-          console.error('[ROOM] AI LLM CONFIRMED MOBILE PHONE DETECTED! Terminating interview.', verifyRes.reason);
+        // Terminate session immediately if LLM confirms an actual phone
+        if (verifyRes?.phone_detected === true || verifyRes?.session_terminated === true) {
+          console.error('[ROOM] AI LLM CONFIRMED MOBILE PHONE DETECTED! Terminating interview session immediately.', verifyRes.reason);
+          setSessionPhase('ended');
+          sessionPhaseRef.current = 'ended';
           stopAllMedia();
           stopSpeechSynthesis();
           if (speech && typeof speech.stopRecording === 'function') {
@@ -713,6 +730,8 @@ export default function ImmersiveInterviewRoom({
       },
       onTerminate: (data) => {
         console.warn('[PROCTORING] Terminated by proctoring engine:', data);
+        setSessionPhase('ended');
+        sessionPhaseRef.current = 'ended';
         const isPhone = (typeof data === 'object' && (data.violationType === 'MOBILE_PHONE_DETECTED' || data.isImmediateTermination));
         const termReason = (typeof data === 'object' && data.terminationReason)
           ? data.terminationReason

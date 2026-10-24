@@ -10,11 +10,11 @@ from typing import Dict, Any, Optional
 # ==============================================================================
 PROCTORING_CONFIG = {
     # Minimum score from local MediaPipe ObjectDetector to flag candidate object
-    "DETECTION_CONFIDENCE_THRESHOLD": float(os.getenv("PHONE_DETECTION_CONFIDENCE_THRESHOLD", "0.70")),
+    "DETECTION_CONFIDENCE_THRESHOLD": float(os.getenv("PHONE_DETECTION_CONFIDENCE_THRESHOLD", "0.35")),
     # Minimum consecutive frames before requesting AI classification
     "MIN_CONSECUTIVE_CONFIRMATIONS": int(os.getenv("PHONE_MIN_CONSECUTIVE_CONFIRMATIONS", "2")),
     # Minimum confidence score from Vision LLM to accept as a confirmed violation
-    "MIN_EVIDENCE_CONFIDENCE": float(os.getenv("PHONE_MIN_EVIDENCE_CONFIDENCE", "0.75")),
+    "MIN_EVIDENCE_CONFIDENCE": float(os.getenv("PHONE_MIN_EVIDENCE_CONFIDENCE", "0.70")),
     # Minimum cooldown seconds between server-side AI Vision calls per session
     "DETECTION_COOLDOWN_SECONDS": float(os.getenv("PHONE_DETECTION_COOLDOWN_SECONDS", "3.5")),
     # Vision API timeout in seconds

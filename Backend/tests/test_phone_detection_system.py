@@ -33,8 +33,8 @@ def run_comprehensive_proctoring_tests():
     # TEST 1: Config & Prompt Validation
     # ------------------------------------------------------------------
     print("[TEST 1] Verifying Proctoring Configuration & Prompt Structure...")
-    assert PROCTORING_CONFIG["DETECTION_CONFIDENCE_THRESHOLD"] >= 0.65
-    assert PROCTORING_CONFIG["MIN_EVIDENCE_CONFIDENCE"] >= 0.75
+    assert PROCTORING_CONFIG["DETECTION_CONFIDENCE_THRESHOLD"] >= 0.30
+    assert PROCTORING_CONFIG["MIN_EVIDENCE_CONFIDENCE"] >= 0.70
     assert PROCTORING_CONFIG["MIN_CONSECUTIVE_CONFIRMATIONS"] >= 2
     assert "mobile_phone" in PHONE_PROCTOR_PROMPT
     assert "non_phone" in PHONE_PROCTOR_PROMPT

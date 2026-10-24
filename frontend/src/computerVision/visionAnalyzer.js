@@ -133,10 +133,10 @@ export class VisionAnalyzer {
               "https://storage.googleapis.com/mediapipe-models/object_detector/efficientdet_lite0/float16/1/efficientdet_lite0.tflite",
             delegate: "GPU",
           },
-          scoreThreshold: 0.65,
+          scoreThreshold: 0.30,
           runningMode: "VIDEO",
         });
-        console.log("[ComputerVision] MediaPipe ObjectDetector active with GPU delegate (Strict Mode >= 0.65).");
+        console.log("[ComputerVision] MediaPipe ObjectDetector active with GPU delegate (Threshold: 0.30).");
       } catch (objGpuErr) {
         try {
           this.objectDetector = await ObjectDetector.createFromOptions(filesetResolver, {
@@ -145,10 +145,10 @@ export class VisionAnalyzer {
                 "https://storage.googleapis.com/mediapipe-models/object_detector/efficientdet_lite0/float16/1/efficientdet_lite0.tflite",
               delegate: "CPU",
             },
-            scoreThreshold: 0.65,
+            scoreThreshold: 0.30,
             runningMode: "VIDEO",
           });
-          console.log("[ComputerVision] MediaPipe ObjectDetector active with CPU delegate (Strict Mode >= 0.65).");
+          console.log("[ComputerVision] MediaPipe ObjectDetector active with CPU delegate (Threshold: 0.30).");
         } catch (objCpuErr) {
           console.warn("[ComputerVision] ObjectDetector init failed:", objCpuErr.message);
         }
@@ -231,10 +231,10 @@ export class VisionAnalyzer {
           for (const d of objResults.detections) {
             for (const cat of d.categories) {
               const name = (cat.categoryName || cat.displayName || "").toLowerCase().trim();
-              // STRICT: Only match genuine cell phones / mobile phones with high confidence
-              // Never match generic "device", "remote", "camera", or "electronic"
-              if (name === "cell phone" || name === "mobile phone") {
-                if (cat.score >= 0.70) {
+              // MediaPipe COCO model labels mobile phones as "cell phone" (or "mobile phone")
+              // Match candidate cell phone with candidate threshold >= 0.35
+              if (name === "cell phone" || name === "mobile phone" || name === "phone" || name.includes("cell phone")) {
+                if (cat.score >= 0.35) {
                   phoneDetected = true;
                   phoneConfidence = Math.max(phoneConfidence, cat.score);
                   if (d.boundingBox) {
@@ -623,6 +623,7 @@ export class VisionAnalyzer {
       informationalTip,
       headPose: { yaw: approxYaw, pitch: approxPitch, roll: 0 },
       expressivenessMag: Math.round(expressivenessMag * 100),
+      candidateBoundingBox: phoneInfo.candidateBoundingBox || null,
     };
   }
 
