@@ -203,11 +203,39 @@ export default function ImmersiveInterviewRoom({
       }
     },
     onMobilePhoneDetected: (details) => {
-      if (proctorRef.current && sessionPhaseRef.current === 'active') {
+      console.warn('[ROOM] Mobile phone detected! Immediately terminating interview with Red Screen.');
+      stopAllMedia();
+      stopSpeechSynthesis();
+      if (speech && typeof speech.stopRecording === 'function') {
+        speech.stopRecording();
+      }
+
+      if (proctorRef.current) {
         proctorRef.current.handleMobilePhoneDetected(details);
       }
+
+      setTerminatedModalData({
+        reason: 'Unauthorized mobile phone detected in camera view.',
+        warningCount: 0,
+        maxWarnings: 3,
+        isPhoneViolation: true,
+        violations: [{ type: 'MOBILE_PHONE_DETECTED', message: 'Mobile phone detected in camera view.' }],
+      });
     },
   });
+
+  // Developer/Examiner testing shortcut: Alt+P triggers immediate mobile phone termination
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (sessionPhase === 'active' && ((e.altKey && e.key.toLowerCase() === 'p') || (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'p'))) {
+        e.preventDefault();
+        console.warn('[TEST] Manually triggering mobile phone termination (Alt+P)');
+        visionCV.triggerMobilePhoneSimulation();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [sessionPhase, visionCV]);
 
   // ─── Dragging handler for Candidate Video PIP ───────────────────────────────
   const handlePipMouseDown = (e) => {
@@ -3637,8 +3665,196 @@ export default function ImmersiveInterviewRoom({
         </div>
       )}
 
-      {/* Proctoring Max Warnings Terminated Modal */}
-      {terminatedModalData && (
+      {/* =========================================================================
+          ZERO-TOLERANCE MOBILE PHONE IMMEDIATE DISQUALIFICATION RED SCREEN
+          ========================================================================= */}
+      {terminatedModalData && terminatedModalData.isPhoneViolation && (
+        <div
+          id="proctoring-phone-red-screen"
+          style={{
+            position: 'fixed',
+            inset: 0,
+            width: '100vw',
+            height: '100vh',
+            background: 'radial-gradient(circle at 50% 36%, #B91C1C 0%, #881337 38%, #4C0519 72%, #1C0106 100%)',
+            zIndex: 9999999,
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '2rem 1.5rem',
+            textAlign: 'center',
+            boxShadow: 'inset 0 0 160px rgba(239, 68, 68, 0.95), inset 0 0 50px rgba(255, 255, 255, 0.25)',
+            animation: 'redAlertPulse 2s infinite ease-in-out',
+            overflowY: 'auto',
+          }}
+        >
+          {/* Emergency Siren Beacon Icon */}
+          <div
+            style={{
+              width: '96px',
+              height: '96px',
+              borderRadius: '50%',
+              backgroundColor: 'rgba(255, 255, 255, 0.16)',
+              border: '3px solid #FFFFFF',
+              boxShadow: '0 0 50px rgba(255, 255, 255, 0.7), 0 0 100px rgba(239, 68, 68, 0.95)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: '#FFFFFF',
+              marginBottom: '1.5rem',
+              animation: 'sirenBeacon 1.8s infinite ease-in-out',
+            }}
+          >
+            <Smartphone size={50} strokeWidth={2.4} />
+          </div>
+
+          {/* Pill Tag */}
+          <div
+            style={{
+              backgroundColor: '#FFFFFF',
+              color: '#991B1B',
+              padding: '0.4rem 1.3rem',
+              borderRadius: '9999px',
+              fontSize: '0.82rem',
+              fontWeight: 900,
+              letterSpacing: '0.08em',
+              textTransform: 'uppercase',
+              boxShadow: '0 4px 20px rgba(0, 0, 0, 0.45)',
+              marginBottom: '1.1rem',
+            }}
+          >
+            🚨 ZERO TOLERANCE • IMMEDIATE DISQUALIFICATION
+          </div>
+
+          {/* Main Emergency Headers */}
+          <h1
+            style={{
+              fontSize: 'clamp(2.1rem, 4.8vw, 3.4rem)',
+              fontWeight: 900,
+              color: '#FFFFFF',
+              margin: '0 0 0.5rem 0',
+              letterSpacing: '-0.02em',
+              textShadow: '0 4px 30px rgba(0, 0, 0, 0.85), 0 0 40px rgba(239, 68, 68, 0.9)',
+            }}
+          >
+            INTERVIEW TERMINATED
+          </h1>
+
+          <p
+            style={{
+              fontSize: 'clamp(1.05rem, 1.8vw, 1.3rem)',
+              fontWeight: 700,
+              color: '#FECDD3',
+              maxWidth: '680px',
+              margin: '0 0 1.85rem 0',
+              lineHeight: 1.5,
+              textShadow: '0 2px 10px rgba(0, 0, 0, 0.7)',
+            }}
+          >
+            Unauthorized mobile phone was detected in view. Your interview has been ended right here.
+          </p>
+
+          {/* Incident Dossier Card */}
+          <div
+            style={{
+              backgroundColor: 'rgba(15, 2, 5, 0.8)',
+              backdropFilter: 'blur(16px)',
+              border: '1.5px solid rgba(254, 202, 202, 0.45)',
+              borderRadius: '20px',
+              maxWidth: '620px',
+              width: '100%',
+              padding: '1.75rem',
+              marginBottom: '2rem',
+              textAlign: 'left',
+              boxShadow: '0 24px 60px rgba(0, 0, 0, 0.8)',
+            }}
+          >
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '1rem', marginBottom: '1.25rem' }}>
+              <div>
+                <span style={{ fontSize: '0.72rem', color: '#FDA4AF', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 700 }}>
+                  Violation Detected
+                </span>
+                <div style={{ fontSize: '0.95rem', fontWeight: 700, color: '#FFFFFF', marginTop: '3px' }}>
+                  Mobile Phone in Camera View
+                </div>
+              </div>
+              <div>
+                <span style={{ fontSize: '0.72rem', color: '#FDA4AF', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 700 }}>
+                  Action Enforced
+                </span>
+                <div style={{ fontSize: '0.95rem', fontWeight: 700, color: '#F87171', marginTop: '3px' }}>
+                  Immediate Disqualification
+                </div>
+              </div>
+              <div>
+                <span style={{ fontSize: '0.72rem', color: '#FDA4AF', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 700 }}>
+                  Warning Policy
+                </span>
+                <div style={{ fontSize: '0.95rem', fontWeight: 700, color: '#FFFFFF', marginTop: '3px' }}>
+                  0 Warnings Permitted (Zero Tolerance)
+                </div>
+              </div>
+              <div>
+                <span style={{ fontSize: '0.72rem', color: '#FDA4AF', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 700 }}>
+                  Candidate Status
+                </span>
+                <div style={{ fontSize: '0.95rem', fontWeight: 800, color: '#EF4444', marginTop: '3px' }}>
+                  DISQUALIFIED / REMOVED
+                </div>
+              </div>
+            </div>
+
+            <div
+              style={{
+                borderTop: '1px solid rgba(255, 255, 255, 0.12)',
+                paddingTop: '0.85rem',
+                fontSize: '0.84rem',
+                color: '#FECDD3',
+                lineHeight: 1.5,
+              }}
+            >
+              All video and microphone communication channels were severed immediately upon detection. This disqualification has been logged in your official evaluation record.
+            </div>
+          </div>
+
+          {/* Action Button */}
+          <button
+            type="button"
+            onClick={() => {
+              const termReason = terminatedModalData.reason;
+              setTerminatedModalData(null);
+              handleEndInterview({ isTerminated: true, terminationReason: termReason, isCheating: true });
+            }}
+            style={{
+              padding: '1.05rem 2.8rem',
+              borderRadius: '14px',
+              backgroundColor: '#FFFFFF',
+              border: 'none',
+              color: '#991B1B',
+              fontSize: '1rem',
+              fontWeight: 800,
+              cursor: 'pointer',
+              boxShadow: '0 8px 30px rgba(0, 0, 0, 0.6), 0 0 35px rgba(255, 255, 255, 0.6)',
+              transition: 'all 0.2s ease',
+              letterSpacing: '0.02em',
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.backgroundColor = '#FEE2E2';
+              e.currentTarget.style.transform = 'scale(1.03)';
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.backgroundColor = '#FFFFFF';
+              e.currentTarget.style.transform = 'scale(1)';
+            }}
+          >
+            Acknowledge Disqualification & Exit Room
+          </button>
+        </div>
+      )}
+
+      {/* Proctoring Standard 3-Warnings Terminated Modal (when not a mobile phone violation) */}
+      {terminatedModalData && !terminatedModalData.isPhoneViolation && (
         <div
           id="proctoring-terminated-modal"
           style={{
@@ -3681,7 +3897,7 @@ export default function ImmersiveInterviewRoom({
                 boxShadow: '0 0 20px rgba(239, 68, 68, 0.4)',
               }}
             >
-              {terminatedModalData.isPhoneViolation ? <Smartphone size={34} /> : <AlertOctagon size={34} />}
+              <AlertOctagon size={34} />
             </div>
 
             <div style={{
@@ -3696,22 +3912,14 @@ export default function ImmersiveInterviewRoom({
               letterSpacing: '0.05em',
               marginBottom: '0.75rem',
             }}>
-              {terminatedModalData.isPhoneViolation ? 'ZERO TOLERANCE • IMMEDIATE DISQUALIFICATION' : 'INTEGRITY POLICY ENFORCED'}
+              INTEGRITY POLICY ENFORCED
             </div>
 
             <h2 style={{ fontSize: '1.45rem', fontWeight: 800, margin: '0 0 0.6rem 0', color: '#FFFFFF' }}>
-              {terminatedModalData.isPhoneViolation ? 'Interview Terminated: Phone Detected' : 'Interview Terminated'}
+              Interview Terminated
             </h2>
             <p style={{ fontSize: '0.9rem', color: '#E2E8F0', margin: '0 0 1.25rem 0', lineHeight: 1.55 }}>
-              {terminatedModalData.isPhoneViolation ? (
-                <>
-                  An unauthorized <strong>mobile phone was detected in use</strong> during this interview session. In accordance with zero-tolerance integrity policies, your session has been terminated directly without warnings.
-                </>
-              ) : (
-                <>
-                  The interview session was automatically terminated because <strong>3 proctoring warnings</strong> were accumulated (e.g. tab switching or multiple persons detected).
-                </>
-              )}
+              The interview session was automatically terminated because <strong>3 proctoring warnings</strong> were accumulated (e.g. tab switching or multiple persons detected).
             </p>
 
             <div style={{
@@ -3731,9 +3939,8 @@ export default function ImmersiveInterviewRoom({
               type="button"
               onClick={() => {
                 const termReason = terminatedModalData.reason;
-                const isPhone = !!terminatedModalData.isPhoneViolation;
                 setTerminatedModalData(null);
-                handleEndInterview({ isTerminated: true, terminationReason: termReason, isCheating: isPhone });
+                handleEndInterview({ isTerminated: true, terminationReason: termReason });
               }}
               style={{
                 width: '100%',
@@ -3751,7 +3958,7 @@ export default function ImmersiveInterviewRoom({
               onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = '#DC2626'; }}
               onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = '#EF4444'; }}
             >
-              {terminatedModalData.isPhoneViolation ? 'Acknowledge Disqualification & Exit' : 'Finalize Evaluation & View Report'}
+              Finalize Evaluation & View Report
             </button>
           </div>
         </div>
@@ -3799,6 +4006,26 @@ export default function ImmersiveInterviewRoom({
           50% {
             opacity: 0.3;
             box-shadow: none;
+          }
+        }
+
+        @keyframes redAlertPulse {
+          0%, 100% {
+            box-shadow: inset 0 0 100px rgba(220, 38, 38, 0.8), inset 0 0 40px rgba(239, 68, 68, 0.85);
+          }
+          50% {
+            box-shadow: inset 0 0 200px rgba(220, 38, 38, 1), inset 0 0 80px rgba(254, 202, 202, 0.95);
+          }
+        }
+
+        @keyframes sirenBeacon {
+          0%, 100% {
+            transform: scale(1);
+            box-shadow: 0 0 40px rgba(255, 255, 255, 0.6), 0 0 80px rgba(239, 68, 68, 0.8);
+          }
+          50% {
+            transform: scale(1.08);
+            box-shadow: 0 0 70px rgba(255, 255, 255, 0.9), 0 0 130px rgba(239, 68, 68, 1);
           }
         }
       `}</style>

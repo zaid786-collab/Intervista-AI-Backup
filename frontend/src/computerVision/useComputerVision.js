@@ -141,26 +141,18 @@ export function useComputerVision({
 
       const now = Date.now();
 
-      // Zero-Tolerance Mobile Phone Detection (Direct termination, no warnings)
+      // Zero-Tolerance Mobile Phone Detection (Direct termination on seeing, zero delay)
       if (frameResult.phoneDetected) {
-        if (!sustainedPhoneStartRef.current) {
-          sustainedPhoneStartRef.current = now;
-        }
-        // Require 350ms sustained detection (at least 2 consecutive analysis frames) to guarantee validity
-        if (now - sustainedPhoneStartRef.current >= 350) {
-          if (!hasTriggeredPhoneTerminationRef.current) {
-            hasTriggeredPhoneTerminationRef.current = true;
-            console.warn("[useComputerVision] MOBILE PHONE USAGE DETECTED! Triggering immediate direct termination.");
-            if (typeof onMobilePhoneDetectedRef.current === "function") {
-              onMobilePhoneDetectedRef.current({
-                confidence: frameResult.phoneConfidence || 0.85,
-                timestamp: now,
-              });
-            }
+        if (!hasTriggeredPhoneTerminationRef.current) {
+          hasTriggeredPhoneTerminationRef.current = true;
+          console.warn("[useComputerVision] MOBILE PHONE DETECTED! Triggering immediate direct termination.");
+          if (typeof onMobilePhoneDetectedRef.current === "function") {
+            onMobilePhoneDetectedRef.current({
+              confidence: frameResult.phoneConfidence || 0.9,
+              timestamp: now,
+            });
           }
         }
-      } else {
-        sustainedPhoneStartRef.current = null;
       }
 
       // Multiple users / multiple faces proctoring check
@@ -234,6 +226,24 @@ export function useComputerVision({
     return analyzerRef.current.getSummary();
   }, []);
 
+  /**
+   * Manual trigger for testing / developer verification of mobile phone termination
+   */
+  const triggerMobilePhoneSimulation = useCallback(() => {
+    console.warn("[useComputerVision] Manual Mobile Phone simulation triggered.");
+    setPhoneDetected(true);
+    if (!hasTriggeredPhoneTerminationRef.current) {
+      hasTriggeredPhoneTerminationRef.current = true;
+      if (typeof onMobilePhoneDetectedRef.current === "function") {
+        onMobilePhoneDetectedRef.current({
+          confidence: 0.99,
+          timestamp: Date.now(),
+          isSimulation: true,
+        });
+      }
+    }
+  }, []);
+
   return {
     isModelReady,
     isModelLoading,
@@ -246,5 +256,6 @@ export function useComputerVision({
     headPose,
     activeTip,
     getFinalSummary,
+    triggerMobilePhoneSimulation,
   };
 }
