@@ -562,12 +562,12 @@ export default function ImmersiveInterviewRoom({
     speech.stopRecording();
   }, [speech]);
 
-  // ─── Helper: Turn Microphone ON automatically ──────────────────────────────
   // ─── Helper: Turn Microphone ON automatically (With Echo Shield) ───────────
   const activateMic = useCallback(() => {
-    // HARD ACOUSTIC SHIELD: Never turn on candidate mic if AI interviewer is actively speaking
-    if (isInterviewerSpeakingRef.current || (window.speechSynthesis && window.speechSynthesis.speaking)) {
-      console.log('[activateMic] Interviewer is actively speaking, deferring mic activation to prevent self-echo.');
+    // Only check the authoritative ref — do NOT check window.speechSynthesis.speaking
+    // because it can remain true for ~200ms after onend fires and block mic permanently.
+    if (isInterviewerSpeakingRef.current) {
+      console.log('[activateMic] Interviewer ref still set, deferring mic activation.');
       return;
     }
     isMicMutedRef.current = false;
@@ -631,11 +631,14 @@ export default function ImmersiveInterviewRoom({
     }
 
     let safetyTimer = null;
+    let hasFinished = false; // Double-fire guard: finishSpeaking can be called by onend AND safetyTimer
     const wordCount = cleanSpeech.split(/\s+/).filter(Boolean).length;
     const estimatedDuration = Math.max(16000, Math.round((wordCount / 1.7) * 1000) + 4000);
 
     const finishSpeaking = () => {
-      if (safetyTimer) clearTimeout(safetyTimer);
+      if (hasFinished) return; // Already handled
+      hasFinished = true;
+      if (safetyTimer) { clearTimeout(safetyTimer); safetyTimer = null; }
       // Extra 350ms buffer to ensure acoustic sound waves have completely left the room
       setTimeout(() => {
         setIsInterviewerSpeaking(false);
@@ -659,9 +662,6 @@ export default function ImmersiveInterviewRoom({
     utterance.onstart = () => {
       setIsInterviewerSpeaking(true);
       isInterviewerSpeakingRef.current = true;
-      speech.pauseListening();
-      speech.clearTranscript();
-      setCandidateAnswer('');
     };
 
     utterance.onend = () => {
