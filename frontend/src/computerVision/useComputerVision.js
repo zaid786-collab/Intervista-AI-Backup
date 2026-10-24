@@ -39,6 +39,7 @@ export function useComputerVision({
   const onMultipleUsersDetectedRef = useRef(onMultipleUsersDetected);
 
   const sustainedPhoneStartRef = useRef(null);
+  const phoneConsecutiveFramesRef = useRef(0);
   const hasTriggeredPhoneTerminationRef = useRef(false);
   const onMobilePhoneDetectedRef = useRef(onMobilePhoneDetected);
 
@@ -143,22 +144,26 @@ export function useComputerVision({
 
       // Sustained Mobile Phone Verification Check (Prevents false positives from single frame jitter)
       if (frameResult.phoneDetected) {
+        phoneConsecutiveFramesRef.current += 1;
         if (!sustainedPhoneStartRef.current) {
           sustainedPhoneStartRef.current = now;
         }
 
-        // Require at least 2.5 seconds of sustained continuous detection before initiating AI check
-        if (now - sustainedPhoneStartRef.current >= 2500) {
+        // Require at least 2 consecutive positive detections and >= 2.0s sustained observation
+        if (phoneConsecutiveFramesRef.current >= 2 && (now - sustainedPhoneStartRef.current >= 2000)) {
           if (!hasTriggeredPhoneTerminationRef.current) {
             hasTriggeredPhoneTerminationRef.current = true;
-            console.warn("[useComputerVision] Sustained mobile phone suspected (>2.5s). Requesting AI LLM verification.");
+            console.warn(`[useComputerVision] Sustained mobile phone candidate (${phoneConsecutiveFramesRef.current} frames). Requesting multi-stage AI verification.`);
             if (typeof onMobilePhoneDetectedRef.current === "function") {
               onMobilePhoneDetectedRef.current({
                 confidence: frameResult.phoneConfidence || 0.85,
                 timestamp: now,
+                candidateBoundingBox: frameResult.candidateBoundingBox || null,
+                consecutiveCount: phoneConsecutiveFramesRef.current,
                 resetSuspicion: () => {
                   hasTriggeredPhoneTerminationRef.current = false;
                   sustainedPhoneStartRef.current = null;
+                  phoneConsecutiveFramesRef.current = 0;
                   setPhoneDetected(false);
                 },
               });
@@ -167,6 +172,7 @@ export function useComputerVision({
         }
       } else {
         sustainedPhoneStartRef.current = null;
+        phoneConsecutiveFramesRef.current = 0;
       }
 
       // Multiple users / multiple faces proctoring check

@@ -772,18 +772,48 @@ export async function apiEndInterview(sessionId, metrics = null) {
   return report;
 }
 
-export async function apiVerifyPhone({ imageBase64, interviewId = null }) {
+export async function apiVerifyPhone({
+  imageBase64,
+  fullFrameBase64 = null,
+  boundingBox = null,
+  sessionId = null,
+  interviewId = null,
+  consecutiveCount = 1,
+}) {
   try {
     const res = await request('POST', '/api/interviews/verify-phone', {
       image_base64: imageBase64,
-      interview_id: interviewId,
+      full_frame_base64: fullFrameBase64,
+      bounding_box: boundingBox,
+      session_id: sessionId || interviewId,
+      interview_id: interviewId || sessionId,
+      consecutive_count: consecutiveCount,
     });
     return res;
   } catch (err) {
     console.warn('[api] apiVerifyPhone error:', err);
-    return { verified: false, phone_detected: false, confidence: 0.0, reason: 'AI Verification temporarily unavailable' };
+    return {
+      verified: false,
+      classification: 'uncertain',
+      phone_detected: false,
+      confidence: 0.0,
+      visual_evidence: 'AI Verification temporarily unavailable',
+      reason: 'Network or server error during vision verification',
+      action_enforced: 'NONE',
+      session_terminated: false,
+    };
   }
 }
+
+export async function apiGetProctoringEvents(sessionId) {
+  try {
+    return await request('GET', `/api/interviews/${sessionId}/proctoring-events`);
+  } catch (err) {
+    console.warn('[api] apiGetProctoringEvents error:', err);
+    return { session_id: sessionId, status: 'ACTIVE', violations: [] };
+  }
+}
+
 
 // ─── REPORTS & SESSIONS ────────────────────────────────────────────────────────
 

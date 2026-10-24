@@ -222,6 +222,7 @@ export class VisionAnalyzer {
     // Real-time mobile phone detection inference
     let phoneDetected = false;
     let phoneConfidence = 0;
+    let candidateBoundingBox = null;
 
     if (this.objectDetector && videoElement) {
       try {
@@ -236,6 +237,14 @@ export class VisionAnalyzer {
                 if (cat.score >= 0.70) {
                   phoneDetected = true;
                   phoneConfidence = Math.max(phoneConfidence, cat.score);
+                  if (d.boundingBox) {
+                    candidateBoundingBox = {
+                      originX: d.boundingBox.originX || 0,
+                      originY: d.boundingBox.originY || 0,
+                      width: d.boundingBox.width || 0,
+                      height: d.boundingBox.height || 0,
+                    };
+                  }
                 }
               }
             }
@@ -246,7 +255,8 @@ export class VisionAnalyzer {
       }
     }
 
-    const phoneInfo = { phoneDetected, phoneConfidence };
+    const phoneInfo = { phoneDetected, phoneConfidence, candidateBoundingBox };
+
 
     // If MediaPipe is active, run FaceLandmarker inference
     if (this.usingMediaPipe && this.landmarker) {
@@ -429,7 +439,9 @@ export class VisionAnalyzer {
       informationalTip,
       headPose: { yaw: Math.round(yaw), pitch: Math.round(pitch), roll: Math.round(roll) },
       expressivenessMag: Math.round(expressivenessMag * 100),
+      candidateBoundingBox: phoneInfo.candidateBoundingBox || null,
     };
+
   }
 
   /**

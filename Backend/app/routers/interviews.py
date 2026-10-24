@@ -16,7 +16,7 @@ from app.services.pdf_generator import generate_interview_pdf_report
 from app.services.question_generator import generate_interview_session
 from app.services.coach_service import compute_adaptive_turn_transition
 from app.services.code_executor import run_code_against_test_suite
-from app.services.proctoring_service import verify_phone_with_llm
+from app.services.proctoring_service import verify_candidate_object_with_llm, PROCTORING_CONFIG
 
 router = APIRouter(prefix="/api/interviews", tags=["Mock Interviews & AI Evaluation"])
 
@@ -513,19 +513,199 @@ def start_mock_interview(
 
 
 @router.post("/verify-phone", response_model=schemas.VerifyPhoneResponse)
-def verify_phone_endpoint(payload: schemas.VerifyPhoneRequest):
+def verify_phone_endpoint(
+    payload: schemas.VerifyPhoneRequest,
+    current_user: Optional[models.User] = Depends(get_current_user_optional),
+    db: Session = Depends(get_db),
+):
     """
-    Multimodal AI Proctoring Phone Verifier:
-    Inspects candidate webcam frame using Vision LLM to strictly confirm or refute
-    the presence of an unauthorized mobile phone, eliminating false positives from
-    hands, faces, shadows, clothing, and audio gear.
+    Multi-Stage Multimodal AI Proctoring Phone Verifier:
+    Inspects candidate object crop and full-frame context using Vision LLM.
+    Classifies suspicious objects strictly as:
+      - 'mobile_phone' (strictly confirmed physical smartphone)
+      - 'non_phone' (books, laptops, calculators, tablets, hands, clothing)
+      - 'uncertain' (obscured, blurry, low confidence)
+    Applies authoritative session termination rules with deduplication and cooldown.
     """
-    res = verify_phone_with_llm(payload.image_base64)
-    return schemas.VerifyPhoneResponse(
+    now_ts = time.time()
+    session_id = payload.session_id or payload.interview_id or "default_session"
+
+    # Fetch or create authoritative session
+    session = ACTIVE_PROCTORING_SESSIONS.get(session_id)
+    if not session:
+        session = {
+            "session_id": session_id,
+            "company": "Tech Company",
+            "role": "Software Engineer",
+            "difficulty": "Medium",
+            "warning_count": 0,
+            "max_warnings": PROCTORING_CONFIG["MAX_WARNINGS_BEFORE_TERMINATION"],
+            "status": "ACTIVE",
+            "violations": [],
+            "last_violation_time": 0.0,
+            "last_phone_check_ts": 0.0,
+            "last_verification_result": None,
+            "termination_reason": None,
+            "interview_id": None,
+        }
+        ACTIVE_PROCTORING_SESSIONS[session_id] = session
+
+    # 1. If already terminated, return immediately with authoritative terminated state
+    if session["status"] in ("TERMINATED_FOR_PROCTORING", "TERMINATED_FOR_CHEATING"):
+        return schemas.VerifyPhoneResponse(
+            verified=True,
+            classification="mobile_phone",
+            phone_detected=True,
+            confidence=1.0,
+            visual_evidence="Session already terminated for integrity violation.",
+            reason=session["termination_reason"] or "Interview already terminated.",
+            action_enforced="TERMINATION",
+            session_terminated=True,
+            warning_count=session["warning_count"],
+        )
+
+    # 2. Rate limit / Cooldown check: avoid spamming Vision LLM
+    cooldown = PROCTORING_CONFIG["DETECTION_COOLDOWN_SECONDS"]
+    last_check = session.get("last_phone_check_ts", 0.0)
+    if (now_ts - last_check) < cooldown and session.get("last_verification_result"):
+        cached = session["last_verification_result"]
+        return schemas.VerifyPhoneResponse(
+            verified=cached.get("verified", False),
+            classification=cached.get("classification", "uncertain"),
+            phone_detected=cached.get("phone_detected", False),
+            confidence=cached.get("confidence", 0.0),
+            visual_evidence=cached.get("visual_evidence", "Cached verification result."),
+            reason=cached.get("reason", "Observation within cooldown window."),
+            action_enforced=cached.get("action_enforced", "NONE"),
+            session_terminated=session["status"] in ("TERMINATED_FOR_PROCTORING", "TERMINATED_FOR_CHEATING"),
+            warning_count=session["warning_count"],
+        )
+
+    session["last_phone_check_ts"] = now_ts
+
+    # 3. Multi-Stage AI Vision Classification
+    res = verify_candidate_object_with_llm(
+        image_base64=payload.image_base64,
+        full_frame_base64=payload.full_frame_base64,
+        bounding_box=payload.bounding_box,
+    )
+
+    classification = res.get("classification", "uncertain")
+    is_confirmed = res.get("phone_detected", False)
+    confidence = res.get("confidence", 0.0)
+    visual_evidence = res.get("visual_evidence", "")
+    reason = res.get("reason", "")
+
+    action_enforced = "NONE"
+    session_terminated = False
+
+    if is_confirmed and classification == "mobile_phone":
+        # Strict confirmation established!
+        policy = PROCTORING_CONFIG["TERMINATION_POLICY"]
+        if policy == "immediate":
+            session["status"] = "TERMINATED_FOR_CHEATING"
+            session["termination_reason"] = f"Unauthorized mobile phone was visually verified in view: {reason}"
+            session_terminated = True
+            action_enforced = "TERMINATION"
+
+            violation_entry = {
+                "warning_number": "TERMINATED",
+                "type": "MOBILE_PHONE_DETECTED",
+                "message": f"Confirmed mobile phone detected: {reason}",
+                "severity": "CRITICAL",
+                "timestamp": datetime.now().isoformat(),
+                "visual_evidence": visual_evidence,
+                "confidence": confidence,
+            }
+            session["violations"].append(violation_entry)
+
+            # Persist to DB
+            user_id = current_user.id if current_user else None
+            try:
+                interview_record = models.Interview(
+                    user_id=user_id,
+                    role=session.get("role", "Software Engineer"),
+                    company=session.get("company", "Tech Company"),
+                    status="TERMINATED_FOR_CHEATING",
+                    score="0",
+                    score_num=0,
+                    technical_score=0,
+                    communication_score=0,
+                    problem_solving_score=0,
+                    grade="Terminated (Unauthorized Mobile Phone Usage)",
+                    feedback="Session terminated immediately due to verified unauthorized mobile phone usage.",
+                    warning_count=session["warning_count"],
+                    termination_reason=session["termination_reason"],
+                    vision_data=json.dumps({
+                        "classification": classification,
+                        "confidence": confidence,
+                        "visual_evidence": visual_evidence,
+                        "reason": reason,
+                        "violations": session["violations"],
+                    }),
+                )
+                db.add(interview_record)
+                db.commit()
+                db.refresh(interview_record)
+                session["interview_id"] = interview_record.id
+            except Exception as db_err:
+                db.rollback()
+                print(f"[PROCTORING] Error saving terminated interview DB record: {db_err}")
+        else:
+            session["warning_count"] += 1
+            max_w = PROCTORING_CONFIG["MAX_WARNINGS_BEFORE_TERMINATION"]
+            if session["warning_count"] >= max_w:
+                session["status"] = "TERMINATED_FOR_CHEATING"
+                session["termination_reason"] = f"Exceeded proctoring warnings for mobile phone: {reason}"
+                session_terminated = True
+                action_enforced = "TERMINATION"
+            else:
+                action_enforced = "WARNING"
+    else:
+        # Candidate object is non_phone or uncertain (book, laptop, hand, dark object, etc.)
+        # NO TERMINATION, SUSPICION CLEARED!
+        action_enforced = "SUSPICION_CLEARED"
+
+    response_data = schemas.VerifyPhoneResponse(
         verified=res.get("verified", False),
-        phone_detected=res.get("phone_detected", False),
-        confidence=res.get("confidence", 0.0),
-        reason=res.get("reason", "Verification complete."),
+        classification=classification,
+        phone_detected=is_confirmed,
+        confidence=confidence,
+        visual_evidence=visual_evidence,
+        reason=reason,
+        action_enforced=action_enforced,
+        session_terminated=session_terminated,
+        warning_count=session["warning_count"],
+    )
+
+    session["last_verification_result"] = response_data.model_dump()
+    return response_data
+
+
+@router.get("/{session_id}/proctoring-events", response_model=schemas.ProctoringEventsResponse)
+def get_session_proctoring_events(session_id: str):
+    """
+    Returns the authoritative real-time proctoring telemetry and violations for an interview session.
+    """
+    session = ACTIVE_PROCTORING_SESSIONS.get(session_id)
+    if not session:
+        return schemas.ProctoringEventsResponse(
+            session_id=session_id,
+            status="ACTIVE",
+            warning_count=0,
+            max_warnings=3,
+            terminated=False,
+            termination_reason=None,
+            violations=[],
+        )
+    return schemas.ProctoringEventsResponse(
+        session_id=session_id,
+        status=session.get("status", "ACTIVE"),
+        warning_count=session.get("warning_count", 0),
+        max_warnings=session.get("max_warnings", 3),
+        terminated=session.get("status") in ("TERMINATED_FOR_PROCTORING", "TERMINATED_FOR_CHEATING"),
+        termination_reason=session.get("termination_reason"),
+        violations=[schemas.ViolationDetail(**v) for v in session.get("violations", []) if "type" in v],
     )
 
 

@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import List, Optional, Union, Any
+from typing import List, Optional, Union, Any, Dict
 from pydantic import BaseModel, EmailStr, Field
 
 
@@ -517,7 +517,7 @@ class EvaluateQuestionResponse(BaseModel):
 class ViolationDetail(BaseModel):
     type: str  # TAB_SWITCH, WINDOW_BLUR, FULLSCREEN_EXIT, SCREEN_SHARE_STOPPED, CAMERA_DISCONNECTED, MIC_DISCONNECTED, PASTE_DETECTED
     timestamp: str
-    warning_number: int
+    warning_number: Union[int, str] = 1
     message: str
     severity: Optional[str] = "HIGH"
 
@@ -1003,14 +1003,37 @@ InterviewHistoryResponse.model_rebuild()
 # 6. Computer Vision & Proctoring Phone Verification
 class VerifyPhoneRequest(BaseModel):
     image_base64: str
+    full_frame_base64: Optional[str] = None
+    bounding_box: Optional[Dict[str, float]] = None
+    session_id: Optional[str] = None
     interview_id: Optional[str] = None
+    consecutive_count: Optional[int] = 1
 
 
 class VerifyPhoneResponse(BaseModel):
     verified: bool
-    phone_detected: bool
-    confidence: float
-    reason: str
+    classification: str = "uncertain"  # "mobile_phone", "non_phone", "uncertain"
+    phone_detected: bool = False
+    confidence: float = 0.0
+    visual_evidence: str = ""
+    reason: str = ""
+    action_enforced: str = "NONE"  # "NONE", "SUSPICION_CLEARED", "WARNING", "TERMINATION"
+    session_terminated: bool = False
+    warning_count: int = 0
+
+
+class ProctoringEventsResponse(BaseModel):
+    session_id: str
+    status: str
+    warning_count: int
+    max_warnings: int
+    terminated: bool
+    termination_reason: Optional[str] = None
+    violations: List[ViolationDetail] = []
+
+
+VerifyPhoneResponse.model_rebuild()
+ProctoringEventsResponse.model_rebuild()
 
 
 

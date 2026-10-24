@@ -7,6 +7,7 @@ export function VisionStatusBadge({
   faceDetected,
   faceCount = 1,
   phoneDetected = false,
+  isVerifyingPhone = false,
   direction,
   expression,
   activeTip,
@@ -54,6 +55,8 @@ export function VisionStatusBadge({
     ? "dot-paused"
     : phoneDetected
     ? "dot-away"
+    : isVerifyingPhone
+    ? "dot-searching"
     : faceDetected
     ? isLookingAtScreen
       ? "dot-active"
@@ -78,6 +81,8 @@ export function VisionStatusBadge({
             ? "1px solid rgba(255, 255, 255, 0.15)"
             : phoneDetected
             ? "2px solid #EF4444"
+            : isVerifyingPhone
+            ? "1px solid rgba(245, 158, 11, 0.85)"
             : faceCount > 1
             ? "1px solid rgba(239, 68, 68, 0.7)"
             : isLookingAtScreen && faceDetected
@@ -88,7 +93,7 @@ export function VisionStatusBadge({
           fontSize: "0.74rem",
           fontWeight: 600,
           color: "#F8FAFC",
-          boxShadow: (phoneDetected || faceCount > 1) ? "0 4px 14px rgba(239, 68, 68, 0.45)" : "0 4px 14px rgba(0, 0, 0, 0.45)",
+          boxShadow: (phoneDetected || faceCount > 1) ? "0 4px 14px rgba(239, 68, 68, 0.45)" : isVerifyingPhone ? "0 4px 14px rgba(245, 158, 11, 0.4)" : "0 4px 14px rgba(0, 0, 0, 0.45)",
           transition: "border-color 0.25s ease, background-color 0.25s ease",
         }}
       >
@@ -103,6 +108,8 @@ export function VisionStatusBadge({
               ? "#94A3B8"
               : (phoneDetected || faceCount > 1)
               ? "#EF4444"
+              : isVerifyingPhone
+              ? "#F59E0B"
               : faceDetected
               ? isLookingAtScreen
                 ? "#10B981"
@@ -112,6 +119,8 @@ export function VisionStatusBadge({
               ? "none"
               : (phoneDetected || faceCount > 1)
               ? "0 0 8px #EF4444"
+              : isVerifyingPhone
+              ? "0 0 10px #F59E0B"
               : faceDetected
               ? isLookingAtScreen
                 ? "0 0 8px #10B981"
@@ -125,6 +134,8 @@ export function VisionStatusBadge({
             ? "Camera Paused"
             : phoneDetected
             ? "Phone Detected!"
+            : isVerifyingPhone
+            ? "Analyzing Object..."
             : faceCount > 1
             ? `${faceCount} Faces Detected`
             : isModelLoading && !faceDetected
@@ -133,6 +144,25 @@ export function VisionStatusBadge({
             ? getDirectionLabel(direction)
             : "Looking for face..."}
         </span>
+
+        {isVerifyingPhone && !isCameraOff && !phoneDetected && (
+          <span
+            style={{
+              fontSize: "0.64rem",
+              fontWeight: 700,
+              color: "#FEF3C7",
+              background: "rgba(217, 119, 6, 0.75)",
+              padding: "1px 6px",
+              borderRadius: "4px",
+              display: "inline-flex",
+              alignItems: "center",
+              gap: "3px",
+            }}
+          >
+            🔍 AI Verifying
+          </span>
+        )}
+
 
         {phoneDetected && !isCameraOff && (
           <span
