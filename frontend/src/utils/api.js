@@ -497,24 +497,99 @@ export async function apiRunInterviewCode({ questionId, code, language = 'javasc
     });
     return res;
   } catch (err) {
-    console.warn('[apiRunInterviewCode] code execution fallback:', err.message);
+    console.warn('[apiRunInterviewCode] code execution error:', err.message);
     return {
-      success: true,
-      passedCount: testCases.length || 2,
-      totalCount: testCases.length || 2,
-      executionTimeMs: 32,
-      results: (testCases.length > 0 ? testCases : [{ id: 1, name: 'Default Test Case' }]).map((tc, idx) => ({
+      success: false,
+      passedCount: 0,
+      totalCount: testCases.length || 1,
+      executionTimeMs: 0,
+      results: (testCases.length > 0 ? testCases : [{ id: 1, name: 'Sample Test Case' }]).map((tc, idx) => ({
         id: tc.id || idx + 1,
         name: tc.name || `Test Case ${idx + 1}`,
-        passed: true,
-        input: tc.inputStr || 'default',
-        expected: tc.expectedOutputStr || 'expected',
-        actual: tc.expectedOutputStr || 'expected',
-        executionTimeMs: 16,
+        passed: false,
+        input: tc.inputStr || tc.input || '',
+        expected: tc.expectedOutputStr || tc.expected || '',
+        actual: '',
+        error: `Execution error: ${err.message}`,
+        executionTimeMs: 0,
       })),
-      logs: ['[SANDBOX] Code executed successfully.'],
+      logs: [`[ERROR] ${err.message}`],
     };
   }
+}
+
+// ─── Dedicated AI Coding Interview Round Endpoints ─────────────────────────
+
+export async function apiStartCodingInterview({
+  company = 'Google',
+  role = 'Software Engineer',
+  language = 'python',
+  difficulty = 'Medium',
+  experience = 'Mid Level',
+  duration_minutes = 30,
+  total_questions = 3,
+  topic = 'Data Structures & Algorithms',
+  interviewer_persona = 'chen',
+}) {
+  return await request('POST', '/api/coding-interview/start', {
+    company,
+    role,
+    language,
+    difficulty,
+    experience,
+    duration_minutes,
+    total_questions,
+    topic,
+    interviewer_persona,
+  });
+}
+
+export async function apiRunCodingCode({ sessionId, questionId, code, language, testCases }) {
+  return await request('POST', '/api/coding-interview/run-code', {
+    session_id: sessionId,
+    question_id: questionId,
+    code,
+    language,
+    test_cases: testCases,
+  });
+}
+
+export async function apiSubmitCodingSolution({ sessionId, questionId, code, language, timeSpentSeconds = 0 }) {
+  return await request('POST', '/api/coding-interview/submit', {
+    session_id: sessionId,
+    question_id: questionId,
+    code,
+    language,
+    time_spent_seconds: timeSpentSeconds,
+  });
+}
+
+export async function apiGetCodingHint({ sessionId, questionId, code, language, hintIndex = 1 }) {
+  return await request('POST', '/api/coding-interview/hint', {
+    session_id: sessionId,
+    question_id: questionId,
+    code,
+    language,
+    hint_index: hintIndex,
+  });
+}
+
+export async function apiNextCodingQuestion({ sessionId }) {
+  return await request('POST', '/api/coding-interview/next-question', {
+    session_id: sessionId,
+  });
+}
+
+export async function apiFinishCodingInterview({ sessionId, proctoringData = null, visionData = null }) {
+  return await request('POST', '/api/coding-interview/finish', {
+    session_id: sessionId,
+    proctoring_data: proctoringData,
+    vision_data: visionData,
+  });
+}
+
+export async function apiGetCodingReport(sessionId) {
+  return await request('GET', `/api/coding-interview/${sessionId}/report`);
 }
 
 export async function apiEndInterview(sessionId, metrics = null) {

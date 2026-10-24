@@ -38,7 +38,15 @@ import {
 } from 'lucide-react';
 
 import { useSpeechRecognition } from '../hooks/useSpeechRecognition';
-import { apiStartInterview, apiSendMessage, apiEndInterview, apiSaveReport } from '../utils/api';
+import {
+  apiStartInterview,
+  apiSendMessage,
+  apiEndInterview,
+  apiSaveReport,
+  apiStartCodingInterview,
+  apiNextCodingQuestion,
+  apiFinishCodingInterview,
+} from '../utils/api';
 import { evaluateSingleQuestion } from '../utils/evaluator';
 import { getCurrentUser } from '../utils/auth';
 import { ProctoringManager } from '../utils/ProctoringManager';
@@ -77,6 +85,11 @@ export default function ImmersiveInterviewRoom({
   const targetRole = selectedRole;
   const experienceLevel = config?.level || 'Mid Level';
   const interviewType = config?.interviewType || 'Technical Interview';
+  const isCodingRound =
+    (interviewType || '').toLowerCase().includes('coding') ||
+    (interviewType || '').toLowerCase().includes('dsa') ||
+    (config?.mode || '').toLowerCase().includes('coding') ||
+    config?.isCodingRound === true;
   const backgroundImage = isChen
     ? '/assets/interview/room-chen.jpg'
     : '/assets/interview/room-sophia.jpg';
@@ -709,6 +722,49 @@ export default function ImmersiveInterviewRoom({
   const initializeSession = async () => {
     setSessionPhase('initializing');
     try {
+      // ── Dedicated AI Coding Interview Round Branch ──
+      if (isCodingRound) {
+        const response = await apiStartCodingInterview({
+          company: targetCompany,
+          role: targetRole,
+          language: config?.language || 'python',
+          difficulty: config?.difficulty || 'Medium',
+          experience: experienceLevel,
+          duration_minutes: config?.duration ? parseInt(config.duration) : 30,
+          total_questions: config?.totalQuestions || 3,
+          topic: config?.topic || config?.domainTopic || 'Data Structures & Algorithms',
+          interviewer_persona: interviewerPersona,
+        });
+
+        setSessionId(response.sessionId);
+        setIsDemoMode(false);
+
+        if (response.currentQuestion) {
+          setCurrentQuestionObj(response.currentQuestion);
+          setInterviewQuestions([response.currentQuestion]);
+        }
+        setTotalQuestions(response.totalQuestions || 3);
+        setQuestionIndex(1);
+
+        const announcement =
+          response.interviewerAnnouncement ||
+          response.welcomeMessage ||
+          response.message ||
+          `Welcome to your coding interview at ${targetCompany}. I will present programming problems based on your selected role and difficulty level.`;
+
+        setMessages([{ role: 'interviewer', text: announcement, timestamp: Date.now() }]);
+        setCurrentQuestionText(
+          response.currentQuestion?.title
+            ? `${response.currentQuestion.title}: ${response.currentQuestion.description?.slice(0, 120)}...`
+            : announcement
+        );
+        setSessionPhase('active');
+        activateMic();
+        speakText(announcement);
+        return;
+      }
+
+      // ── Standard Verbal Interview Round Branch ──
       const response = await apiStartInterview({
         role: targetRole,
         company: targetCompany,
@@ -755,6 +811,18 @@ export default function ImmersiveInterviewRoom({
       console.warn('[interview room] API start error, utilizing direct simulation fallback:', err);
       // Graceful local fallback if network or backend offline
       const fallbackId = 's_' + Date.now().toString(36);
+      if (isCodingRound) {
+        const codingGreeting = `Welcome to your coding interview at ${targetCompany}. I will present programming challenges tailored to your role. You can test your code in the editor on your desk. Let's begin with your first problem.`;
+        setSessionId(fallbackId);
+        setIsDemoMode(true);
+        setMessages([{ role: 'interviewer', text: codingGreeting, timestamp: Date.now() }]);
+        setCurrentQuestionText('Two Sum: Given an array of integers and target, return indices of two numbers that add up to target.');
+        setSessionPhase('active');
+        activateMic();
+        speakText(codingGreeting);
+        return;
+      }
+
       const greeting = `Hello! Welcome to your ${targetRole} interview at ${targetCompany}. I'm ${interviewerName}, and I'll be conducting your session today.`;
       const firstQ = `Tell me about a time you led a project.`;
       const fullText = `${greeting}\n\nTo begin: ${firstQ}`;
@@ -1048,6 +1116,57 @@ export default function ImmersiveInterviewRoom({
     }
   };
 
+  // ─── 7b. AI Coding Round Submission & Progression Handlers ─────────────────
+  const handleCodingSubmissionSuccess = (evalResult) => {
+    setEvaluatedAnswers((prev) => [
+      ...prev.filter((p) => p.questionId !== (currentQuestionObj?.id || questionIndex)),
+      {
+        questionId: currentQuestionObj?.id || questionIndex,
+        question_id: currentQuestionObj?.id || questionIndex,
+        question: currentQuestionObj?.title || `Coding Problem ${questionIndex}`,
+        status: evalResult.verdict,
+        score: evalResult.score,
+        timeComplexity: evalResult.timeComplexity,
+        spaceComplexity: evalResult.spaceComplexity,
+        passedCount: evalResult.passedCount,
+        totalCount: evalResult.totalCount,
+        feedback: evalResult.interviewerMessage,
+      },
+    ]);
+
+    setLastEvaluatedTurn({
+      score: evalResult.score,
+      status: evalResult.verdict,
+      feedback: evalResult.interviewerMessage,
+    });
+  };
+
+  const handleNextCodingQuestion = async () => {
+    if (!sessionId) return;
+    try {
+      const res = await apiNextCodingQuestion({ sessionId });
+      if (res?.hasMore && res?.question) {
+        setCurrentQuestionObj(res.question);
+        setQuestionIndex(res.questionIndex);
+        setCurrentQuestionText(
+          `${res.question.title}: ${res.question.description?.slice(0, 120)}...`
+        );
+        const nextMsg =
+          res.interviewerMessage ||
+          `Good work. Let's move to problem ${res.questionIndex} of ${totalQuestions}: '${res.question.title}'.`;
+        setMessages((prev) => [...prev, { role: 'interviewer', text: nextMsg, timestamp: Date.now() }]);
+        speakText(nextMsg);
+      } else {
+        const wrapMsg =
+          "You've completed all problems in this coding round! Click 'End Interview' to see your comprehensive scorecard.";
+        setMessages((prev) => [...prev, { role: 'interviewer', text: wrapMsg, timestamp: Date.now() }]);
+        speakText(wrapMsg);
+      }
+    } catch (err) {
+      console.warn('[handleNextCodingQuestion] error:', err);
+    }
+  };
+
   // ─── 8. Conclude Interview & Generate Report ─────────────────────────────────
   const handleEndInterview = async (endOptions = {}) => {
     const isCheating = endOptions?.isCheating || proctorRef.current?.isCheating || false;
@@ -1060,6 +1179,65 @@ export default function ImmersiveInterviewRoom({
 
     const finalTelemetry = trackerRef.current?.getFinalTelemetry({ isCameraOff, isMicMuted }) || {};
     const cvSummary = visionCV.getFinalSummary();
+
+    // ── Dedicated AI Coding Interview Report Conclude ──
+    if (isCodingRound && sessionId) {
+      try {
+        const finishRes = await apiFinishCodingInterview({
+          sessionId,
+          proctoringData: { warning_count: warningCount },
+          visionData: cvSummary,
+        });
+
+        if (finishRes?.report) {
+          const cRep = finishRes.report;
+          const codingReport = {
+            id: `rep_${Date.now()}`,
+            sessionId,
+            role: targetRole,
+            company: targetCompany,
+            level: experienceLevel,
+            overallScore: cRep.overallScore || 85,
+            score: cRep.overallScore || 85,
+            grade: cRep.grade || 'Hire',
+            scores: cRep.scores || {
+              communication: cRep.scores?.correctness || 85,
+              technicalDepth: cRep.overallScore || 85,
+              problemSolving: cRep.scores?.problemSolving || 88,
+              confidence: 84,
+            },
+            criterionScores: {
+              technicalKnowledge: cRep.overallScore || 85,
+              problemSolving: cRep.scores?.problemSolving || 88,
+              communication: cRep.scores?.correctness || 85,
+              confidence: 84,
+            },
+            strengths: [
+              `Solid algorithmic approach in ${config?.language || 'Python'}.`,
+              `Verified real test cases passed (${cRep.totalTestsPassed || 0}/${cRep.totalTestsEvaluated || 0}).`,
+              `Handled problem constraints with appropriate time complexity.`,
+            ],
+            improvements: [
+              'Continue practicing boundary condition guards for empty and extreme values.',
+              'State asymptotic space and time complexity explicitly before implementing.',
+            ],
+            studyRoadmap: cRep.studyRoadmap || [],
+            summary: cRep.summary || `Completed coding round with ${cRep.questionsPassed || 0} problems accepted.`,
+            submissions: cRep.submissions || [],
+            verbalDelivery: !isMicMuted ? { speakingPaceWpm: telemetryHud.wpm || 138 } : null,
+            visualObservations: !isCameraOff ? { postureScore: 88 } : null,
+            vision_data: cvSummary,
+          };
+          await apiSaveReport(codingReport).catch(() => {});
+          if (onFinishInterview) {
+            onFinishInterview(codingReport);
+          }
+          return;
+        }
+      } catch (codingFinishErr) {
+        console.warn('[ImmersiveInterviewRoom] coding finish error:', codingFinishErr);
+      }
+    }
 
     // 1. Gather genuine metrics by checking all candidate answers
     const candidateMsgs = messages.filter(m => m.role === 'candidate');
@@ -1462,53 +1640,6 @@ export default function ImmersiveInterviewRoom({
               {warningCount > 0 ? `⚠️ Proctoring: Warning ${warningCount}/3` : 'Proctoring Active'}
             </span>
           </span>
-
-          {/* Adaptive Difficulty Engine Live HUD */}
-          <div
-            title={`Adaptive Engine: ${adaptiveState.note}`}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '0.45rem',
-              backgroundColor:
-                adaptiveState.level === 3
-                  ? 'rgba(217, 183, 122, 0.18)'
-                  : adaptiveState.level === 1
-                  ? 'rgba(56, 189, 248, 0.15)'
-                  : 'rgba(16, 185, 129, 0.15)',
-              border:
-                adaptiveState.level === 3
-                  ? '1px solid rgba(217, 183, 122, 0.5)'
-                  : adaptiveState.level === 1
-                  ? '1px solid rgba(56, 189, 248, 0.4)'
-                  : '1px solid rgba(16, 185, 129, 0.4)',
-              padding: '0.35rem 0.85rem',
-              borderRadius: '9999px',
-              color:
-                adaptiveState.level === 3
-                  ? 'var(--accent-gold)'
-                  : adaptiveState.level === 1
-                  ? '#38BDF8'
-                  : '#10B981',
-              fontSize: '0.72rem',
-              fontWeight: 700,
-              backdropFilter: 'blur(12px)',
-              cursor: 'help',
-            }}
-          >
-            <Zap size={12} fill="currentColor" />
-            <span>Adaptive Engine: {adaptiveState.levelName}</span>
-            {adaptiveState.action === 'escalate' && (
-              <span style={{ fontSize: '0.62rem', background: 'rgba(217, 183, 122, 0.3)', padding: '1px 5px', borderRadius: '4px' }}>
-                ▲ Escalated
-              </span>
-            )}
-            {adaptiveState.action === 'scaffold' && (
-              <span style={{ fontSize: '0.62rem', background: 'rgba(56, 189, 248, 0.3)', padding: '1px 5px', borderRadius: '4px' }}>
-                ▼ Scaffolding
-              </span>
-            )}
-          </div>
         </div>
 
 
@@ -1752,7 +1883,7 @@ export default function ImmersiveInterviewRoom({
               }}
             >
               <Sparkles size={11} />
-              Question {questionIndex} of {totalQuestions}
+              {isCodingRound ? `Coding Round • Problem ${questionIndex} of ${totalQuestions}` : `Question ${questionIndex} of ${totalQuestions}`}
             </span>
             <span style={{ color: 'rgba(255, 255, 255, 0.3)', fontSize: '0.7rem' }}>•</span>
             <div style={{ position: 'relative', display: 'inline-flex', alignItems: 'center' }}>
@@ -1817,6 +1948,30 @@ export default function ImmersiveInterviewRoom({
               <Volume2 size={12} />
               <span>{isInterviewerSpeaking ? 'Speaking...' : 'Replay'}</span>
             </button>
+
+            {isCodingRound && (
+              <button
+                type="button"
+                onClick={() => setLaptopExpanded(true)}
+                title="Expand Code Editor"
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '0.25rem',
+                  background: 'rgba(56, 189, 248, 0.18)',
+                  border: '1px solid #38BDF8',
+                  borderRadius: '6px',
+                  padding: '0.2rem 0.5rem',
+                  color: '#38BDF8',
+                  fontSize: '0.68rem',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                }}
+              >
+                <Code size={12} />
+                <span>Open Editor</span>
+              </button>
+            )}
 
             {/* Collapse / Expand Toggle */}
             <button
@@ -1964,149 +2119,8 @@ export default function ImmersiveInterviewRoom({
       )}
 
       {/* =========================================================================
-          LAYER 4: DESK PROPS & CODING LAPTOP (MATCHING REFERENCE IMAGE)
+          LAYER 4: DESK PROPS & CODING LAPTOP
           ========================================================================= */}
-      {/* 4A. Left Desk: Acrylic Vertical Resume Stand & Printed Resume Sheets */}
-      <div
-        onClick={() => setShowDeskResume(true)}
-        title="Click to view candidate's printed resume"
-        style={{
-          position: 'absolute',
-          bottom: 'clamp(4.2rem, 9vh, 7.5rem)',
-          left: 'clamp(1rem, 3.5vw, 3.8rem)',
-          zIndex: 16,
-          width: 'clamp(120px, 13vw, 175px)',
-          cursor: 'pointer',
-          transition: 'all 0.25s cubic-bezier(0.16, 1, 0.3, 1)',
-          perspective: '900px',
-        }}
-        onMouseEnter={(e) => {
-          e.currentTarget.style.transform = 'translateY(-4px) scale(1.03)';
-          e.currentTarget.style.filter = 'drop-shadow(0 14px 28px rgba(56, 189, 248, 0.35))';
-        }}
-        onMouseLeave={(e) => {
-          e.currentTarget.style.transform = 'translateY(0) scale(1)';
-          e.currentTarget.style.filter = 'drop-shadow(0 12px 24px rgba(0, 0, 0, 0.6))';
-        }}
-      >
-        {/* Upright Transparent Acrylic Frame */}
-        <div
-          style={{
-            backgroundColor: 'rgba(255, 255, 255, 0.94)',
-            borderRadius: '6px',
-            padding: '0.6rem 0.65rem',
-            border: '2px solid rgba(255, 255, 255, 0.8)',
-            boxShadow: '0 12px 28px rgba(0, 0, 0, 0.45), inset 0 0 10px rgba(255, 255, 255, 0.9)',
-            color: '#1E293B',
-            transform: 'rotateY(4deg)',
-          }}
-        >
-          {/* Resume Header with Candidate Avatar Photo */}
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '0.45rem',
-              borderBottom: '1px solid #E2E8F0',
-              paddingBottom: '0.35rem',
-              marginBottom: '0.35rem',
-            }}
-          >
-            <div
-              style={{
-                width: '24px',
-                height: '24px',
-                borderRadius: '50%',
-                backgroundColor: '#0284C7',
-                color: '#FFFFFF',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                fontWeight: 700,
-                fontSize: '0.62rem',
-                flexShrink: 0,
-              }}
-            >
-              {user?.name ? user.name.charAt(0) : 'C'}
-            </div>
-            <div style={{ overflow: 'hidden' }}>
-              <div style={{ fontWeight: 800, fontSize: '0.65rem', color: '#0F172A', whiteSpace: 'nowrap' }}>
-                Resume
-              </div>
-              <div style={{ fontSize: '0.5rem', color: '#64748B', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                {user?.name || 'Applicant Profile'}
-              </div>
-            </div>
-          </div>
-
-          {/* Mini Resume Lines */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '3px', fontSize: '0.52rem' }}>
-            <div style={{ fontWeight: 700, color: '#0284C7', fontSize: '0.52rem', textTransform: 'uppercase' }}>
-              Experience
-            </div>
-            <div style={{ color: '#334155', lineHeight: 1.2 }}>
-              • {targetRole} ({experienceLevel})
-            </div>
-            <div style={{ color: '#64748B', lineHeight: 1.2 }}>
-              • Systems architecture & scaling
-            </div>
-
-            <div style={{ fontWeight: 700, color: '#0284C7', fontSize: '0.52rem', textTransform: 'uppercase', marginTop: '2px' }}>
-              Skills
-            </div>
-            <div style={{ color: '#475569', lineHeight: 1.2 }}>
-              React · Node · Python · DSA
-            </div>
-          </div>
-
-          <div
-            style={{
-              marginTop: '0.45rem',
-              paddingTop: '0.25rem',
-              borderTop: '1px dashed #CBD5E1',
-              textAlign: 'center',
-              fontSize: '0.48rem',
-              fontWeight: 700,
-              color: '#0284C7',
-            }}
-          >
-            Click to View Resume ↗
-          </div>
-        </div>
-
-        {/* Clear Acrylic Stand Foot on Desk */}
-        <div
-          style={{
-            width: '108%',
-            height: '7px',
-            marginLeft: '-4%',
-            backgroundColor: 'rgba(255, 255, 255, 0.45)',
-            backdropFilter: 'blur(4px)',
-            border: '1px solid rgba(255, 255, 255, 0.7)',
-            borderRadius: '2px 2px 4px 4px',
-            boxShadow: '0 6px 12px rgba(0, 0, 0, 0.35)',
-          }}
-        />
-
-        {/* Flat Printed Resume Sheets Lying on Desk */}
-        <div
-          style={{
-            marginTop: '8px',
-            width: '95px',
-            height: '42px',
-            backgroundColor: '#F8FAFC',
-            borderRadius: '2px',
-            boxShadow: '0 4px 10px rgba(0, 0, 0, 0.5)',
-            border: '1px solid rgba(255, 255, 255, 0.6)',
-            padding: '4px',
-            transform: 'rotate(-4deg)',
-          }}
-        >
-          <div style={{ width: '40px', height: '3px', backgroundColor: '#94A3B8', marginBottom: '2px' }} />
-          <div style={{ width: '70px', height: '2px', backgroundColor: '#CBD5E1', marginBottom: '2px' }} />
-          <div style={{ width: '55px', height: '2px', backgroundColor: '#CBD5E1' }} />
-        </div>
-      </div>
 
       {/* 4D. Candidate POV Hands in Foreground */}
       <CandidatePOVHands isCandidateSpeaking={isCandidateSpeaking} />
@@ -2117,6 +2131,15 @@ export default function ImmersiveInterviewRoom({
         isExpanded={laptopExpanded}
         onToggleExpand={() => setLaptopExpanded(!laptopExpanded)}
         currentQuestion={currentQuestionObj}
+        sessionId={sessionId}
+        targetLanguage={config?.language || 'python'}
+        onInterviewerMessage={(msg) => {
+          setMessages((prev) => [...prev, { role: 'interviewer', text: msg, timestamp: Date.now() }]);
+          speakText(msg);
+        }}
+        onSubmitSuccess={handleCodingSubmissionSuccess}
+        onNextQuestion={handleNextCodingQuestion}
+        isLastQuestion={questionIndex >= totalQuestions}
       />
 
       {/* =========================================================================

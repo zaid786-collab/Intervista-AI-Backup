@@ -15,6 +15,7 @@ from app.routers import (
     challenges,
     companies,
     interviews,
+    coding_interview,
     leaderboard_jobs,
     payments,
     feedback,
@@ -145,6 +146,7 @@ app.include_router(ai.router)
 app.include_router(challenges.router)
 app.include_router(companies.router)
 app.include_router(interviews.router)
+app.include_router(coding_interview.router)
 app.include_router(leaderboard_jobs.router)
 app.include_router(payments.router)
 app.include_router(feedback.router)

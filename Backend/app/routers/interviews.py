@@ -15,6 +15,7 @@ from app.services.llm_evaluator import evaluate_interview_submission, evaluate_s
 from app.services.pdf_generator import generate_interview_pdf_report
 from app.services.question_generator import generate_interview_session
 from app.services.coach_service import compute_adaptive_turn_transition
+from app.services.code_executor import run_code_against_test_suite
 
 router = APIRouter(prefix="/api/interviews", tags=["Mock Interviews & AI Evaluation"])
 
@@ -1857,41 +1858,46 @@ def schedule_interview(
 @router.post("/run-code", response_model=schemas.RunCodeResponse)
 def run_interview_code(
     payload: schemas.RunCodeRequest,
-    current_user: models.User = Depends(get_current_user),
+    current_user: Optional[models.User] = Depends(get_current_user_optional),
 ):
     code = payload.code.strip()
     test_cases = payload.test_cases or []
-    is_starter = is_starter_boilerplate(code)
-    has_substance = len(code) > 25 and not is_starter and not code.startswith("// TODO") and not code.startswith("# TODO")
+
+    # Real sandboxed execution
+    exec_result = run_code_against_test_suite(
+        code=code,
+        language=payload.language or "javascript",
+        test_cases=test_cases,
+        include_hidden=False,
+    )
 
     results = []
-    for idx, tc in enumerate(test_cases):
-        passed = has_substance
-        err_msg = "Starter template is untouched. Please implement your solution before running test cases." if is_starter else "Execution did not match expected output"
+    for r in exec_result.get("results", []):
         results.append(
             schemas.TestCaseResult(
-                id=tc.get("id", idx + 1),
-                name=tc.get("name", f"Test Case {idx + 1}"),
-                passed=passed,
-                input=tc.get("inputStr") or json.dumps(tc.get("input", "")),
-                expected=tc.get("expectedOutputStr") or json.dumps(tc.get("expectedOutput", "")),
-                actual=tc.get("expectedOutputStr", "Expected Output") if passed else ("Untouched Starter Code" if is_starter else "Runtime / Evaluation Error"),
-                error=None if passed else err_msg,
-                executionTimeMs=12,
-                isHidden=bool(tc.get("isHidden", False)),
-                explanation=tc.get("explanation"),
+                id=r.get("id", 1),
+                name=r.get("name", "Test Case"),
+                passed=r.get("passed", False),
+                input=str(r.get("input", "")),
+                expected=str(r.get("expected", "")),
+                actual=str(r.get("actual", "")),
+                error=r.get("error"),
+                executionTimeMs=int(r.get("execution_time_ms", 15)),
+                isHidden=bool(r.get("isHidden", False)),
+                explanation=r.get("explanation"),
             )
         )
 
-    passed_count = sum(1 for r in results if r.passed)
-    log_msg = f"[{payload.language.upper()}] Untouched starter boilerplate detected. Implement solution to execute test cases." if is_starter else f"[{payload.language.upper()}] Synthesized and verified against {len(test_cases)} test cases."
+    passed_count = exec_result.get("passed_count", 0)
+    total_count = exec_result.get("total_count", len(test_cases))
+
     return schemas.RunCodeResponse(
-        success=passed_count == len(test_cases) and len(test_cases) > 0,
+        success=exec_result.get("all_passed", False),
         passedCount=passed_count,
-        totalCount=len(test_cases),
+        totalCount=total_count,
         results=results,
-        executionTimeMs=24,
-        logs=[log_msg],
+        executionTimeMs=int(exec_result.get("execution_time_ms", 20)),
+        logs=exec_result.get("logs", []),
     )
 
 
