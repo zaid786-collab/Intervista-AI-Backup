@@ -1,87 +1,275 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Code,
   Play,
   Maximize2,
   Minimize2,
   CheckCircle2,
+  XCircle,
+  AlertTriangle,
   Clock,
   Sparkles,
   ChevronRight,
   RefreshCw,
   Terminal,
-  FileCode
+  FileCode,
+  Lightbulb,
+  Send,
+  RotateCcw,
+  Layers,
+  HelpCircle,
+  Cpu
 } from 'lucide-react';
-import { apiRunInterviewCode } from '../utils/api';
+import { apiRunCodingCode, apiSubmitCodingSolution, apiGetCodingHint } from '../utils/api';
 
 /**
  * DeskCodingLaptop
- * Renders the silver coding laptop directly on the executive desk as seen in the reference image.
- * Features:
- * - "LIVE CODING ROUND" header with countdown/elapsed timer (e.g. 00:44:27)
- * - Two Sum problem specification, examples, and constraints
- * - Interactive Python 3 code editor with editable code
- * - Live "Run Code" execution with passing test cases
- * - Modal expansion toggle (so candidate can code either on-desk or full-screen)
+ * The interactive coding environment rendered directly on the desk in ImmersiveInterviewRoom,
+ * with full modal expansion to a premier full-screen dark IDE.
+ * Fully connected to real sandboxed execution and AI submission evaluation.
  */
 export default function DeskCodingLaptop({
-  timer = '00:44:27',
+  timer = '00:30:00',
   isExpanded = false,
   onToggleExpand,
   style = {},
   currentQuestion = null,
+  sessionId = null,
+  onInterviewerMessage = null,
+  onSubmitSuccess = null,
+  onNextQuestion = null,
+  isLastQuestion = false,
+  targetLanguage = 'python',
 }) {
-  const [selectedLang, setSelectedLang] = useState('Python3');
-  const [code, setCode] = useState(
-`class Solution:
-    def twoSum(self, nums: list[int], target: int) -> list[int]:
-        # write your code here
-        lookup = {}
-        for i, num in enumerate(nums):
-            diff = target - num
-            if diff in lookup:
-                return [lookup[diff], i]
-            lookup[num] = i
-        return []`
-  );
+  // Normalize language identifier
+  const [selectedLang, setSelectedLang] = useState('python');
 
-  const [isRunning, setIsRunning] = useState(false);
-  const [activeTestCase, setActiveTestCase] = useState(1);
-  const [testResult, setTestResult] = useState({
-    status: 'Ready to run',
-    passed: true,
-    runtime: '38ms',
-    output: '[0, 1]'
-  });
-
-  const handleRunCode = async () => {
-    setIsRunning(true);
-    setTestResult(null);
-    try {
-      const res = await apiRunInterviewCode({
-        questionId: currentQuestion?.id || 1,
-        code,
-        language: selectedLang.toLowerCase().includes('py') ? 'python' : 'javascript',
-      });
-      setIsRunning(false);
-      setTestResult({
-        status: res?.status || (res?.passedCount === res?.totalCount ? 'Accepted' : 'Accepted'),
-        passed: res?.passed ?? (res?.passedCount === res?.totalCount || true),
-        runtime: `${res?.executionTimeMs || Math.floor(Math.random() * 20 + 25)}ms`,
-        output: res?.output || (activeTestCase === 1 ? '[0, 1]' : activeTestCase === 2 ? '[1, 2]' : '[0, 1]'),
-      });
-    } catch (_) {
-      setIsRunning(false);
-      setTestResult({
-        status: 'Accepted',
-        passed: true,
-        runtime: `${Math.floor(Math.random() * 20 + 25)}ms`,
-        output: activeTestCase === 1 ? '[0, 1]' : activeTestCase === 2 ? '[1, 2]' : '[0, 1]'
-      });
+  // Multi-language starter templates mapping
+  const getDefaultStarter = (langKey, questionObj) => {
+    if (questionObj?.starter_templates && questionObj.starter_templates[langKey]) {
+      return questionObj.starter_templates[langKey];
+    }
+    const fnName = questionObj?.function_name || 'solution';
+    switch (langKey) {
+      case 'javascript':
+        return `/**\n * @return {any}\n */\nfunction ${fnName}() {\n    // write your solution here\n    \n}\n`;
+      case 'typescript':
+        return `function ${fnName}(): any {\n    // write your solution here\n    \n}\n`;
+      case 'cpp':
+        return `#include <iostream>\n#include <vector>\n#include <string>\n\nclass Solution {\npublic:\n    void ${fnName}() {\n        // write your solution here\n    }\n};\n`;
+      case 'java':
+        return `import java.util.*;\n\nclass Solution {\n    public void ${fnName}() {\n        // write your solution here\n    }\n}\n`;
+      case 'python':
+      default:
+        return `class Solution:\n    def ${fnName}(self):\n        # write your solution here\n        pass\n`;
     }
   };
 
-  // If rendered as the full expanded modal
+  // State
+  const [code, setCode] = useState('');
+  const [isRunning, setIsRunning] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isFetchingHint, setIsFetchingHint] = useState(false);
+  const [activeTab, setActiveTab] = useState('tests'); // 'tests' | 'output' | 'evaluation'
+  const [activeTestCaseIdx, setActiveTestCaseIdx] = useState(0);
+  const [runResults, setRunResults] = useState(null);
+  const [submissionResult, setSubmissionResult] = useState(null);
+  const [activeHint, setActiveHint] = useState(null);
+  const [hintCount, setHintCount] = useState(0);
+  const [confirmResetOpen, setConfirmResetOpen] = useState(false);
+  const [executionLogs, setExecutionLogs] = useState([]);
+
+  // Sync language and starter code when currentQuestion or language changes
+  useEffect(() => {
+    const langKey = (targetLanguage || 'python').toLowerCase();
+    const resolvedLang = ['python', 'javascript', 'typescript', 'cpp', 'java'].includes(langKey)
+      ? langKey
+      : 'python';
+    setSelectedLang(resolvedLang);
+    setCode(getDefaultStarter(resolvedLang, currentQuestion));
+    setRunResults(null);
+    setSubmissionResult(null);
+    setActiveHint(null);
+    setHintCount(0);
+  }, [currentQuestion, targetLanguage]);
+
+  // Handle switching language
+  const handleLanguageChange = (newLang) => {
+    setSelectedLang(newLang);
+    const starter = getDefaultStarter(newLang, currentQuestion);
+    setCode(starter);
+    setRunResults(null);
+  };
+
+  // Sample test cases from current question
+  const sampleTestCases = currentQuestion?.sample_test_cases || [
+    {
+      id: 1,
+      name: 'Sample 1',
+      input: currentQuestion?.examples?.[0]?.input || 'sample',
+      expected: currentQuestion?.examples?.[0]?.output || 'output',
+      explanation: currentQuestion?.examples?.[0]?.explanation || '',
+      isHidden: false,
+    },
+  ];
+
+  // ─── 1. Run Code against Sample Tests in Sandbox ─────────────────────────
+  const handleRunCode = async () => {
+    if (!code || !code.trim()) return;
+    setIsRunning(true);
+    setActiveTab('output');
+    try {
+      const res = await apiRunCodingCode({
+        sessionId: sessionId || 'default_session',
+        questionId: currentQuestion?.id || 'q_1',
+        code,
+        language: selectedLang,
+        testCases: sampleTestCases,
+      });
+
+      setRunResults(res);
+      setExecutionLogs(res?.logs || []);
+
+      if (onInterviewerMessage) {
+        if (res?.success) {
+          onInterviewerMessage(
+            `Your code compiled cleanly and passed all sample test cases in ${res.executionTimeMs}ms. When you are confident, click 'Submit Solution' to evaluate against the hidden test suite.`
+          );
+        } else if (res?.verdict === 'Compilation Error') {
+          onInterviewerMessage(
+            `It looks like there's a compilation error in your ${selectedLang.toUpperCase()} code. Check the diagnostics in the execution output.`
+          );
+        } else {
+          onInterviewerMessage(
+            `Your code executed, but some test cases produced mismatched outputs (${res?.passedCount || 0}/${res?.totalCount || 0} passed). Check the difference between expected and actual output.`
+          );
+        }
+      }
+    } catch (err) {
+      console.warn('[DeskCodingLaptop] Execution call error:', err);
+      setRunResults({
+        success: false,
+        verdict: 'Execution Error',
+        passedCount: 0,
+        totalCount: sampleTestCases.length,
+        executionTimeMs: 0,
+        results: sampleTestCases.map((tc, idx) => ({
+          id: tc.id || idx + 1,
+          name: tc.name || `Test Case ${idx + 1}`,
+          passed: false,
+          input: tc.input || '',
+          expected: tc.expected || '',
+          actual: '',
+          error: err.message || 'Execution service unreachable',
+        })),
+        logs: [`[ERROR] ${err.message}`],
+      });
+    } finally {
+      setIsRunning(false);
+    }
+  };
+
+  // ─── 2. Submit Solution for Official Server Evaluation ──────────────────
+  const handleSubmitSolution = async () => {
+    if (!code || !code.trim()) return;
+    setIsSubmitting(true);
+    setActiveTab('evaluation');
+    try {
+      const res = await apiSubmitCodingSolution({
+        sessionId: sessionId || 'default_session',
+        questionId: currentQuestion?.id || 'q_1',
+        code,
+        language: selectedLang,
+      });
+
+      setSubmissionResult(res);
+
+      if (onSubmitSuccess) {
+        onSubmitSuccess(res);
+      }
+
+      if (onInterviewerMessage && res?.interviewerMessage) {
+        onInterviewerMessage(res.interviewerMessage);
+      }
+    } catch (err) {
+      console.warn('[DeskCodingLaptop] Submission error:', err);
+      setSubmissionResult({
+        success: false,
+        verdict: 'Submission Error',
+        score: 0,
+        passedCount: 0,
+        totalCount: sampleTestCases.length,
+        allPassed: false,
+        interviewerMessage: `We encountered an issue submitting your code: ${err.message}. Please retry.`,
+      });
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  // ─── 3. Ask Interviewer for Progressive Contextual Hint ─────────────────
+  const handleGetHint = async () => {
+    setIsFetchingHint(true);
+    const nextIdx = hintCount + 1;
+    try {
+      const res = await apiGetCodingHint({
+        sessionId: sessionId || 'default_session',
+        questionId: currentQuestion?.id || 'q_1',
+        code,
+        language: selectedLang,
+        hintIndex: nextIdx,
+      });
+
+      setActiveHint(res?.hint || 'Think about the optimal data structure for O(1) lookups.');
+      setHintCount(nextIdx);
+
+      if (onInterviewerMessage && res?.interviewerMessage) {
+        onInterviewerMessage(res.interviewerMessage);
+      }
+    } catch (err) {
+      const fallbackHints = currentQuestion?.hints || [];
+      const hint = fallbackHints[hintCount % Math.max(1, fallbackHints.length)] ||
+        'Consider whether sorting the input or using a hash map can reduce your time complexity.';
+      setActiveHint(hint);
+      setHintCount(nextIdx);
+      if (onInterviewerMessage) {
+        onInterviewerMessage(`Here is a hint: ${hint}`);
+      }
+    } finally {
+      setIsFetchingHint(false);
+    }
+  };
+
+  // Handle Tab key inside editor for proper indentation
+  const handleKeyDown = (e) => {
+    if (e.key === 'Tab') {
+      e.preventDefault();
+      const start = e.target.selectionStart;
+      const end = e.target.selectionEnd;
+      const spaces = '    ';
+      const newCode = code.substring(0, start) + spaces + code.substring(end);
+      setCode(newCode);
+      setTimeout(() => {
+        if (e.target) {
+          e.target.selectionStart = e.target.selectionEnd = start + 4;
+        }
+      }, 0);
+    }
+  };
+
+  // Helper colors
+  const getDifficultyColor = (diff) => {
+    const d = (diff || 'medium').toLowerCase();
+    if (d === 'easy') return { bg: 'rgba(34, 197, 94, 0.15)', text: '#4ADE80', border: 'rgba(34, 197, 94, 0.3)' };
+    if (d === 'hard') return { bg: 'rgba(239, 68, 68, 0.15)', text: '#F87171', border: 'rgba(239, 68, 68, 0.3)' };
+    return { bg: 'rgba(245, 158, 11, 0.15)', text: '#FBBF24', border: 'rgba(245, 158, 11, 0.3)' };
+  };
+
+  const diffStyle = getDifficultyColor(currentQuestion?.difficulty);
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // EXPANDED FULL-SCREEN MODAL IDE VIEW
+  // ═══════════════════════════════════════════════════════════════════════════
   if (isExpanded) {
     return (
       <div
@@ -89,44 +277,44 @@ export default function DeskCodingLaptop({
           position: 'fixed',
           inset: 0,
           zIndex: 99999,
-          backgroundColor: 'rgba(5, 7, 10, 0.85)',
-          backdropFilter: 'blur(20px)',
+          backgroundColor: 'rgba(4, 6, 10, 0.88)',
+          backdropFilter: 'blur(24px)',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          padding: '1.5rem',
+          padding: '1.25rem',
         }}
       >
         <div
           style={{
-            width: 'min(1200px, 95vw)',
-            height: 'min(820px, 90vh)',
-            backgroundColor: '#0D131F',
+            width: 'min(1400px, 96vw)',
+            height: 'min(880px, 92vh)',
+            backgroundColor: '#0A0E17',
             borderRadius: '20px',
             border: '1px solid rgba(56, 189, 248, 0.35)',
-            boxShadow: '0 24px 60px rgba(0, 0, 0, 0.8), 0 0 40px rgba(56, 189, 248, 0.15)',
+            boxShadow: '0 25px 70px rgba(0, 0, 0, 0.9), 0 0 50px rgba(56, 189, 248, 0.15)',
             display: 'flex',
             flexDirection: 'column',
             overflow: 'hidden',
           }}
         >
-          {/* Laptop Expanded Top Bar */}
+          {/* Expanded Top Header */}
           <div
             style={{
-              padding: '0.85rem 1.5rem',
-              backgroundColor: '#090D15',
+              padding: '0.85rem 1.6rem',
+              backgroundColor: '#070A12',
               borderBottom: '1px solid rgba(255, 255, 255, 0.08)',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'space-between',
             }}
           >
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.85rem' }}>
               <div
                 style={{
-                  width: '28px',
-                  height: '28px',
-                  borderRadius: '6px',
+                  width: '32px',
+                  height: '32px',
+                  borderRadius: '8px',
                   backgroundColor: 'rgba(56, 189, 248, 0.15)',
                   color: '#38BDF8',
                   display: 'flex',
@@ -134,40 +322,92 @@ export default function DeskCodingLaptop({
                   justifyContent: 'center',
                 }}
               >
-                <Code size={16} />
+                <Code size={18} />
               </div>
-              <span style={{ fontSize: '0.92rem', fontWeight: 700, letterSpacing: '0.08em', color: '#FFFFFF' }}>
-                LIVE CODING ROUND — TWO SUM
-              </span>
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+                  <span style={{ fontSize: '0.98rem', fontWeight: 700, color: '#FFFFFF', letterSpacing: '0.02em' }}>
+                    {currentQuestion?.title || 'Coding Round Problem'}
+                  </span>
+                  <span
+                    style={{
+                      fontSize: '0.72rem',
+                      fontWeight: 600,
+                      padding: '0.2rem 0.6rem',
+                      borderRadius: '9999px',
+                      backgroundColor: diffStyle.bg,
+                      color: diffStyle.text,
+                      border: `1px solid ${diffStyle.border}`,
+                    }}
+                  >
+                    {currentQuestion?.difficulty || 'Medium'}
+                  </span>
+                </div>
+                <div style={{ fontSize: '0.75rem', color: '#64748B' }}>
+                  AI Technical Interview Round • Live Real-Time Code Execution Sandbox
+                </div>
+              </div>
             </div>
 
+            {/* Right Controls */}
             <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+              {/* Interview Timer */}
               <div
                 style={{
                   display: 'flex',
                   alignItems: 'center',
                   gap: '0.45rem',
-                  color: '#94A3B8',
-                  fontSize: '0.85rem',
+                  color: '#CBD5E1',
+                  fontSize: '0.86rem',
                   fontFamily: 'monospace',
+                  backgroundColor: 'rgba(255, 255, 255, 0.05)',
+                  padding: '0.35rem 0.75rem',
+                  borderRadius: '8px',
+                  border: '1px solid rgba(255, 255, 255, 0.1)',
                 }}
               >
                 <Clock size={15} color="#38BDF8" />
                 <span>{timer}</span>
               </div>
+
+              {/* Get Hint Button */}
+              <button
+                type="button"
+                onClick={handleGetHint}
+                disabled={isFetchingHint}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.4rem',
+                  padding: '0.42rem 0.85rem',
+                  borderRadius: '8px',
+                  backgroundColor: 'rgba(245, 158, 11, 0.12)',
+                  border: '1px solid rgba(245, 158, 11, 0.3)',
+                  color: '#FBBF24',
+                  fontSize: '0.8rem',
+                  fontWeight: 600,
+                  cursor: isFetchingHint ? 'not-allowed' : 'pointer',
+                  transition: 'all 0.15s ease',
+                }}
+              >
+                <Lightbulb size={14} />
+                <span>{isFetchingHint ? 'Thinking...' : `Hint ${hintCount > 0 ? `(${hintCount})` : ''}`}</span>
+              </button>
+
+              {/* Dock to Desk (Minimize) */}
               <button
                 type="button"
                 onClick={onToggleExpand}
                 style={{
                   display: 'flex',
                   alignItems: 'center',
-                  gap: '0.35rem',
-                  padding: '0.4rem 0.8rem',
+                  gap: '0.4rem',
+                  padding: '0.42rem 0.85rem',
                   borderRadius: '8px',
                   backgroundColor: 'rgba(255, 255, 255, 0.08)',
                   border: '1px solid rgba(255, 255, 255, 0.15)',
                   color: '#E2E8F0',
-                  fontSize: '0.78rem',
+                  fontSize: '0.8rem',
                   cursor: 'pointer',
                 }}
               >
@@ -177,230 +417,585 @@ export default function DeskCodingLaptop({
             </div>
           </div>
 
-          {/* Main 2-Column Code & Spec View */}
+          {/* Active Hint Banner if revealed */}
+          {activeHint && (
+            <div
+              style={{
+                backgroundColor: 'rgba(245, 158, 11, 0.08)',
+                borderBottom: '1px solid rgba(245, 158, 11, 0.25)',
+                padding: '0.65rem 1.6rem',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.75rem',
+                color: '#FDE68A',
+                fontSize: '0.84rem',
+              }}
+            >
+              <Sparkles size={16} color="#FBBF24" style={{ flexShrink: 0 }} />
+              <div>
+                <strong>Interviewer Guidance:</strong> {activeHint}
+              </div>
+            </div>
+          )}
+
+          {/* Main 2-Column Split: Spec vs Editor */}
           <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
-            {/* Left Column: Problem Statement */}
+            {/* Left Column: Problem Specification */}
             <div
               style={{
                 width: '42%',
                 borderRight: '1px solid rgba(255, 255, 255, 0.08)',
-                padding: '1.5rem',
+                padding: '1.6rem',
                 overflowY: 'auto',
                 fontSize: '0.88rem',
-                lineHeight: 1.6,
+                lineHeight: 1.65,
                 color: '#CBD5E1',
+                backgroundColor: '#080C14',
               }}
             >
-              <div style={{ fontSize: '1.25rem', fontWeight: 700, color: '#FFFFFF', marginBottom: '0.5rem' }}>
-                Two Sum
+              <div style={{ fontSize: '1.35rem', fontWeight: 700, color: '#FFFFFF', marginBottom: '0.5rem' }}>
+                {currentQuestion?.title || 'Two Sum'}
               </div>
-              <div
-                style={{
-                  display: 'inline-block',
-                  padding: '0.2rem 0.6rem',
-                  borderRadius: '9999px',
-                  backgroundColor: 'rgba(34, 197, 94, 0.15)',
-                  color: '#4ADE80',
-                  fontSize: '0.75rem',
-                  fontWeight: 600,
-                  marginBottom: '1rem',
-                }}
-              >
-                Easy
-              </div>
-              <p style={{ margin: '0 0 1rem 0' }}>
-                Given an array of integers <code style={{ color: '#38BDF8', backgroundColor: 'rgba(56, 189, 248, 0.1)', padding: '0.1rem 0.35rem', borderRadius: '4px' }}>nums</code> and an integer <code style={{ color: '#38BDF8', backgroundColor: 'rgba(56, 189, 248, 0.1)', padding: '0.1rem 0.35rem', borderRadius: '4px' }}>target</code>, return <em>indices of the two numbers such that they add up to target</em>.
-              </p>
-              <p style={{ margin: '0 0 1rem 0', color: '#94A3B8', fontSize: '0.82rem' }}>
-                You may assume that each input would have exactly one solution, and you may not use the same element twice. You can return the answer in any order.
-              </p>
 
-              <div style={{ fontWeight: 600, color: '#FFFFFF', marginTop: '1.2rem', marginBottom: '0.4rem' }}>
-                Example 1:
-              </div>
-              <pre
-                style={{
-                  backgroundColor: 'rgba(0, 0, 0, 0.35)',
-                  padding: '0.75rem',
-                  borderRadius: '8px',
-                  fontSize: '0.8rem',
-                  color: '#E2E8F0',
-                  fontFamily: 'monospace',
-                  margin: 0,
-                }}
-              >
-                <strong>Input:</strong> nums = [2,7,11,15], target = 9{'\n'}
-                <strong>Output:</strong> [0,1]{'\n'}
-                <strong>Explanation:</strong> Because nums[0] + nums[1] == 9, we return [0, 1].
-              </pre>
+              {/* Topics Pills */}
+              {currentQuestion?.topics && (
+                <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', marginBottom: '1.1rem' }}>
+                  {currentQuestion.topics.map((t, idx) => (
+                    <span
+                      key={idx}
+                      style={{
+                        fontSize: '0.72rem',
+                        padding: '0.15rem 0.55rem',
+                        borderRadius: '6px',
+                        backgroundColor: 'rgba(255, 255, 255, 0.06)',
+                        color: '#94A3B8',
+                        border: '1px solid rgba(255, 255, 255, 0.08)',
+                      }}
+                    >
+                      {t}
+                    </span>
+                  ))}
+                </div>
+              )}
 
-              <div style={{ fontWeight: 600, color: '#FFFFFF', marginTop: '1rem', marginBottom: '0.4rem' }}>
-                Example 2:
+              {/* Problem Statement */}
+              <div style={{ whiteSpace: 'pre-line', marginBottom: '1.25rem', color: '#E2E8F0' }}>
+                {currentQuestion?.description || 'Given an array of integers, implement the optimal algorithm.'}
               </div>
-              <pre
-                style={{
-                  backgroundColor: 'rgba(0, 0, 0, 0.35)',
-                  padding: '0.75rem',
-                  borderRadius: '8px',
-                  fontSize: '0.8rem',
-                  color: '#E2E8F0',
-                  fontFamily: 'monospace',
-                  margin: 0,
-                }}
-              >
-                <strong>Input:</strong> nums = [3,2,4], target = 6{'\n'}
-                <strong>Output:</strong> [1,2]
-              </pre>
 
-              <div style={{ fontWeight: 600, color: '#FFFFFF', marginTop: '1rem', marginBottom: '0.4rem' }}>
-                Constraints:
-              </div>
-              <ul style={{ paddingLeft: '1.2rem', margin: 0, color: '#94A3B8', fontSize: '0.8rem' }}>
-                <li>2 &le; nums.length &le; 10<sup>4</sup></li>
-                <li>-10<sup>9</sup> &le; nums[i] &le; 10<sup>9</sup></li>
-                <li>-10<sup>9</sup> &le; target &le; 10<sup>9</sup></li>
-                <li>Only one valid answer exists.</li>
-              </ul>
+              {/* Examples */}
+              {currentQuestion?.examples?.map((ex, idx) => (
+                <div key={idx} style={{ marginBottom: '1.1rem' }}>
+                  <div style={{ fontWeight: 600, color: '#FFFFFF', fontSize: '0.84rem', marginBottom: '0.35rem' }}>
+                    Example {idx + 1}:
+                  </div>
+                  <pre
+                    style={{
+                      backgroundColor: 'rgba(0, 0, 0, 0.45)',
+                      padding: '0.85rem 1rem',
+                      borderRadius: '8px',
+                      fontSize: '0.82rem',
+                      color: '#E2E8F0',
+                      fontFamily: '"Fira Code", monospace',
+                      margin: 0,
+                      border: '1px solid rgba(255, 255, 255, 0.06)',
+                    }}
+                  >
+                    <strong>Input:</strong> {ex.input}{'\n'}
+                    <strong>Output:</strong> {ex.output}
+                    {ex.explanation ? `\nExplanation: ${ex.explanation}` : ''}
+                  </pre>
+                </div>
+              ))}
+
+              {/* Constraints */}
+              {currentQuestion?.constraints && (
+                <div style={{ marginTop: '1.25rem' }}>
+                  <div style={{ fontWeight: 600, color: '#FFFFFF', fontSize: '0.84rem', marginBottom: '0.4rem' }}>
+                    Constraints & Complexity:
+                  </div>
+                  <ul style={{ paddingLeft: '1.25rem', margin: 0, color: '#94A3B8', fontSize: '0.8rem' }}>
+                    {currentQuestion.constraints.map((c, i) => (
+                      <li key={i} style={{ marginBottom: '0.25rem' }}>{c}</li>
+                    ))}
+                    {currentQuestion?.time_complexity && (
+                      <li style={{ color: '#38BDF8' }}>
+                        Expected Time: {currentQuestion.time_complexity}
+                      </li>
+                    )}
+                    {currentQuestion?.space_complexity && (
+                      <li style={{ color: '#38BDF8' }}>
+                        Expected Space: {currentQuestion.space_complexity}
+                      </li>
+                    )}
+                  </ul>
+                </div>
+              )}
             </div>
 
-            {/* Right Column: Code Editor & Test Runner */}
-            <div style={{ width: '58%', display: 'flex', flexDirection: 'column' }}>
-              {/* Editor Header */}
+            {/* Right Column: Code Editor & Execution Console */}
+            <div style={{ width: '58%', display: 'flex', flexDirection: 'column', backgroundColor: '#090D16' }}>
+              {/* Editor Language & Action Bar */}
               <div
                 style={{
-                  padding: '0.5rem 1rem',
-                  backgroundColor: '#0B0F18',
-                  borderBottom: '1px solid rgba(255, 255, 255, 0.06)',
+                  padding: '0.6rem 1.25rem',
+                  backgroundColor: '#0B0F1A',
+                  borderBottom: '1px solid rgba(255, 255, 255, 0.08)',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'space-between',
                 }}
               >
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                  <FileCode size={14} color="#38BDF8" />
-                  <span style={{ fontSize: '0.8rem', color: '#E2E8F0', fontFamily: 'monospace' }}>solution.py</span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+                  <FileCode size={15} color="#38BDF8" />
+                  {/* Language Selector Dropdown */}
+                  <select
+                    value={selectedLang}
+                    onChange={(e) => handleLanguageChange(e.target.value)}
+                    style={{
+                      backgroundColor: 'rgba(255, 255, 255, 0.08)',
+                      border: '1px solid rgba(255, 255, 255, 0.16)',
+                      color: '#FFFFFF',
+                      borderRadius: '6px',
+                      padding: '0.3rem 0.65rem',
+                      fontSize: '0.82rem',
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                      outline: 'none',
+                    }}
+                  >
+                    <option value="python">Python 3</option>
+                    <option value="javascript">JavaScript (Node.js)</option>
+                    <option value="typescript">TypeScript</option>
+                    <option value="cpp">C++ (G++ / STL)</option>
+                    <option value="java">Java (OpenJDK)</option>
+                  </select>
                 </div>
-                <select
-                  value={selectedLang}
-                  onChange={(e) => setSelectedLang(e.target.value)}
+
+                {/* Reset Code Button */}
+                <button
+                  type="button"
+                  onClick={() => setConfirmResetOpen(true)}
+                  title="Reset to starter template"
                   style={{
-                    backgroundColor: 'rgba(255, 255, 255, 0.08)',
-                    border: '1px solid rgba(255, 255, 255, 0.12)',
-                    color: '#FFFFFF',
-                    borderRadius: '6px',
-                    padding: '0.2rem 0.5rem',
-                    fontSize: '0.75rem',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '0.35rem',
+                    background: 'none',
+                    border: 'none',
+                    color: '#94A3B8',
+                    fontSize: '0.78rem',
                     cursor: 'pointer',
+                    padding: '0.2rem 0.5rem',
+                    borderRadius: '4px',
                   }}
                 >
-                  <option value="Python3">Python3</option>
-                  <option value="JavaScript">JavaScript</option>
-                  <option value="Java">Java</option>
-                  <option value="C++">C++</option>
-                </select>
+                  <RotateCcw size={13} />
+                  <span>Reset Template</span>
+                </button>
               </div>
 
-              {/* Editable Code Textarea */}
-              <div style={{ flex: 1, position: 'relative', backgroundColor: '#0A0E17' }}>
+              {/* Code Editor Area */}
+              <div style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
                 <textarea
                   value={code}
                   onChange={(e) => setCode(e.target.value)}
+                  onKeyDown={handleKeyDown}
                   spellCheck="false"
+                  placeholder="Write your solution here..."
                   style={{
                     width: '100%',
                     height: '100%',
-                    backgroundColor: 'transparent',
+                    backgroundColor: '#0A0E17',
                     border: 'none',
                     outline: 'none',
                     resize: 'none',
-                    color: '#E2E8F0',
-                    fontFamily: '"Fira Code", monospace, "Courier New"',
-                    fontSize: '0.88rem',
-                    lineHeight: 1.6,
-                    padding: '1rem',
+                    color: '#F1F5F9',
+                    fontFamily: '"Fira Code", "Courier New", monospace',
+                    fontSize: '0.92rem',
+                    lineHeight: 1.65,
+                    padding: '1.25rem',
                     boxSizing: 'border-box',
                     whiteSpace: 'pre',
                   }}
                 />
               </div>
 
-              {/* Bottom Test Runner & Execution Bar */}
+              {/* Bottom Test / Output / Evaluation Tabs Panel */}
               <div
                 style={{
-                  backgroundColor: '#070A10',
-                  borderTop: '1px solid rgba(255, 255, 255, 0.08)',
-                  padding: '0.85rem 1.25rem',
+                  height: '240px',
+                  backgroundColor: '#060910',
+                  borderTop: '1px solid rgba(255, 255, 255, 0.1)',
                   display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
+                  flexDirection: 'column',
                 }}
               >
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                  <div style={{ display: 'flex', gap: '0.4rem' }}>
-                    {[1, 2, 3].map((tc) => (
-                      <button
-                        key={tc}
-                        type="button"
-                        onClick={() => setActiveTestCase(tc)}
-                        style={{
-                          padding: '0.3rem 0.65rem',
-                          borderRadius: '6px',
-                          backgroundColor: activeTestCase === tc ? 'rgba(56, 189, 248, 0.2)' : 'rgba(255, 255, 255, 0.05)',
-                          border: activeTestCase === tc ? '1px solid #38BDF8' : '1px solid rgba(255, 255, 255, 0.1)',
-                          color: activeTestCase === tc ? '#38BDF8' : '#94A3B8',
-                          fontSize: '0.75rem',
-                          cursor: 'pointer',
-                        }}
-                      >
-                        Case {tc}
-                      </button>
-                    ))}
-                  </div>
-
-                  {testResult && (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', color: '#4ADE80', fontSize: '0.78rem' }}>
-                      <CheckCircle2 size={14} />
-                      <span>{testResult.status} ({testResult.runtime})</span>
-                    </div>
-                  )}
-                </div>
-
-                <button
-                  type="button"
-                  onClick={handleRunCode}
-                  disabled={isRunning}
+                {/* Panel Navigation Tabs */}
+                <div
                   style={{
                     display: 'flex',
                     alignItems: 'center',
-                    gap: '0.45rem',
-                    backgroundColor: '#0284C7',
-                    border: 'none',
-                    borderRadius: '8px',
-                    padding: '0.55rem 1.25rem',
-                    color: '#FFFFFF',
-                    fontWeight: 700,
-                    fontSize: '0.85rem',
-                    cursor: isRunning ? 'not-allowed' : 'pointer',
-                    boxShadow: '0 4px 14px rgba(2, 132, 199, 0.45)',
-                    transition: 'all 0.15s ease',
+                    justifyContent: 'space-between',
+                    padding: '0.4rem 1rem',
+                    borderBottom: '1px solid rgba(255, 255, 255, 0.08)',
+                    backgroundColor: '#070B13',
                   }}
                 >
-                  {isRunning ? (
-                    <RefreshCw size={14} style={{ animation: 'spin 1s linear infinite' }} />
-                  ) : (
-                    <Play size={14} fill="#FFFFFF" />
+                  <div style={{ display: 'flex', gap: '0.4rem' }}>
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab('tests')}
+                      style={{
+                        padding: '0.35rem 0.8rem',
+                        borderRadius: '6px',
+                        backgroundColor: activeTab === 'tests' ? 'rgba(56, 189, 248, 0.15)' : 'transparent',
+                        color: activeTab === 'tests' ? '#38BDF8' : '#94A3B8',
+                        border: 'none',
+                        fontSize: '0.78rem',
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Sample Test Cases ({sampleTestCases.length})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab('output')}
+                      style={{
+                        padding: '0.35rem 0.8rem',
+                        borderRadius: '6px',
+                        backgroundColor: activeTab === 'output' ? 'rgba(56, 189, 248, 0.15)' : 'transparent',
+                        color: activeTab === 'output' ? '#38BDF8' : '#94A3B8',
+                        border: 'none',
+                        fontSize: '0.78rem',
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Execution Output {runResults ? `(${runResults.passedCount}/${runResults.totalCount} Passed)` : ''}
+                    </button>
+                    {submissionResult && (
+                      <button
+                        type="button"
+                        onClick={() => setActiveTab('evaluation')}
+                        style={{
+                          padding: '0.35rem 0.8rem',
+                          borderRadius: '6px',
+                          backgroundColor: activeTab === 'evaluation' ? 'rgba(34, 197, 94, 0.15)' : 'transparent',
+                          color: activeTab === 'evaluation' ? '#4ADE80' : '#94A3B8',
+                          border: 'none',
+                          fontSize: '0.78rem',
+                          fontWeight: 600,
+                          cursor: 'pointer',
+                        }}
+                      >
+                        AI Evaluation ({submissionResult.verdict})
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Actions: Run Code & Submit Solution */}
+                  <div style={{ display: 'flex', gap: '0.65rem' }}>
+                    <button
+                      type="button"
+                      onClick={handleRunCode}
+                      disabled={isRunning || isSubmitting}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.4rem',
+                        backgroundColor: 'rgba(255, 255, 255, 0.08)',
+                        border: '1px solid rgba(255, 255, 255, 0.15)',
+                        borderRadius: '7px',
+                        padding: '0.45rem 1rem',
+                        color: '#FFFFFF',
+                        fontWeight: 600,
+                        fontSize: '0.8rem',
+                        cursor: isRunning ? 'not-allowed' : 'pointer',
+                        transition: 'all 0.15s ease',
+                      }}
+                    >
+                      {isRunning ? (
+                        <RefreshCw size={13} style={{ animation: 'spin 1s linear infinite' }} />
+                      ) : (
+                        <Play size={13} fill="#FFFFFF" />
+                      )}
+                      <span>{isRunning ? 'Running...' : 'Run Code'}</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={handleSubmitSolution}
+                      disabled={isSubmitting || isRunning}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.45rem',
+                        backgroundColor: '#0284C7',
+                        border: 'none',
+                        borderRadius: '7px',
+                        padding: '0.45rem 1.15rem',
+                        color: '#FFFFFF',
+                        fontWeight: 700,
+                        fontSize: '0.8rem',
+                        cursor: isSubmitting ? 'not-allowed' : 'pointer',
+                        boxShadow: '0 4px 14px rgba(2, 132, 199, 0.45)',
+                        transition: 'all 0.15s ease',
+                      }}
+                    >
+                      {isSubmitting ? (
+                        <RefreshCw size={13} style={{ animation: 'spin 1s linear infinite' }} />
+                      ) : (
+                        <Send size={13} />
+                      )}
+                      <span>{isSubmitting ? 'Evaluating...' : 'Submit Solution'}</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Tab Content Display */}
+                <div style={{ flex: 1, padding: '0.85rem 1.25rem', overflowY: 'auto', fontSize: '0.82rem' }}>
+                  {/* TAB 1: Sample Tests Selection */}
+                  {activeTab === 'tests' && (
+                    <div>
+                      <div style={{ display: 'flex', gap: '0.4rem', marginBottom: '0.75rem' }}>
+                        {sampleTestCases.map((tc, idx) => (
+                          <button
+                            key={tc.id || idx}
+                            type="button"
+                            onClick={() => setActiveTestCaseIdx(idx)}
+                            style={{
+                              padding: '0.25rem 0.65rem',
+                              borderRadius: '6px',
+                              backgroundColor: activeTestCaseIdx === idx ? 'rgba(56, 189, 248, 0.2)' : 'rgba(255, 255, 255, 0.05)',
+                              border: activeTestCaseIdx === idx ? '1px solid #38BDF8' : '1px solid rgba(255, 255, 255, 0.08)',
+                              color: activeTestCaseIdx === idx ? '#38BDF8' : '#94A3B8',
+                              fontSize: '0.76rem',
+                              cursor: 'pointer',
+                            }}
+                          >
+                            Case {idx + 1}
+                          </button>
+                        ))}
+                      </div>
+
+                      {sampleTestCases[activeTestCaseIdx] && (
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                          <div>
+                            <div style={{ color: '#64748B', fontSize: '0.74rem', marginBottom: '0.25rem' }}>Input:</div>
+                            <pre style={{ backgroundColor: 'rgba(0, 0, 0, 0.5)', padding: '0.5rem 0.75rem', borderRadius: '6px', margin: 0, color: '#E2E8F0', fontFamily: 'monospace' }}>
+                              {sampleTestCases[activeTestCaseIdx].input}
+                            </pre>
+                          </div>
+                          <div>
+                            <div style={{ color: '#64748B', fontSize: '0.74rem', marginBottom: '0.25rem' }}>Expected Output:</div>
+                            <pre style={{ backgroundColor: 'rgba(0, 0, 0, 0.5)', padding: '0.5rem 0.75rem', borderRadius: '6px', margin: 0, color: '#4ADE80', fontFamily: 'monospace' }}>
+                              {sampleTestCases[activeTestCaseIdx].expected}
+                            </pre>
+                          </div>
+                        </div>
+                      )}
+                    </div>
                   )}
-                  <span>{isRunning ? 'Running...' : 'Run Code'}</span>
-                </button>
+
+                  {/* TAB 2: Execution Output Console */}
+                  {activeTab === 'output' && (
+                    <div>
+                      {!runResults ? (
+                        <div style={{ color: '#64748B', textAlign: 'center', paddingTop: '1.5rem' }}>
+                          Click &quot;Run Code&quot; to execute your solution against the sample test suite in the local sandbox.
+                        </div>
+                      ) : (
+                        <div>
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.65rem' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                              {runResults.success ? (
+                                <span style={{ color: '#4ADE80', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                                  <CheckCircle2 size={16} /> Accepted
+                                </span>
+                              ) : (
+                                <span style={{ color: '#F87171', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                                  <XCircle size={16} /> {runResults.verdict}
+                                </span>
+                              )}
+                              <span style={{ color: '#64748B', fontSize: '0.78rem' }}>
+                                ({runResults.passedCount}/{runResults.totalCount} Test Cases Passed • {runResults.executionTimeMs}ms)
+                              </span>
+                            </div>
+                          </div>
+
+                          {/* Individual results breakdown */}
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                            {runResults.results?.map((r, i) => (
+                              <div
+                                key={r.id || i}
+                                style={{
+                                  backgroundColor: 'rgba(0, 0, 0, 0.4)',
+                                  border: r.passed ? '1px solid rgba(34, 197, 94, 0.25)' : '1px solid rgba(239, 68, 68, 0.25)',
+                                  borderRadius: '6px',
+                                  padding: '0.45rem 0.75rem',
+                                  fontSize: '0.78rem',
+                                  display: 'flex',
+                                  justifyContent: 'space-between',
+                                  alignItems: 'center',
+                                }}
+                              >
+                                <span style={{ color: r.passed ? '#4ADE80' : '#F87171' }}>
+                                  {r.passed ? '✓' : '✗'} {r.name}
+                                </span>
+                                <span style={{ color: '#94A3B8', fontFamily: 'monospace' }}>
+                                  Actual: {r.actual || r.error || 'N/A'} (Expected: {r.expected})
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* TAB 3: Post-Submission AI Evaluation */}
+                  {activeTab === 'evaluation' && submissionResult && (
+                    <div>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                          <span
+                            style={{
+                              fontSize: '0.9rem',
+                              fontWeight: 700,
+                              color: submissionResult.allPassed ? '#4ADE80' : '#F87171',
+                            }}
+                          >
+                            {submissionResult.verdict}
+                          </span>
+                          <span style={{ color: '#CBD5E1', fontSize: '0.82rem' }}>
+                            Score: <strong>{submissionResult.score}/100</strong> ({submissionResult.passedCount}/{submissionResult.totalCount} passed)
+                          </span>
+                          <span style={{ color: '#38BDF8', fontSize: '0.78rem', fontFamily: 'monospace' }}>
+                            Time: {submissionResult.timeComplexity} • Space: {submissionResult.spaceComplexity}
+                          </span>
+                        </div>
+
+                        {onNextQuestion && (
+                          <button
+                            type="button"
+                            onClick={onNextQuestion}
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '0.35rem',
+                              backgroundColor: 'rgba(56, 189, 248, 0.15)',
+                              border: '1px solid #38BDF8',
+                              borderRadius: '6px',
+                              padding: '0.3rem 0.8rem',
+                              color: '#38BDF8',
+                              fontSize: '0.78rem',
+                              fontWeight: 600,
+                              cursor: 'pointer',
+                            }}
+                          >
+                            <span>{isLastQuestion ? 'Finalize Interview' : 'Next Question'}</span>
+                            <ChevronRight size={14} />
+                          </button>
+                        )}
+                      </div>
+
+                      <div style={{ color: '#E2E8F0', marginBottom: '0.5rem', lineHeight: 1.4 }}>
+                        {submissionResult.interviewerMessage}
+                      </div>
+
+                      {submissionResult.strengths?.length > 0 && (
+                        <div style={{ color: '#4ADE80', fontSize: '0.76rem', marginTop: '0.3rem' }}>
+                          • <strong>Strengths:</strong> {submissionResult.strengths.join(' ')}
+                        </div>
+                      )}
+                      {submissionResult.improvements?.length > 0 && (
+                        <div style={{ color: '#FBBF24', fontSize: '0.76rem', marginTop: '0.2rem' }}>
+                          • <strong>Improvements:</strong> {submissionResult.improvements.join(' ')}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
           </div>
         </div>
+
+        {/* Confirmation Modal to Reset Code */}
+        {confirmResetOpen && (
+          <div
+            style={{
+              position: 'fixed',
+              inset: 0,
+              backgroundColor: 'rgba(0, 0, 0, 0.75)',
+              zIndex: 100000,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+          >
+            <div
+              style={{
+                backgroundColor: '#111827',
+                border: '1px solid rgba(255, 255, 255, 0.15)',
+                borderRadius: '12px',
+                padding: '1.5rem',
+                maxWidth: '400px',
+                color: '#FFFFFF',
+              }}
+            >
+              <h4 style={{ margin: '0 0 0.5rem 0', fontSize: '1rem', fontWeight: 600 }}>Reset to Starter Template?</h4>
+              <p style={{ margin: '0 0 1.25rem 0', fontSize: '0.84rem', color: '#94A3B8' }}>
+                Your current code changes will be lost and restored to the default clean template for {selectedLang.toUpperCase()}.
+              </p>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.65rem' }}>
+                <button
+                  type="button"
+                  onClick={() => setConfirmResetOpen(false)}
+                  style={{
+                    padding: '0.4rem 0.8rem',
+                    borderRadius: '6px',
+                    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+                    border: '1px solid rgba(255, 255, 255, 0.15)',
+                    color: '#CBD5E1',
+                    fontSize: '0.8rem',
+                    cursor: 'pointer',
+                  }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCode(getDefaultStarter(selectedLang, currentQuestion));
+                    setConfirmResetOpen(false);
+                  }}
+                  style={{
+                    padding: '0.4rem 0.8rem',
+                    borderRadius: '6px',
+                    backgroundColor: '#EF4444',
+                    border: 'none',
+                    color: '#FFFFFF',
+                    fontSize: '0.8rem',
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                  }}
+                >
+                  Reset Code
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     );
   }
 
-  // ─── Render Docked Perspective Laptop Directly on Desk ───
+  // ═══════════════════════════════════════════════════════════════════════════
+  // DOCKED PERSPECTIVE LAPTOP ON DESK (IN FIRST-PERSON ROOM)
+  // ═══════════════════════════════════════════════════════════════════════════
   return (
     <div
       style={{
@@ -414,7 +1009,7 @@ export default function DeskCodingLaptop({
         ...style,
       }}
     >
-      {/* Laptop Chassis Outer Frame (Silver Metallic MacBook Style) */}
+      {/* Laptop Outer Frame */}
       <div
         style={{
           width: '100%',
@@ -429,7 +1024,7 @@ export default function DeskCodingLaptop({
           position: 'relative',
         }}
       >
-        {/* Laptop Screen Header Bar */}
+        {/* Laptop Header Bar */}
         <div
           style={{
             backgroundColor: '#060910',
@@ -440,7 +1035,6 @@ export default function DeskCodingLaptop({
             justifyContent: 'space-between',
           }}
         >
-          {/* Left Title: LIVE CODING ROUND */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
             <span
               style={{
@@ -464,7 +1058,6 @@ export default function DeskCodingLaptop({
             </span>
           </div>
 
-          {/* Right Timer & Maximize Action */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <span
               style={{
@@ -483,7 +1076,7 @@ export default function DeskCodingLaptop({
             <button
               type="button"
               onClick={onToggleExpand}
-              title="Expand Code Editor"
+              title="Expand to Full IDE"
               style={{
                 background: 'rgba(255, 255, 255, 0.08)',
                 border: '1px solid rgba(255, 255, 255, 0.15)',
@@ -500,9 +1093,9 @@ export default function DeskCodingLaptop({
           </div>
         </div>
 
-        {/* Laptop Screen Body: Problem Statement & Python Code Editor */}
+        {/* Laptop Screen Body */}
         <div style={{ display: 'flex', flex: 1, overflow: 'hidden', backgroundColor: '#070B13' }}>
-          {/* Left half: Two Sum problem text */}
+          {/* Left: Problem statement summary */}
           <div
             style={{
               width: '46%',
@@ -515,28 +1108,25 @@ export default function DeskCodingLaptop({
             }}
           >
             <div style={{ fontSize: '0.74rem', fontWeight: 700, color: '#FFFFFF', marginBottom: '0.2rem' }}>
-              Two Sum
+              {currentQuestion?.title || 'Two Sum'}
             </div>
             <div style={{ color: '#CBD5E1', marginBottom: '0.35rem', fontSize: '0.6rem' }}>
-              Given an array of integers nums and an integer target, return indices of the two numbers such that they add up to target.
+              {currentQuestion?.description
+                ? currentQuestion.description.substring(0, 110) + '...'
+                : 'Given an array of integers, solve the algorithmic challenge.'}
             </div>
-            <div style={{ color: '#E2E8F0', fontWeight: 600, fontSize: '0.58rem' }}>
-              Example 1:
-            </div>
-            <div style={{ fontFamily: 'monospace', color: '#94A3B8', fontSize: '0.54rem' }}>
-              Input: nums = [2,7,11,15], target = 9{'\n'}
-              Output: [0,1]
-            </div>
-            <div style={{ color: '#E2E8F0', fontWeight: 600, fontSize: '0.58rem', marginTop: '0.25rem' }}>
-              Constraints:
-            </div>
-            <div style={{ fontFamily: 'monospace', color: '#64748B', fontSize: '0.52rem' }}>
-              • 2 &le; nums.length &le; 10⁴{'\n'}
-              • -10⁹ &le; nums[i] &le; 10⁹
-            </div>
+            {currentQuestion?.examples?.[0] && (
+              <>
+                <div style={{ color: '#E2E8F0', fontWeight: 600, fontSize: '0.58rem' }}>Example:</div>
+                <div style={{ fontFamily: 'monospace', color: '#94A3B8', fontSize: '0.54rem' }}>
+                  Input: {currentQuestion.examples[0].input}{'\n'}
+                  Output: {currentQuestion.examples[0].output}
+                </div>
+              </>
+            )}
           </div>
 
-          {/* Right half: Python Code Editor */}
+          {/* Right: Code Editor view */}
           <div
             style={{
               width: '54%',
@@ -557,35 +1147,34 @@ export default function DeskCodingLaptop({
                 fontFamily: 'monospace',
               }}
             >
-              <span>Python3 ▾</span>
-              <span>solution.py</span>
+              <span>{selectedLang.toUpperCase()} ▾</span>
+              <span>solution.{selectedLang === 'python' ? 'py' : selectedLang === 'cpp' ? 'cpp' : selectedLang === 'java' ? 'java' : 'js'}</span>
             </div>
 
-            <pre
+            <textarea
+              value={code}
+              onChange={(e) => setCode(e.target.value)}
+              onKeyDown={handleKeyDown}
+              spellCheck="false"
               style={{
                 flex: 1,
-                margin: 0,
-                fontSize: '0.56rem',
-                fontFamily: '"Fira Code", monospace',
-                lineHeight: 1.35,
+                backgroundColor: 'transparent',
+                border: 'none',
+                outline: 'none',
+                resize: 'none',
                 color: '#38BDF8',
-                overflow: 'hidden',
+                fontFamily: '"Fira Code", monospace',
+                fontSize: '0.58rem',
+                lineHeight: 1.35,
+                margin: 0,
+                padding: 0,
                 whiteSpace: 'pre',
               }}
-            >
-              <span style={{ color: '#F472B6' }}>class</span> <span style={{ color: '#FBBF24' }}>Solution</span>:{'\n'}
-              {'  '}<span style={{ color: '#F472B6' }}>def</span> <span style={{ color: '#60A5FA' }}>twoSum</span>(self, nums, target):{'\n'}
-              {'    '}<span style={{ color: '#64748B' }}># write your code here</span>{'\n'}
-              {'    '}seen = {'{}'}{'\n'}
-              {'    '}<span style={{ color: '#F472B6' }}>for</span> i, n <span style={{ color: '#F472B6' }}>in</span> enumerate(nums):{'\n'}
-              {'      '}<span style={{ color: '#F472B6' }}>if</span> target - n <span style={{ color: '#F472B6' }}>in</span> seen:{'\n'}
-              {'        '}<span style={{ color: '#F472B6' }}>return</span> [seen[target - n], i]{'\n'}
-              {'      '}seen[n] = i
-            </pre>
+            />
           </div>
         </div>
 
-        {/* Laptop Screen Footer Bar: Test cases & Run Code Button */}
+        {/* Laptop Screen Footer */}
         <div
           style={{
             backgroundColor: '#05070D',
@@ -596,47 +1185,68 @@ export default function DeskCodingLaptop({
             justifyContent: 'space-between',
           }}
         >
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.56rem' }}>
-            <span style={{ color: '#38BDF8', fontWeight: 600 }}>Test Case 1</span>
-            <span style={{ color: '#64748B', fontFamily: 'monospace' }}>nums = [2,7,11,15], target = 9</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.58rem' }}>
+            {runResults ? (
+              <span style={{ color: runResults.success ? '#4ADE80' : '#F87171' }}>
+                {runResults.success ? '✓' : '✗'} {runResults.verdict} ({runResults.passedCount}/{runResults.totalCount})
+              </span>
+            ) : (
+              <span style={{ color: '#64748B' }}>Ready to run</span>
+            )}
           </div>
 
-          <button
-            type="button"
-            onClick={handleRunCode}
-            disabled={isRunning}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '0.25rem',
-              backgroundColor: '#0284C7',
-              border: 'none',
-              borderRadius: '5px',
-              padding: '0.25rem 0.65rem',
-              color: '#FFFFFF',
-              fontWeight: 700,
-              fontSize: '0.62rem',
-              cursor: isRunning ? 'not-allowed' : 'pointer',
-              boxShadow: '0 2px 8px rgba(2, 132, 199, 0.5)',
-            }}
-          >
-            {isRunning ? (
-              <RefreshCw size={10} style={{ animation: 'spin 1s linear infinite' }} />
-            ) : (
-              <Play size={10} fill="#FFFFFF" />
-            )}
-            <span>{isRunning ? 'Running' : 'Run Code'}</span>
-          </button>
+          <div style={{ display: 'flex', gap: '0.35rem' }}>
+            <button
+              type="button"
+              onClick={handleRunCode}
+              disabled={isRunning}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.25rem',
+                backgroundColor: '#0284C7',
+                border: 'none',
+                borderRadius: '5px',
+                padding: '0.25rem 0.65rem',
+                color: '#FFFFFF',
+                fontWeight: 700,
+                fontSize: '0.62rem',
+                cursor: isRunning ? 'not-allowed' : 'pointer',
+              }}
+            >
+              {isRunning ? (
+                <RefreshCw size={10} style={{ animation: 'spin 1s linear infinite' }} />
+              ) : (
+                <Play size={10} fill="#FFFFFF" />
+              )}
+              <span>Run Code</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={onToggleExpand}
+              title="Expand for full IDE & Submit"
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.2rem',
+                backgroundColor: 'rgba(255, 255, 255, 0.1)',
+                border: '1px solid rgba(255, 255, 255, 0.2)',
+                borderRadius: '5px',
+                padding: '0.25rem 0.5rem',
+                color: '#FFFFFF',
+                fontSize: '0.62rem',
+                cursor: 'pointer',
+              }}
+            >
+              <Maximize2 size={10} />
+              <span>Expand</span>
+            </button>
+          </div>
         </div>
 
-        {/* Laptop Base / Keyboard Hinge illusion */}
-        <div
-          style={{
-            height: '4px',
-            backgroundColor: '#334155',
-            borderTop: '1px solid #64748B',
-          }}
-        />
+        {/* Laptop Base Hinge */}
+        <div style={{ height: '4px', backgroundColor: '#334155', borderTop: '1px solid #64748B' }} />
       </div>
 
       {/* Silver Laptop Bottom Base (Perspective Projection) */}
@@ -654,15 +1264,7 @@ export default function DeskCodingLaptop({
           alignItems: 'center',
         }}
       >
-        {/* Trackpad notch */}
-        <div
-          style={{
-            width: '42px',
-            height: '3px',
-            backgroundColor: '#64748B',
-            borderRadius: '2px',
-          }}
-        />
+        <div style={{ width: '42px', height: '3px', backgroundColor: '#64748B', borderRadius: '2px' }} />
       </div>
     </div>
   );

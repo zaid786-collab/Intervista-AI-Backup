@@ -141,18 +141,32 @@ export function useComputerVision({
 
       const now = Date.now();
 
-      // Zero-Tolerance Mobile Phone Detection (Direct termination on seeing, zero delay)
+      // Sustained Mobile Phone Verification Check (Prevents false positives from single frame jitter)
       if (frameResult.phoneDetected) {
-        if (!hasTriggeredPhoneTerminationRef.current) {
-          hasTriggeredPhoneTerminationRef.current = true;
-          console.warn("[useComputerVision] MOBILE PHONE DETECTED! Triggering immediate direct termination.");
-          if (typeof onMobilePhoneDetectedRef.current === "function") {
-            onMobilePhoneDetectedRef.current({
-              confidence: frameResult.phoneConfidence || 0.9,
-              timestamp: now,
-            });
+        if (!sustainedPhoneStartRef.current) {
+          sustainedPhoneStartRef.current = now;
+        }
+
+        // Require at least 2.5 seconds of sustained continuous detection before initiating AI check
+        if (now - sustainedPhoneStartRef.current >= 2500) {
+          if (!hasTriggeredPhoneTerminationRef.current) {
+            hasTriggeredPhoneTerminationRef.current = true;
+            console.warn("[useComputerVision] Sustained mobile phone suspected (>2.5s). Requesting AI LLM verification.");
+            if (typeof onMobilePhoneDetectedRef.current === "function") {
+              onMobilePhoneDetectedRef.current({
+                confidence: frameResult.phoneConfidence || 0.85,
+                timestamp: now,
+                resetSuspicion: () => {
+                  hasTriggeredPhoneTerminationRef.current = false;
+                  sustainedPhoneStartRef.current = null;
+                  setPhoneDetected(false);
+                },
+              });
+            }
           }
         }
+      } else {
+        sustainedPhoneStartRef.current = null;
       }
 
       // Multiple users / multiple faces proctoring check

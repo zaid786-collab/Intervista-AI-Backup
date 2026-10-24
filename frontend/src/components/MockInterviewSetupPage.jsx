@@ -35,6 +35,8 @@ const COMPANIES = [
 ];
 
 const INTERVIEW_TYPES = [
+  'Coding Round',
+  'Verbal Interview Round',
   'Technical Interview',
   'System Design Interview',
   'Behavioral & Leadership',
@@ -171,6 +173,10 @@ export default function MockInterviewSetupPage({ onLaunchSession, onBackToOvervi
         language: domainTopic,
         topic: domainTopic,
         interviewType,
+        isCodingRound:
+          interviewType === 'Coding Round' ||
+          interviewType.toLowerCase().includes('coding') ||
+          interviewType.toLowerCase().includes('dsa'),
         duration,
         notes: customNotes,
         micEnabled: micTested || micTesting,

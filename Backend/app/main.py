@@ -15,6 +15,7 @@ from app.routers import (
     challenges,
     companies,
     interviews,
+    coding_interview,
     leaderboard_jobs,
     payments,
     feedback,
@@ -126,10 +127,18 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Open CORS configuration for development and local testing
+# Robust CORS configuration for development, testing, and production
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:8001",
+        "http://127.0.0.1:8001",
+    ],
+    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:[0-9]+)?$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -145,6 +154,7 @@ app.include_router(ai.router)
 app.include_router(challenges.router)
 app.include_router(companies.router)
 app.include_router(interviews.router)
+app.include_router(coding_interview.router)
 app.include_router(leaderboard_jobs.router)
 app.include_router(payments.router)
 app.include_router(feedback.router)

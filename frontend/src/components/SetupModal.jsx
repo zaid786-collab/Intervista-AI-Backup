@@ -14,7 +14,8 @@ import {
 export default function SetupModal({ isOpen, onClose, initialRole, onStartSession }) {
   const [role, setRole] = useState('Software Engineer');
   const [level, setLevel] = useState('Mid Level');
-  const [interviewType, setInterviewType] = useState('Technical & Coding');
+  const [interviewType, setInterviewType] = useState('Coding Round');
+  const [language, setLanguage] = useState('python');
   const [duration, setDuration] = useState('30 min');
 
   // Hardware states
@@ -96,6 +97,8 @@ export default function SetupModal({ isOpen, onClose, initialRole, onStartSessio
       role,
       level,
       interviewType,
+      language,
+      isCodingRound: interviewType === 'Coding Round',
       duration,
       micEnabled: micTested,
       cameraEnabled,
@@ -173,6 +176,91 @@ export default function SetupModal({ isOpen, onClose, initialRole, onStartSessio
               <option value="Behavioral & Leadership">Behavioral & Executive Leadership (STAR)</option>
             </select>
           </div>
+
+          {/* Interview Round Mode: Coding Round vs Verbal Interview Round */}
+          <div>
+            <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '0.5rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+              Interview Round
+            </label>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+              <button
+                type="button"
+                onClick={() => setInterviewType('Coding Round')}
+                style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'flex-start',
+                  padding: '0.85rem 1rem',
+                  borderRadius: '10px',
+                  backgroundColor: interviewType === 'Coding Round' ? 'rgba(56, 189, 248, 0.12)' : '#161616',
+                  border: interviewType === 'Coding Round' ? '1.5px solid #38BDF8' : '1px solid var(--border-card)',
+                  cursor: 'pointer',
+                  textAlign: 'left',
+                  transition: 'all 0.2s',
+                }}
+              >
+                <div style={{ fontWeight: 700, fontSize: '0.9rem', color: interviewType === 'Coding Round' ? '#38BDF8' : 'var(--text-primary)', marginBottom: '2px' }}>
+                  Coding Round
+                </div>
+                <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
+                  Interactive code editor, real sandbox execution & AI complexity evaluation.
+                </div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setInterviewType('Verbal Interview Round')}
+                style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'flex-start',
+                  padding: '0.85rem 1rem',
+                  borderRadius: '10px',
+                  backgroundColor: interviewType === 'Verbal Interview Round' ? 'rgba(217, 183, 122, 0.12)' : '#161616',
+                  border: interviewType === 'Verbal Interview Round' ? '1.5px solid var(--accent-gold)' : '1px solid var(--border-card)',
+                  cursor: 'pointer',
+                  textAlign: 'left',
+                  transition: 'all 0.2s',
+                }}
+              >
+                <div style={{ fontWeight: 700, fontSize: '0.9rem', color: interviewType === 'Verbal Interview Round' ? 'var(--accent-gold)' : 'var(--text-primary)', marginBottom: '2px' }}>
+                  Verbal Interview Round
+                </div>
+                <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
+                  Spoken voice Q&A, conceptual depth, verbal delivery & STAR assessment.
+                </div>
+              </button>
+            </div>
+          </div>
+
+          {/* Programming Language Selector (if Coding Round selected) */}
+          {interviewType === 'Coding Round' && (
+            <div>
+              <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '0.5rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                Programming Language
+              </label>
+              <select
+                value={language}
+                onChange={(e) => setLanguage(e.target.value)}
+                style={{
+                  width: '100%',
+                  backgroundColor: '#1A1A1A',
+                  border: '1px solid var(--border-card)',
+                  borderRadius: '10px',
+                  padding: '0.75rem 1rem',
+                  color: 'var(--text-primary)',
+                  fontSize: '0.92rem',
+                  cursor: 'pointer',
+                }}
+              >
+                <option value="python">Python 3 (Standard)</option>
+                <option value="javascript">JavaScript (Node.js)</option>
+                <option value="typescript">TypeScript</option>
+                <option value="cpp">C++ (STL / G++)</option>
+                <option value="java">Java (OpenJDK)</option>
+              </select>
+            </div>
+          )}
 
           {/* Level & Interview Type Row */}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
