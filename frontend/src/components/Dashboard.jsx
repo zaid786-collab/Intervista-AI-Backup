@@ -1,6 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import MockInterviewSetupPage from './MockInterviewSetupPage';
-import CareerPrepDSAPage from './CareerPrepDSAPage';
 import HistoryPage from './HistoryPage';
 import ProfilePage from './ProfilePage';
 import ResumeATS from '../pages/ResumeATS';
@@ -12,7 +11,6 @@ import {
   Mic,
   BarChart2,
   Calendar,
-  Briefcase,
   Settings,
 
   ChevronLeft,
@@ -165,7 +163,6 @@ export default function Dashboard({
       if (h.includes('profile')) return 'My Profile';
       if (h.includes('history')) return 'History';
       if (h.includes('mock')) return 'Mock Interview';
-      if (h.includes('prep') || h.includes('career')) return 'Career Prep';
     }
     return 'Overview';
   });
@@ -222,8 +219,6 @@ export default function Dashboard({
         setActiveNav('History');
       } else if (h.includes('mock')) {
         setActiveNav('Mock Interview');
-      } else if (h.includes('career') || h.includes('prep')) {
-        setActiveNav('Career Prep');
       } else if (h === '#dashboard') {
         setActiveNav('Overview');
       }
@@ -492,16 +487,6 @@ export default function Dashboard({
       },
     },
     {
-      label: 'Career Prep',
-      icon: Briefcase,
-      id: 'career-prep',
-      action: () => {
-        setActiveNav('Career Prep');
-        window.location.hash = '#dashboard/career-prep';
-        window.scrollTo({ top: 0, behavior: 'smooth' });
-      },
-    },
-    {
       label: 'My Profile',
       icon: User,
       id: 'my-profile',
@@ -762,17 +747,6 @@ export default function Dashboard({
             />
           ) : activeNav === 'Resume ATS' ? (
             <ResumeATS onStartInterview={onStartInterview} />
-          ) : activeNav === 'Career Prep' ? (
-            <CareerPrepDSAPage
-              onStartInterview={(title) => {
-                setActiveNav('Mock Interview');
-                window.scrollTo({ top: 0, behavior: 'smooth' });
-              }}
-              onBackToOverview={() => {
-                setActiveNav('Overview');
-                window.scrollTo({ top: 0, behavior: 'smooth' });
-              }}
-            />
           ) : activeNav === 'History' ? (
             <HistoryPage
               onViewReport={onViewReport}
