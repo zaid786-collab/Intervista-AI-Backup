@@ -446,6 +446,236 @@ CURATED_CODING_PROBLEMS: List[Dict[str, Any]] = [
             "Iterate through sorted intervals: if the current interval starts before or at the end of the previous one, merge them by updating the end time.",
             "Otherwise, append current interval as a new separate entry."
         ]
+    },
+    {
+        "id": "maximum-subarray",
+        "title": "Maximum Subarray",
+        "difficulty": "Medium",
+        "topics": ["Array", "Dynamic Programming", "Divide and Conquer"],
+        "description": "Given an integer array `nums`, find the subarray with the largest sum, and return its sum.",
+        "input_format": "Line 1: JSON array of integers `nums`.",
+        "output_format": "Integer representing maximum subarray sum.",
+        "constraints": [
+            "1 <= nums.length <= 10^5",
+            "-10^4 <= nums[i] <= 10^4",
+            "Optimal Time Complexity: O(n)"
+        ],
+        "examples": [
+            {
+                "input": "nums = [-2,1,-3,4,-1,2,1,-5,4]",
+                "output": "6",
+                "explanation": "The subarray [4,-1,2,1] has the largest sum 6."
+            },
+            {
+                "input": "nums = [1]",
+                "output": "1",
+                "explanation": "The subarray [1] has the largest sum 1."
+            },
+            {
+                "input": "nums = [5,4,-1,7,8]",
+                "output": "23",
+                "explanation": "The subarray [5,4,-1,7,8] has the largest sum 23."
+            }
+        ],
+        "sample_test_cases": [
+            {
+                "id": 1,
+                "name": "Example 1 (Mixed Positives and Negatives)",
+                "input": "[-2, 1, -3, 4, -1, 2, 1, -5, 4]",
+                "expected": "6",
+                "isHidden": False,
+                "explanation": "Subarray [4, -1, 2, 1] has sum 6."
+            },
+            {
+                "id": 2,
+                "name": "Example 2 (Single Element)",
+                "input": "[1]",
+                "expected": "1",
+                "isHidden": False,
+                "explanation": "Single element array."
+            }
+        ],
+        "hidden_test_cases": [
+            {
+                "id": 3,
+                "name": "Hidden 1 (All Negative Numbers)",
+                "input": "[-5, -2, -8, -1, -4]",
+                "expected": "-1",
+                "isHidden": True
+            },
+            {
+                "id": 4,
+                "name": "Hidden 2 (All Positive Numbers)",
+                "input": "[5, 4, 1, 7, 8]",
+                "expected": "25",
+                "isHidden": True
+            }
+        ],
+        "starter_templates": {
+            "python": 'class Solution:\n    def maxSubArray(self, nums: list[int]) -> int:\n        # write your code here\n        pass\n',
+            "javascript": '/**\n * @param {number[]} nums\n * @return {number}\n */\nfunction maxSubArray(nums) {\n    // write your code here\n}\n',
+            "typescript": 'function maxSubArray(nums: number[]): number {\n    // write your code here\n    return 0;\n}\n',
+            "cpp": '#include <vector>\n#include <algorithm>\n\nclass Solution {\npublic:\n    int maxSubArray(std::vector<int>& nums) {\n        // write your code here\n        return 0;\n    }\n};\n',
+            "java": 'import java.util.*;\n\nclass Solution {\n    public int maxSubArray(int[] nums) {\n        // write your code here\n        return 0;\n    }\n}\n'
+        },
+        "function_name": "maxSubArray",
+        "time_complexity": "O(n)",
+        "space_complexity": "O(1)",
+        "hints": [
+            "Consider Kadane's Algorithm: at each position i, the max sum ending at i is max(nums[i], current_sum + nums[i]).",
+            "Keep a running max of all values seen.",
+            "Remember that the array may contain only negative numbers."
+        ]
+    },
+    {
+        "id": "binary-search",
+        "title": "Binary Search",
+        "difficulty": "Easy",
+        "topics": ["Array", "Binary Search"],
+        "description": "Given an array of integers `nums` which is sorted in ascending order, and an integer `target`, write a function to search `target` in `nums`. If `target` exists, then return its index. Otherwise, return `-1`.\n\nYou must write an algorithm with `O(log n)` runtime complexity.",
+        "input_format": "Line 1: JSON array of sorted integers `nums`.\nLine 2: integer `target`.",
+        "output_format": "Integer 0-based index or -1 if not found.",
+        "constraints": [
+            "1 <= nums.length <= 10^4",
+            "-10^4 < nums[i], target < 10^4",
+            "All the integers in nums are unique.",
+            "nums is sorted in ascending order."
+        ],
+        "examples": [
+            {
+                "input": "nums = [-1,0,3,5,9,12], target = 9",
+                "output": "4",
+                "explanation": "9 exists in nums and its index is 4."
+            },
+            {
+                "input": "nums = [-1,0,3,5,9,12], target = 2",
+                "output": "-1",
+                "explanation": "2 does not exist in nums so return -1."
+            }
+        ],
+        "sample_test_cases": [
+            {
+                "id": 1,
+                "name": "Example 1 (Found Target)",
+                "input": "[-1, 0, 3, 5, 9, 12]\n9",
+                "expected": "4",
+                "isHidden": False,
+                "explanation": "Index of 9 is 4"
+            },
+            {
+                "id": 2,
+                "name": "Example 2 (Target Not Present)",
+                "input": "[-1, 0, 3, 5, 9, 12]\n2",
+                "expected": "-1",
+                "isHidden": False,
+                "explanation": "2 not in array"
+            }
+        ],
+        "hidden_test_cases": [
+            {
+                "id": 3,
+                "name": "Hidden 1 (Single Element Match)",
+                "input": "[5]\n5",
+                "expected": "0",
+                "isHidden": True
+            },
+            {
+                "id": 4,
+                "name": "Hidden 2 (First Element)",
+                "input": "[1, 3, 5, 7, 9]\n1",
+                "expected": "0",
+                "isHidden": True
+            }
+        ],
+        "starter_templates": {
+            "python": 'class Solution:\n    def search(self, nums: list[int], target: int) -> int:\n        # write your code here\n        pass\n',
+            "javascript": '/**\n * @param {number[]} nums\n * @param {number} target\n * @return {number}\n */\nfunction search(nums, target) {\n    // write your code here\n}\n',
+            "typescript": 'function search(nums: number[], target: number): number {\n    // write your code here\n    return -1;\n}\n',
+            "cpp": '#include <vector>\n\nclass Solution {\npublic:\n    int search(std::vector<int>& nums, int target) {\n        // write your code here\n        return -1;\n    }\n};\n',
+            "java": 'import java.util.*;\n\nclass Solution {\n    public int search(int[] nums, int target) {\n        // write your code here\n        return -1;\n    }\n}\n'
+        },
+        "function_name": "search",
+        "time_complexity": "O(log n)",
+        "space_complexity": "O(1)",
+        "hints": [
+            "Initialize two pointers: `low = 0` and `high = len(nums) - 1`.",
+            "Compute the midpoint: `mid = (low + high) // 2`.",
+            "Compare `nums[mid]` to `target` and eliminate half the search space."
+        ]
+    },
+    {
+        "id": "climbing-stairs",
+        "title": "Climbing Stairs",
+        "difficulty": "Easy",
+        "topics": ["Math", "Dynamic Programming", "Memoization"],
+        "description": "You are climbing a staircase. It takes `n` steps to reach the top.\n\nEach time you can either climb `1` or `2` steps. In how many distinct ways can you climb to the top?",
+        "input_format": "Line 1: integer `n`.",
+        "output_format": "Integer total distinct ways.",
+        "constraints": [
+            "1 <= n <= 45",
+            "Optimal Time Complexity: O(n)",
+            "Optimal Space Complexity: O(1)"
+        ],
+        "examples": [
+            {
+                "input": "n = 2",
+                "output": "2",
+                "explanation": "There are two ways: (1 step + 1 step) or (2 steps)."
+            },
+            {
+                "input": "n = 3",
+                "output": "3",
+                "explanation": "Three ways: (1+1+1), (1+2), (2+1)."
+            }
+        ],
+        "sample_test_cases": [
+            {
+                "id": 1,
+                "name": "Example 1 (2 Steps)",
+                "input": "2",
+                "expected": "2",
+                "isHidden": False,
+                "explanation": "2 distinct ways"
+            },
+            {
+                "id": 2,
+                "name": "Example 2 (3 Steps)",
+                "input": "3",
+                "expected": "3",
+                "isHidden": False,
+                "explanation": "3 distinct ways"
+            }
+        ],
+        "hidden_test_cases": [
+            {
+                "id": 3,
+                "name": "Hidden 1 (1 Step)",
+                "input": "1",
+                "expected": "1",
+                "isHidden": True
+            },
+            {
+                "id": 4,
+                "name": "Hidden 2 (5 Steps)",
+                "input": "5",
+                "expected": "8",
+                "isHidden": True
+            }
+        ],
+        "starter_templates": {
+            "python": 'class Solution:\n    def climbStairs(self, n: int) -> int:\n        # write your code here\n        pass\n',
+            "javascript": '/**\n * @param {number} n\n * @return {number}\n */\nfunction climbStairs(n) {\n    // write your code here\n}\n',
+            "typescript": 'function climbStairs(n: number): number {\n    // write your code here\n    return 0;\n}\n',
+            "cpp": 'class Solution {\npublic:\n    int climbStairs(int n) {\n        // write your code here\n        return 0;\n    }\n};\n',
+            "java": 'class Solution {\n    public int climbStairs(int n) {\n        // write your code here\n        return 0;\n    }\n}\n'
+        },
+        "function_name": "climbStairs",
+        "time_complexity": "O(n)",
+        "space_complexity": "O(1)",
+        "hints": [
+            "Notice this is the Fibonacci sequence: ways(n) = ways(n - 1) + ways(n - 2).",
+            "Use two variables to track the previous two values for O(1) space."
+        ]
     }
 ]
 
@@ -493,6 +723,13 @@ def generate_coding_question_with_groq(
 Task: Generate a realistic, original coding interview problem testing: "{topic}".
 Candidate will solve in: {language}.
 
+CRITICAL EXECUTION REQUIREMENT:
+- For "sample_test_cases" and "hidden_test_cases", the "input" field MUST consist of the exact function arguments formatted as JSON lines (one argument per line), matching the parameters of "function_name".
+  Example: if function is twoSum(nums, target), input must be:
+  "[2, 7, 11, 15]\\n9"
+- "starter_templates" MUST declare the exact "function_name" with the exact typed parameters matching the arguments.
+- Expected output must be valid JSON format (e.g. "[0, 1]", "true", "42").
+
 Output MUST strictly follow this exact JSON schema (return ONLY valid JSON, NO markdown wrappers, NO preamble):
 {{
   "id": "slug-problem-title",
@@ -517,42 +754,27 @@ Output MUST strictly follow this exact JSON schema (return ONLY valid JSON, NO m
     {{
       "id": 1,
       "name": "Sample Test 1",
-      "input": "raw stdin or args passed to wrapper (one arg per line or json)",
+      "input": "JSON argument 1\\nJSON argument 2",
       "expected": "expected output string",
       "isHidden": false,
       "explanation": "sample walkthrough"
-    }},
-    {{
-      "id": 2,
-      "name": "Sample Test 2",
-      "input": "second test input",
-      "expected": "second expected output",
-      "isHidden": false,
-      "explanation": "walkthrough"
     }}
   ],
   "hidden_test_cases": [
     {{
-      "id": 3,
-      "name": "Edge Case (Empty / Single / Boundary)",
+      "id": 2,
+      "name": "Edge Case",
       "input": "edge input",
       "expected": "edge expected output",
-      "isHidden": true
-    }},
-    {{
-      "id": 4,
-      "name": "Large Scale / Stress Test",
-      "input": "stress input",
-      "expected": "stress expected output",
       "isHidden": true
     }}
   ],
   "starter_templates": {{
-    "python": "class Solution:\\n    def solve(self, ...):\\n        pass\\n",
-    "javascript": "function solve(...) {{\\n    // code\\n}}\\n",
-    "typescript": "function solve(...): ... {{\\n    // code\\n}}\\n",
-    "cpp": "class Solution {{\\npublic:\\n    ... solve(...) {{\\n    }}\\n}};\\n",
-    "java": "class Solution {{\\n    public ... solve(...) {{\\n    }}\\n}}\\n"
+    "python": "class Solution:\\n    def solve(self, arg1, arg2):\\n        pass\\n",
+    "javascript": "function solve(arg1, arg2) {{\\n    // code\\n}}\\n",
+    "typescript": "function solve(arg1: any, arg2: any): any {{\\n    // code\\n}}\\n",
+    "cpp": "class Solution {{\\npublic:\\n    int solve(int arg1) {{\\n        return 0;\\n    }}\\n}};\\n",
+    "java": "class Solution {{\\n    public int solve(int arg1) {{\\n        return 0;\\n    }}\\n}}\\n"
   }},
   "function_name": "solve",
   "time_complexity": "O(n)",

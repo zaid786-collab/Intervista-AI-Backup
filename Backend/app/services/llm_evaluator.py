@@ -3,6 +3,7 @@ import json
 import re
 from typing import List, Dict, Any, Optional
 import requests
+from app.services.llm_client import call_chat_llm
 
 QUESTION_RUBRICS = {
     "fiber": {
@@ -1468,7 +1469,7 @@ def evaluate_with_grok(
     is_groq = api_key.startswith("gsk_")
     if is_groq:
         url = "https://api.groq.com/openai/v1/chat/completions"
-        model_name = "llama-3.3-70b-versatile"
+        model_name = "qwen/qwen3.8-27b"
     else:
         url = "https://api.x.ai/v1/chat/completions"
         model_name = "grok-2-latest"
@@ -1631,17 +1632,24 @@ def evaluate_interview_submission(
     Evaluates candidate's stored answers deferred after interview completion.
     Checks environment for GROK_API_KEY, GEMINI_API_KEY, and falls back to local rubric evaluator.
     """
-    # 1. Check for Grok API Key (xAI Grok or Groq)
-    grok_key = os.getenv("GROK_API_KEY") or os.getenv("XAI_API_KEY") or os.getenv("GROQ_API_KEY")
-    if grok_key and len(grok_key) > 5:
-        result = evaluate_with_grok(company, role, difficulty, answers, grok_key)
+    # 1. Check for Groq API Key first (gsk_...)
+    groq_key = os.getenv("GROQ_API_KEY")
+    if groq_key and groq_key.startswith("gsk_"):
+        result = evaluate_with_grok(company, role, difficulty, answers, groq_key)
         if result and "overall_score" in result:
             return result
 
     # 2. Check for Gemini API Key
     gemini_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
-    if gemini_key and len(gemini_key) > 10:
+    if gemini_key and len(gemini_key) > 8:
         result = evaluate_with_gemini(company, role, difficulty, answers, gemini_key)
+        if result and "overall_score" in result:
+            return result
+
+    # 3. Check for Grok / xAI key
+    grok_key = os.getenv("GROK_API_KEY") or os.getenv("XAI_API_KEY")
+    if grok_key and len(grok_key) > 5:
+        result = evaluate_with_grok(company, role, difficulty, answers, grok_key)
         if result and "overall_score" in result:
             return result
 
@@ -1657,21 +1665,29 @@ def generate_interviewer_turn(
     role: str = "Software Engineer",
     interviewer_name: str = "Mr. J. Chen",
     next_question_dict: Optional[Dict[str, Any]] = None,
+    conversation_history: Optional[List[Dict[str, Any]]] = None,
+    difficulty: str = "Medium",
+    interview_type: str = "Technical Interview",
+    domain: str = "General Software Engineering",
+    resume_context: Optional[str] = None,
+    test_results: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
-    Generates real-time conversational commentary, probing follow-ups, and smooth transitions
-    during live interview sessions.
+    Live AI Interviewer Turn Engine.
+    Understands candidate's live spoken answer via configured LLM API (Groq/Gemini),
+    maintains structured conversational memory, evaluates technical accuracy, completeness,
+    relevance, and generates context-aware conversational speech with adaptive next actions.
     """
     q_text = question_dict.get("question", "")
     q_id = question_dict.get("id", question_dict.get("question_id", 1))
     q_cat = question_dict.get("category", "")
-    q_domain = question_dict.get("domain", "")
+    q_domain = question_dict.get("domain", domain)
     q_exp = question_dict.get("expected_key_points", [])
-    
+
     cleaned_ans = str(candidate_answer or "").strip()
     is_skipped = is_skipped_answer(cleaned_ans) or not cleaned_ans
 
-    # 1. Skipped / Pass handling
+    # 1. Candidate explicitly skipped or provided no audio/text
     if is_skipped:
         if next_question_dict:
             next_q = next_question_dict.get("question", "")
@@ -1680,14 +1696,22 @@ def generate_interviewer_turn(
                 "question_id": q_id,
                 "status": "SKIPPED",
                 "score": 0,
+                "marks": 0,
+                "understood": True,
+                "transcript_summary": "Candidate skipped the question.",
+                "answer_relevance": "no_answer",
+                "correctness": "no_answer",
+                "feedback_summary": "Question was skipped by candidate.",
                 "interviewer_reaction": "Understood, let's keep moving.",
-                "message": f"Understood, no problem at all. Let's move ahead to the next topic:\n\n{next_q}",
+                "message": f"Understood, no problem at all. Let's move ahead to our next topic:\n\n{next_q}",
+                "spoken_response": f"Understood, no problem at all. Let's move ahead to our next topic: {next_q}",
                 "next_question": next_q,
                 "next_question_id": next_question_dict.get("id"),
                 "is_follow_up": False,
                 "is_hint": False,
                 "completed": False,
-                "feedback_summary": "Question was skipped by candidate.",
+                "confidence": 1.0,
+                "missing_concepts": q_exp,
             }
         else:
             return {
@@ -1695,18 +1719,177 @@ def generate_interviewer_turn(
                 "question_id": q_id,
                 "status": "SKIPPED",
                 "score": 0,
+                "marks": 0,
+                "understood": True,
+                "transcript_summary": "Candidate skipped the question.",
+                "answer_relevance": "no_answer",
+                "correctness": "no_answer",
+                "feedback_summary": "Question was skipped by candidate.",
                 "interviewer_reaction": "Understood.",
                 "message": "Understood. That concludes all our interview questions for today! I am compiling your final assessment now.",
+                "spoken_response": "Understood. That concludes all our interview questions for today! I am compiling your final assessment now.",
                 "next_question": None,
                 "next_question_id": None,
                 "is_follow_up": False,
                 "is_hint": False,
                 "completed": True,
-                "feedback_summary": "Question was skipped by candidate.",
+                "confidence": 1.0,
+                "missing_concepts": q_exp,
             }
 
-    # 2. Evaluate current answer
-    eval_res = evaluate_single_question(
+    # 2. Build Bounded Conversation Memory
+    hist_text = ""
+    if conversation_history:
+        for idx, h in enumerate(conversation_history[-4:]):
+            hist_text += (
+                f"\n--- Turn {idx + 1} ---\n"
+                f"Question Asked: {h.get('question')}\n"
+                f"Candidate Transcript: {h.get('candidate_transcript') or h.get('candidate_answer')}\n"
+                f"AI Interviewer Response: {h.get('interviewer_response') or h.get('message')}\n"
+                f"Evaluated Score: {h.get('score')}/100\n"
+            )
+    if not hist_text:
+        hist_text = "None (This is the candidate's first answered question)."
+
+    # 3. Construct Authoritative Interviewer System Prompt
+    system_prompt = (
+        f"You are INTERVISTA, a professional human-like technical interviewer conducting a realistic, adaptive technical interview for {company}'s {role} position ({difficulty} difficulty).\n\n"
+        "Your primary responsibility is to conduct a realistic, adaptive interview based on the candidate's actual answers.\n\n"
+        "Listen carefully to each answer. Understand its meaning, evaluate its relevance and correctness, and respond specifically to the information provided.\n\n"
+        "Never invent an answer the candidate did not give. Never assume the candidate mentioned something that is absent from the transcript. Never claim that you heard or understood speech that was not successfully transcribed.\n\n"
+        "Acknowledge correct answers naturally. Ask precise follow-up questions when the candidate's answer is incomplete. Politely correct misconceptions when appropriate. If an answer is vague, ask for clarification. If an answer is incorrect, explain the issue briefly and continue constructively.\n\n"
+        "Do not ask unrelated questions or repeat questions unnecessarily.\n\n"
+        "Adapt question difficulty based on demonstrated knowledge while respecting the selected interview level and interview plan.\n\n"
+        "Ask only one main question at a time. Keep spoken responses concise and natural (2-3 sentences max).\n\n"
+        "Distinguish between technical correctness, completeness, clarity, and relevance.\n\n"
+        "Do not award full marks merely because the candidate used technical terminology. Evaluate the actual explanation.\n\n"
+        "If the candidate says 'I don't know' or has no idea, acknowledge that honestly and provide an encouraging transition forward.\n\n"
+        "If the candidate gives an answer that is completely off-topic (e.g. sports, movies, weather), politely note that and refocus on the technical question.\n\n"
+        "CRITICAL: Return ONLY a valid JSON object strictly matching this schema:\n"
+        "{\n"
+        '  "understood": true,\n'
+        '  "transcript_summary": "Concise summary of what the candidate actually stated",\n'
+        '  "answer_relevance": "relevant" | "partially_relevant" | "off_topic" | "no_answer",\n'
+        '  "correctness": "correct" | "mostly_correct" | "partially_correct" | "incorrect" | "no_answer",\n'
+        '  "feedback": "Concise technical evaluation of candidate explanation",\n'
+        '  "missing_concepts": ["concept1", "concept2"],\n'
+        '  "next_action": "next_question" | "follow_up" | "clarify" | "wrap_up",\n'
+        '  "next_question": "The specific question text to ask next (either a targeted follow-up OR the next scheduled question)",\n'
+        '  "spoken_response": "Conversational reply from interviewer addressing candidate specifically and introducing next question/follow-up",\n'
+        '  "score": 0-100,\n'
+        '  "confidence": 0.95\n'
+        "}"
+    )
+
+    next_q_plan = next_question_dict.get("question", "") if next_question_dict else "None (Final question reached)"
+    resume_part = f"CANDIDATE RESUME HIGHLIGHTS:\n{resume_context}\n" if resume_context else ""
+    code_part = f"CODE IMPLEMENTATION:\n{code_submission}\n" if code_submission else ""
+    test_part = f"AUTOMATED TEST RESULTS:\n{test_results}\n" if test_results else ""
+
+    user_prompt = (
+        f"INTERVIEW DOMAIN & LEVEL: {domain} ({interview_type}) | Level: {difficulty}\n"
+        f"TARGET ROLE: {role} at {company}\n"
+        f"{resume_part}"
+        f"\nCONVERSATION MEMORY (Prior Turns):\n{hist_text}\n"
+        f"\nCURRENT QUESTION (ID {q_id}):\n{q_text}\n"
+        f"EXPECTED CONCEPTS / BENCHMARK:\n{q_exp}\n"
+        f"\nCANDIDATE ACTUAL ANSWER (Verbatim Spoken/Written Transcript):\n\"{cleaned_ans}\"\n"
+        f"{code_part}"
+        f"{test_part}"
+        f"\nTURN COUNT ON THIS QUESTION: {turn_count_on_question} of 2 (Candidate cannot be kept on this question past turn 2)\n"
+        f"NEXT SCHEDULED QUESTION IN PLAN:\n{next_q_plan}\n"
+    )
+
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
+    ]
+
+    # 4. Call Live LLM API (Groq -> Gemini fallback)
+    content, parsed, err = call_chat_llm(messages, response_json=True, temperature=0.25)
+
+    if parsed and isinstance(parsed, dict) and "spoken_response" in parsed:
+        raw_score = parsed.get("score", 70)
+        score = int(raw_score * 10) if (isinstance(raw_score, (int, float)) and 0 < raw_score <= 10) else int(raw_score or 0)
+        score = max(0, min(100, score))
+
+        relevance = parsed.get("answer_relevance", "relevant")
+        correctness = parsed.get("correctness", "mostly_correct")
+        if relevance in ("off_topic", "no_answer") or correctness == "no_answer":
+            score = 0
+
+        next_act = str(parsed.get("next_action", "next_question")).lower()
+        spoken = str(parsed.get("spoken_response") or "").strip()
+        feedback = str(parsed.get("feedback") or "").strip()
+
+        # Enforce Progression Rule: Max 1 follow-up turn per question
+        if turn_count_on_question >= 2 and next_act in ("follow_up", "clarify"):
+            next_act = "next_question"
+
+        if next_act in ("follow_up", "clarify") and turn_count_on_question == 1 and next_question_dict:
+            is_follow_up = True
+            target_next_q = parsed.get("next_question") or spoken
+            target_next_id = q_id
+            completed = False
+            speech_msg = spoken
+        else:
+            is_follow_up = False
+            if next_question_dict:
+                target_next_q = next_question_dict.get("question", "")
+                target_next_id = next_question_dict.get("id")
+                completed = False
+                if target_next_q and target_next_q not in spoken:
+                    speech_msg = f"{spoken}\n\nLet's move on to our next question:\n{target_next_q}"
+                else:
+                    speech_msg = spoken
+            else:
+                target_next_q = None
+                target_next_id = None
+                completed = True
+                speech_msg = f"{spoken}\n\nThank you for sharing your technical thought process! That concludes our interview questions today. I am compiling your granular assessment report now."
+
+        status_str = "CORRECT" if score >= 70 else "PARTIAL" if score >= 35 else "INCORRECT" if score > 0 else "NO_ANSWER" if is_skipped or relevance == "no_answer" else "IRRELEVANT"
+
+        return {
+            "success": True,
+            "question_id": q_id,
+            "status": status_str,
+            "score": score,
+            "marks": score,
+            "understood": parsed.get("understood", True),
+            "transcript_summary": parsed.get("transcript_summary", ""),
+            "answer_relevance": relevance,
+            "correctness": correctness,
+            "missing_concepts": parsed.get("missing_concepts", []),
+            "feedback_summary": feedback or spoken,
+            "interviewer_reaction": spoken,
+            "message": speech_msg,
+            "spoken_response": speech_msg,
+            "next_question": target_next_q,
+            "next_question_id": target_next_id,
+            "is_follow_up": is_follow_up,
+            "is_hint": False,
+            "completed": completed,
+            "confidence": float(parsed.get("confidence", 0.95)),
+            "technical_score": score,
+            "communication_score": 90 if score >= 60 else 75,
+            "evaluation": {
+                "score": score,
+                "relevance": 95 if relevance == "relevant" else 50 if relevance == "partially_relevant" else 0,
+                "technical_accuracy": score,
+                "completeness": score,
+                "communication_clarity": 85,
+                "technical_depth": score,
+                "feedback": feedback,
+                "missing_concepts": parsed.get("missing_concepts", []),
+                "strengths": [parsed.get("transcript_summary", "Demonstrated clear technical intuition")] if score >= 60 else [],
+                "weaknesses": parsed.get("missing_concepts", []),
+            },
+        }
+
+    # 5. Safe Fallback if LLM API is unreachable / timed out
+    print(f"[generate_interviewer_turn] LLM API call fallback: {err}")
+    local_eval = evaluate_single_question(
         question_id=q_id,
         question=q_text,
         answer=cleaned_ans + (f"\n[Code Implementation]:\n{code_submission}" if code_submission else ""),
@@ -1716,64 +1899,61 @@ def generate_interviewer_turn(
         domain=q_domain,
         expected_key_points=q_exp,
     )
-
-    score = eval_res.get("score", 75)
-    identified = eval_res.get("identified_keywords", [])
-    missing = eval_res.get("missing_concepts", [])
-    status = eval_res.get("status", "CORRECT")
-
-    # 3. Always Advance to Next Question (Never trap candidate on same question)
-    if score >= 75:
-        reaction = "Excellent explanation! You clearly articulated the core principles and trade-offs."
-        if identified:
-            reaction = f"Great insights on {identified[0]}. You clearly articulated the core design and trade-offs."
-    elif score >= 50:
-        reaction = "Solid breakdown. You covered the foundational requirements well."
-    else:
-        reaction = "Good attempt. In a production environment, considering edge-case resilience and scalability is key."
+    score = local_eval.get("score", 70)
+    status_str = local_eval.get("status", "CORRECT")
 
     if next_question_dict:
         next_q = next_question_dict.get("question", "")
-        speech = f"{reaction}\n\nLet's move on to our next question:\n{next_q}"
+        speech = f"Thank you for that explanation. Let's move on to our next question:\n\n{next_q}"
         return {
             "success": True,
             "question_id": q_id,
-            "status": status,
+            "status": status_str,
             "score": score,
             "marks": score,
-            "evaluation": eval_res,
-            "identified_keywords": identified,
-            "missing_concepts": missing,
-            "interviewer_reaction": reaction,
+            "understood": True,
+            "transcript_summary": cleaned_ans[:100] + "...",
+            "answer_relevance": "relevant",
+            "correctness": "mostly_correct" if score >= 60 else "partially_correct",
+            "missing_concepts": local_eval.get("missing_concepts", []),
+            "feedback_summary": local_eval.get("feedback", "Answer evaluated."),
+            "interviewer_reaction": "Answer received and recorded.",
             "message": speech,
+            "spoken_response": speech,
             "next_question": next_q,
             "next_question_id": next_question_dict.get("id"),
             "is_follow_up": False,
             "is_hint": False,
             "completed": False,
-            "feedback_summary": eval_res.get("feedback", reaction),
-            "technical_score": eval_res.get("technical_accuracy", 80),
-            "communication_score": eval_res.get("communication_clarity", 80),
+            "confidence": 0.85,
+            "technical_score": score,
+            "communication_score": 80,
+            "evaluation": local_eval,
         }
     else:
-        speech = f"{reaction}\n\nThank you for sharing your technical thought process! That concludes our interview questions today. I am compiling your granular assessment report now."
+        speech = "Thank you for sharing your technical approach! That concludes all our interview questions today. Compiling your comprehensive scorecard now."
         return {
             "success": True,
             "question_id": q_id,
-            "status": status,
+            "status": status_str,
             "score": score,
             "marks": score,
-            "evaluation": eval_res,
-            "identified_keywords": identified,
-            "missing_concepts": missing,
-            "interviewer_reaction": reaction,
+            "understood": True,
+            "transcript_summary": cleaned_ans[:100] + "...",
+            "answer_relevance": "relevant",
+            "correctness": "mostly_correct" if score >= 60 else "partially_correct",
+            "missing_concepts": local_eval.get("missing_concepts", []),
+            "feedback_summary": local_eval.get("feedback", "Answer evaluated."),
+            "interviewer_reaction": "Answer received and recorded.",
             "message": speech,
+            "spoken_response": speech,
             "next_question": None,
             "next_question_id": None,
             "is_follow_up": False,
             "is_hint": False,
             "completed": True,
-            "feedback_summary": eval_res.get("feedback", reaction),
-            "technical_score": eval_res.get("technical_accuracy", 80),
-            "communication_score": eval_res.get("communication_clarity", 80),
+            "confidence": 0.85,
+            "technical_score": score,
+            "communication_score": 80,
+            "evaluation": local_eval,
         }

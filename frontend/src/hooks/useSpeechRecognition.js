@@ -13,6 +13,7 @@ export function useSpeechRecognition({
   selectedMicId = null,
   sessionId = null,
   questionId = null,
+  isInterviewerSpeaking = false,
   onAudioData = null,
 } = {}) {
   // ─── State Machine ─────────────────────────────────────────────────────────
@@ -50,11 +51,45 @@ export function useSpeechRecognition({
   const isIntentionalRecordingRef = useRef(false);
   const isRecognitionStartingRef = useRef(false);
   const isPausedBySystemRef = useRef(false);
+  const isInterviewerSpeakingRef = useRef(isInterviewerSpeaking);
   const consecutiveErrorsRef = useRef(0);
   const activeLangRef = useRef(initialLanguage || 'en-IN');
   const lastSpeechTimeRef = useRef(0);
   const candidateHadVoiceRef = useRef(false);
   const isBackgroundTranscribingRef = useRef(false);
+
+  // Hardware acoustic shield: mute mic tracks & stop recognition when AI is speaking;
+  // fully restart mic + recognition when AI finishes speaking.
+  useEffect(() => {
+    isInterviewerSpeakingRef.current = isInterviewerSpeaking;
+    if (isInterviewerSpeaking) {
+      // ── Mute everything while interviewer talks ──
+      isPausedBySystemRef.current = true;
+      if (streamRef.current) {
+        streamRef.current.getAudioTracks().forEach(t => { t.enabled = false; });
+      }
+      if (recognitionRef.current) {
+        try {
+          recognitionRef.current.onstart = null;
+          recognitionRef.current.onresult = null;
+          recognitionRef.current.onerror = null;
+          recognitionRef.current.onend = null;
+          recognitionRef.current.stop();
+        } catch (_) {}
+        recognitionRef.current = null;
+      }
+      isRecognitionStartingRef.current = false;
+      isIntentionalRecordingRef.current = false;
+      setIsListening(false);
+      setMicState('paused');
+    } else {
+      // ── Interviewer finished → re-enable tracks & clear paused flag ──
+      isPausedBySystemRef.current = false;
+      if (streamRef.current) {
+        streamRef.current.getAudioTracks().forEach(t => { t.enabled = true; });
+      }
+    }
+  }, [isInterviewerSpeaking]);
 
   useEffect(() => {
     activeLangRef.current = selectedLanguage;
@@ -218,14 +253,14 @@ export function useSpeechRecognition({
         const vol = Math.min(100, Math.round((avg / 128) * 100));
         setVolume(vol);
 
-        if (vol > 14 && isIntentionalRecordingRef.current && !isPausedBySystemRef.current) {
+        if (vol > 14 && isIntentionalRecordingRef.current && !isPausedBySystemRef.current && !isInterviewerSpeakingRef.current) {
           setIsCandidateSpeaking(true);
           lastSpeechTimeRef.current = Date.now();
           candidateHadVoiceRef.current = true;
-        } else if (vol <= 8) {
+        } else if (vol <= 8 || isInterviewerSpeakingRef.current) {
           setIsCandidateSpeaking(false);
           // If candidate was speaking and has now paused for 1.8 seconds, check fallback
-          if (candidateHadVoiceRef.current && (Date.now() - lastSpeechTimeRef.current > 1800)) {
+          if (candidateHadVoiceRef.current && (Date.now() - lastSpeechTimeRef.current > 1800) && !isInterviewerSpeakingRef.current) {
             candidateHadVoiceRef.current = false;
             attemptBackgroundTranscribe();
           }
@@ -266,6 +301,10 @@ export function useSpeechRecognition({
 
       recorder.ondataavailable = (event) => {
         if (event.data && event.data.size > 0) {
+          // Ignore audio chunks captured while interviewer is speaking to prevent Whisper self-echo
+          if (isInterviewerSpeakingRef.current || isPausedBySystemRef.current) {
+            return;
+          }
           audioChunksRef.current.push(event.data);
           setHasRecordedAudio(true);
         }
@@ -280,7 +319,9 @@ export function useSpeechRecognition({
 
   // ─── Start / Restart Browser Speech Recognition Engine ────────────────────
   const startSpeechEngine = useCallback(() => {
-    if (isPausedBySystemRef.current) return false;
+    if (isPausedBySystemRef.current || isInterviewerSpeakingRef.current) {
+      return false;
+    }
 
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) {
@@ -321,6 +362,10 @@ export function useSpeechRecognition({
       };
 
       recognition.onresult = (event) => {
+        // Echo Shield: Discard any speech event captured while AI interviewer is speaking out loud
+        if (isInterviewerSpeakingRef.current || isPausedBySystemRef.current) {
+          return;
+        }
         consecutiveErrorsRef.current = 0;
         let newlyFinalized = '';
         let currentInterim = '';
@@ -420,6 +465,11 @@ export function useSpeechRecognition({
 
   // ─── Start Recording (Action) ──────────────────────────────────────────────
   const startRecording = useCallback(async () => {
+    // If AI interviewer is currently speaking out loud, defer mic activation until speech completes
+    if (isInterviewerSpeakingRef.current) {
+      isPausedBySystemRef.current = true;
+      return;
+    }
     isPausedBySystemRef.current = false;
     setError(null);
     setMicState('listening');
@@ -473,6 +523,10 @@ export function useSpeechRecognition({
       clearTimeout(restartTimeoutRef.current);
       restartTimeoutRef.current = null;
     }
+    // Mute hardware microphone tracks to prevent acoustic feedback
+    if (streamRef.current) {
+      streamRef.current.getAudioTracks().forEach(t => { t.enabled = false; });
+    }
     if (recognitionRef.current) {
       try {
         recognitionRef.current.onstart = null;
@@ -483,6 +537,9 @@ export function useSpeechRecognition({
       } catch (_) {}
       recognitionRef.current = null;
     }
+    isRecognitionStartingRef.current = false;
+    interimRef.current = '';
+    setInterimTranscript('');
     setIsListening(false);
     setMicState('paused');
   }, []);

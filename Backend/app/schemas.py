@@ -439,6 +439,12 @@ class InterviewTurnResponse(BaseModel):
     marks: Optional[int] = None
     status: Optional[str] = None
     evaluation: Optional[dict] = None
+    understood: Optional[bool] = True
+    transcript_summary: Optional[str] = None
+    answer_relevance: Optional[str] = None
+    correctness: Optional[str] = None
+    missing_concepts: Optional[List[str]] = None
+    confidence: Optional[float] = None
 
 
 class TranscribeAudioResponse(BaseModel):

@@ -1186,9 +1186,27 @@ def interview_turn_interaction(
         role=role,
         interviewer_name=interviewer_name,
         next_question_dict=next_q,
+        conversation_history=session.setdefault("conversation_history", []),
+        difficulty=session.get("difficulty", "Medium"),
+        interview_type=session.get("interview_type", "Technical Interview"),
+        domain=session.get("domain", "General Software Engineering"),
+        resume_context=session.get("resume_context"),
+        test_results=payload.test_results,
     )
 
     status = "SKIPPED" if payload.skip_question else turn_data.get("status", "SUBMITTED")
+
+    # Persist in session conversation history
+    session.setdefault("conversation_history", []).append({
+        "turn": len(session.get("conversation_history", [])) + 1,
+        "question_id": norm_qid,
+        "question": current_q.get("question"),
+        "candidate_transcript": cleaned_ans,
+        "interviewer_response": turn_data["message"],
+        "score": turn_data.get("score"),
+        "status": status,
+        "is_follow_up": turn_data.get("is_follow_up", False),
+    })
 
     # Persist candidate answer in database
     existing = db.query(models.InterviewAnswer).filter(
@@ -1273,6 +1291,12 @@ def interview_turn_interaction(
         marks=turn_data.get("marks", turn_data.get("score")),
         status=turn_data.get("status", status),
         evaluation=turn_data.get("evaluation"),
+        understood=turn_data.get("understood", True),
+        transcript_summary=turn_data.get("transcript_summary"),
+        answer_relevance=turn_data.get("answer_relevance"),
+        correctness=turn_data.get("correctness"),
+        missing_concepts=turn_data.get("missing_concepts"),
+        confidence=turn_data.get("confidence"),
     )
 
 

@@ -7,17 +7,29 @@ export const PRODUCTION_API_URL = "https://intervista-ai.onrender.com";
 export const LOCAL_API_URL = "http://127.0.0.1:8001";
 
 export function getApiBaseUrl() {
-  if (typeof import.meta !== "undefined" && import.meta.env && import.meta.env.VITE_API_URL) {
-    return import.meta.env.VITE_API_URL.replace(/\/+$/, "");
-  }
   if (
     typeof window !== "undefined" &&
     (window.location.hostname === "localhost" ||
       window.location.hostname === "127.0.0.1" ||
       window.location.hostname === "0.0.0.0")
   ) {
+    if (
+      typeof import.meta !== "undefined" &&
+      import.meta.env &&
+      import.meta.env.VITE_API_URL &&
+      (import.meta.env.VITE_API_URL.includes("localhost") ||
+        import.meta.env.VITE_API_URL.includes("127.0.0.1") ||
+        import.meta.env.VITE_API_URL.includes("0.0.0.0"))
+    ) {
+      return import.meta.env.VITE_API_URL.replace(/\/+$/, "");
+    }
     return LOCAL_API_URL;
   }
+
+  if (typeof import.meta !== "undefined" && import.meta.env && import.meta.env.VITE_API_URL) {
+    return import.meta.env.VITE_API_URL.replace(/\/+$/, "");
+  }
+
   return PRODUCTION_API_URL;
 }
 

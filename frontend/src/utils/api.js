@@ -79,7 +79,20 @@ export {
   fetchInterviewById,
 };
 
-const BASE_URL = getApiBaseUrl();
+export function getBaseUrl() {
+  return getApiBaseUrl();
+}
+
+export function getCandidateBases() {
+  const primary = getApiBaseUrl();
+  const bases = [primary];
+  for (const alt of ['http://127.0.0.1:8001', 'http://localhost:8001', 'https://intervista-ai.onrender.com']) {
+    if (!bases.includes(alt)) bases.push(alt);
+  }
+  return bases;
+}
+
+export const BASE_URL = getApiBaseUrl();
 
 // Token sync across intervista_jwt and intervista-token
 export function getToken() {
@@ -119,18 +132,41 @@ async function request(method, path, body = null) {
   if (body) options.body = JSON.stringify(body);
 
   const cleanPath = path.startsWith('/') ? path : `/${path}`;
-  const res = await fetch(`${BASE_URL}${cleanPath}`, options);
-  const data = await res.json().catch(() => ({}));
+  const candidateBases = getCandidateBases();
+  let lastErr = null;
 
-  if (!res.ok) {
-    const errorMsg = data.detail || data.error || `Request failed (${res.status})`;
-    const err = new Error(errorMsg);
-    err.status = res.status;
-    err.isHttpError = true;
-    err.data = data;
-    throw err;
+  for (let i = 0; i < candidateBases.length; i++) {
+    const base = candidateBases[i];
+    try {
+      const res = await fetch(`${base}${cleanPath}`, options);
+      const data = await res.json().catch(() => ({}));
+
+      if (res.ok) {
+        return data;
+      }
+
+      // If 404, 502, or 503 and another base is available, try next base URL
+      if ((res.status === 404 || res.status === 502 || res.status === 503) && i < candidateBases.length - 1) {
+        continue;
+      }
+
+      const errorMsg = data.detail || data.error || `Request failed (${res.status})`;
+      const err = new Error(errorMsg);
+      err.status = res.status;
+      err.isHttpError = true;
+      err.data = data;
+      throw err;
+    } catch (err) {
+      lastErr = err;
+      if (err.isHttpError && err.status !== 404 && err.status !== 502 && err.status !== 503) {
+        throw err;
+      }
+      if (i < candidateBases.length - 1) continue;
+      throw err;
+    }
   }
-  return data;
+
+  throw lastErr || new Error('Request failed across available backend endpoints');
 }
 
 // ─── AUTHENTICATION ────────────────────────────────────────────────────────────
@@ -461,30 +497,33 @@ export async function apiSendMessage({ sessionId, content, latencyMs, audioDurat
 }
 
 export async function apiTranscribeAudio({ audioBlob, language = 'en-US', sessionId = null, questionId = null }) {
-  try {
-    const formData = new FormData();
-    formData.append('file', audioBlob, 'candidate_answer.webm');
-    formData.append('language', language);
-    if (sessionId) formData.append('session_id', sessionId);
-    if (questionId) formData.append('question_id', String(questionId));
+  const candidateBases = getCandidateBases();
+  const token = getToken();
+  const headers = token ? { Authorization: `Bearer ${token}` } : {};
 
-    const token = getToken();
-    const headers = token ? { Authorization: `Bearer ${token}` } : {};
+  for (const base of candidateBases) {
+    try {
+      const formData = new FormData();
+      formData.append('file', audioBlob, 'candidate_answer.webm');
+      formData.append('language', language);
+      if (sessionId) formData.append('session_id', sessionId);
+      if (questionId) formData.append('question_id', String(questionId));
 
-    const res = await fetch(`${BASE_URL}/api/interviews/transcribe`, {
-      method: 'POST',
-      headers,
-      body: formData,
-    });
-    const data = await res.json().catch(() => ({}));
-    if (res.ok && data?.success && data?.transcript) {
-      return { success: true, transcript: data.transcript, provider: data.provider };
+      const res = await fetch(`${base}/api/interviews/transcribe`, {
+        method: 'POST',
+        headers,
+        body: formData,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data?.success && data?.transcript) {
+        return { success: true, transcript: data.transcript, provider: data.provider };
+      }
+      if (res.status === 404) continue;
+    } catch (_) {
+      // try next base
     }
-    return { success: false, transcript: '', message: data?.message || 'Server transcription unavailable' };
-  } catch (err) {
-    console.warn('[apiTranscribeAudio] Server transcription call failed:', err.message);
-    return { success: false, transcript: '', message: err.message };
   }
+  return { success: false, transcript: '', message: 'Server transcription unavailable' };
 }
 
 export async function apiRunInterviewCode({ questionId, code, language = 'javascript', testCases = [] }) {
@@ -1284,70 +1323,446 @@ export async function apiGetInterviewSchema() {
 
 // ─── RESUME ATS CALCULATOR & PARSER ──────────────────────────────────────────
 
+const LOCAL_ATS_HISTORY_KEY = 'intervista_ats_history';
+
+export function getLocalATSHistory() {
+  try {
+    const raw = localStorage.getItem(LOCAL_ATS_HISTORY_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+export function saveLocalATSReport(report) {
+  if (!report) return;
+  try {
+    const existing = getLocalATSHistory();
+    const cleanId = report.id || report.record_id || `ats_${Date.now()}`;
+    const entry = {
+      id: cleanId,
+      created_at: report.created_at || new Date().toISOString(),
+      target_role: report.target_role || 'Software Engineer',
+      ats_score: report.overall_score ?? report.ats_score ?? 75,
+      overall_score: report.overall_score ?? report.ats_score ?? 75,
+      verdict: report.verdict || 'Evaluated',
+      matched_skills: Array.isArray(report.keywords?.matched) ? report.keywords.matched.join(', ') : (report.matched_skills || ''),
+      missing_skills: Array.isArray(report.keywords?.missing) ? report.keywords.missing.join(', ') : (report.missing_skills || ''),
+      file_name: report.file_name || 'Resume.pdf',
+      is_job_specific: Boolean(report.is_job_specific),
+      report,
+    };
+    const filtered = existing.filter(e => String(e.id) !== String(cleanId));
+    localStorage.setItem(LOCAL_ATS_HISTORY_KEY, JSON.stringify([entry, ...filtered].slice(0, 50)));
+  } catch (_) {}
+}
+
+const TECH_CATALOG = [
+  'python', 'javascript', 'typescript', 'java', 'c++', 'c#', 'go', 'golang', 'rust', 'php', 'ruby', 'swift', 'kotlin', 'sql', 'bash',
+  'react', 'react.js', 'next.js', 'vue', 'vue.js', 'angular', 'svelte', 'html', 'html5', 'css', 'css3', 'tailwind', 'tailwindcss', 'redux', 'zustand', 'graphql', 'webpack', 'vite',
+  'node.js', 'nodejs', 'express', 'express.js', 'fastapi', 'django', 'flask', 'spring', 'spring boot', 'rest api', 'restful apis', 'grpc', 'microservices', 'websockets',
+  'postgresql', 'postgres', 'mysql', 'mongodb', 'sqlite', 'redis', 'elasticsearch', 'dynamodb', 'firebase', 'supabase', 'sqlalchemy', 'prisma',
+  'aws', 'amazon web services', 'azure', 'google cloud', 'gcp', 'docker', 'kubernetes', 'k8s', 'terraform', 'ci/cd', 'github actions', 'jenkins', 'linux',
+  'system design', 'distributed systems', 'concurrency', 'multithreading', 'event-driven architecture', 'kafka', 'rabbitmq',
+  'machine learning', 'deep learning', 'nlp', 'computer vision', 'tensorflow', 'pytorch', 'scikit-learn', 'pandas', 'numpy', 'llm', 'rag',
+  'unit testing', 'integration testing', 'jest', 'pytest', 'cypress', 'git', 'github', 'agile', 'scrum'
+];
+
+const POWER_ACTION_VERBS = [
+  'architected', 'spearheaded', 'engineered', 'orchestrated', 'optimized', 'streamlined',
+  'scaled', 'pioneered', 'implemented', 'deployed', 'refactored', 'automated', 'designed',
+  'accelerated', 'formulated', 'revamped', 'eliminated', 'delivered', 'championed', 'maximized'
+];
+
+const WEAK_VERBS_MAP = {
+  'worked on': 'Engineered / Spearheaded',
+  'helped with': 'Collaborated on / Drove',
+  'handled': 'Managed / Orchestrated',
+  'did': 'Executed / Formulated',
+  'was responsible for': 'Owned / Directed',
+  'assisted': 'Contributed to / Partnered on',
+  'took care of': 'Maintained / Administered',
+};
+
+export function computeClientSideATSReport({ resume_text, job_description = null, target_role = 'Software Engineer', file_name = 'Resume.pdf' }) {
+  const text = (resume_text || '').trim();
+  const lower = text.toLowerCase();
+  const isJobSpecific = Boolean(job_description && job_description.trim().length >= 10);
+
+  // 1. Keyword extraction
+  const foundSkills = [];
+  for (const skill of TECH_CATALOG) {
+    const escaped = skill.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&');
+    const regex = new RegExp(`\\b${escaped}\\b`, 'i');
+    if (regex.test(lower)) {
+      foundSkills.push(skill);
+    }
+  }
+
+  let matchedSkills = [...foundSkills];
+  let missingSkills = [];
+  let matchPercentage = 0;
+  let totalJobKeywords = 0;
+
+  if (isJobSpecific) {
+    const jdLower = job_description.toLowerCase();
+    const jdSkills = [];
+    for (const skill of TECH_CATALOG) {
+      const escaped = skill.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&');
+      if (new RegExp(`\\b${escaped}\\b`, 'i').test(jdLower)) {
+        jdSkills.push(skill);
+      }
+    }
+    const extraJd = (job_description.match(/\b[A-Z]{2,6}\b/g) || [])
+      .map(s => s.toLowerCase())
+      .filter(s => s.length >= 3 && !['the', 'and', 'for', 'with', 'from'].includes(s));
+    for (const exp of extraJd) {
+      if (!jdSkills.includes(exp)) jdSkills.push(exp);
+    }
+    totalJobKeywords = jdSkills.length;
+    matchedSkills = jdSkills.filter(s => foundSkills.includes(s) || lower.includes(s));
+    missingSkills = jdSkills.filter(s => !matchedSkills.includes(s));
+    matchPercentage = totalJobKeywords > 0 ? Math.round((matchedSkills.length / totalJobKeywords) * 100) : 75;
+  } else {
+    matchPercentage = Math.min(100, Math.round((matchedSkills.length / 15) * 100));
+    const allExpected = ['docker', 'kubernetes', 'ci/cd', 'system design', 'redis', 'typescript', 'unit testing'];
+    missingSkills = allExpected.filter(s => !foundSkills.includes(s)).slice(0, 5);
+  }
+
+  // 2. Sections check
+  const hasEmail = /[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+/.test(text);
+  const hasPhone = /(\+?\d{1,3}[-.\s]?)?(\(?\d{3}\)?[-.\s]?)?\d{3}[-.\s]?\d{4}/.test(text);
+  const hasLinks = /(linkedin\.com|github\.com|portfolio|http[s]?:\/\/)/i.test(lower);
+  const hasSummary = /\b(professional summary|summary|about me|executive summary|profile)\b/i.test(lower);
+  const hasExperience = /\b(experience|work experience|employment history|professional experience|internships)\b/i.test(lower);
+  const hasEducation = /\b(education|academic background|degrees|university|college|bachelor|master|phd|b\.tech|m\.tech|b\.s|m\.s)\b/i.test(lower);
+  const hasSkillsSec = /\b(technical skills|skills|technologies|core competencies|tools & technologies)\b/i.test(lower);
+  const hasProjects = /\b(projects|personal projects|key projects|academic projects)\b/i.test(lower);
+  const hasCerts = /\b(certifications|certificates|licenses|accreditations)\b/i.test(lower);
+
+  const sections = {
+    contact_info: { present: hasEmail || hasPhone, score: (hasEmail ? 1 : 0) + (hasPhone ? 1 : 0) + (hasLinks ? 1 : 0), max: 3, has_links: hasLinks },
+    professional_summary: { present: hasSummary, score: hasSummary ? 3 : 0, max: 3 },
+    work_experience: { present: hasExperience, score: hasExperience ? 4 : 0, max: 4 },
+    education: { present: hasEducation, score: hasEducation ? 3 : 0, max: 3 },
+    technical_skills: { present: hasSkillsSec, score: hasSkillsSec ? 3 : 0, max: 3 },
+    projects: { present: hasProjects, score: hasProjects ? 2 : 0, max: 2 },
+    certifications: { present: hasCerts, score: hasCerts ? 2 : 0, max: 2 },
+  };
+
+  // 3. Formatting and Metrics
+  const words = text.split(/\s+/).filter(Boolean);
+  const wordCount = words.length;
+  const powerVerbsFound = POWER_ACTION_VERBS.filter(v => new RegExp(`\\b${v}\\b`, 'i').test(lower));
+  const weakVerbsFound = Object.keys(WEAK_VERBS_MAP).filter(phrase => lower.includes(phrase)).map(phrase => ({
+    weak_phrase: phrase,
+    suggested_replacement: WEAK_VERBS_MAP[phrase],
+  }));
+
+  const metricMatches = (text.match(/(\d+[\d,.]*|\$\d+[\d,.]*|\d+k|\d+m|\d+x|\d+%)(\s*(users|requests|req\/s|latency|reduction|increase|revenue|growth|team|engineers|ms|queries))?/gi) || [])
+    .filter(m => /\d/.test(m));
+  const quantifiedMetricsCount = Math.min(10, metricMatches.length);
+
+  // 4. Breakdown Scoring (Total 100)
+  let techScore = 0;
+  if (isJobSpecific) {
+    techScore = Math.round((matchPercentage / 100) * 30);
+  } else {
+    techScore = Math.min(30, Math.round(matchedSkills.length * 2.5));
+  }
+  techScore = Math.max(2, Math.min(30, techScore));
+
+  let expScore = 5;
+  if (hasExperience) expScore += 5;
+  expScore += Math.min(10, quantifiedMetricsCount * 2);
+  expScore += Math.min(5, powerVerbsFound.length);
+  expScore = Math.min(25, expScore);
+
+  let structScore = Object.values(sections).reduce((acc, curr) => acc + (curr.score || 0), 0);
+  structScore = Math.min(20, structScore);
+
+  let qualScore = hasEducation ? 8 : 2;
+  if (hasCerts) qualScore += 4;
+  if (hasProjects) qualScore += 3;
+  qualScore = Math.min(15, qualScore);
+
+  let formatScore = 3;
+  if (wordCount >= 250 && wordCount <= 1200) formatScore += 4;
+  else if (wordCount > 150) formatScore += 2;
+  if (weakVerbsFound.length === 0) formatScore += 3;
+  else if (weakVerbsFound.length <= 2) formatScore += 1;
+  formatScore = Math.min(10, formatScore);
+
+  const overallScore = Math.min(100, Math.max(10, techScore + expScore + structScore + qualScore + formatScore));
+
+  let verdict = 'Moderate Match • Requires Keyword & Structure Alignment';
+  if (overallScore >= 85) verdict = 'Excellent ATS Optimization • Top Tier Interview Readiness';
+  else if (overallScore >= 70) verdict = 'Competitive Baseline • Target Optimization Recommended';
+  else if (overallScore < 50) verdict = 'Needs Structural Rework & Skill Quantification';
+
+  const strengths = [];
+  if (matchedSkills.length >= 4) strengths.push(`Strong competency match: Key technical terms detected (${matchedSkills.slice(0, 5).join(', ')}).`);
+  if (quantifiedMetricsCount >= 2) strengths.push(`Effective quantifiable impact: ${quantifiedMetricsCount} specific metric indicators detected in achievements.`);
+  if (powerVerbsFound.length >= 2) strengths.push(`Engaging power verbs utilized across bullets (${powerVerbsFound.slice(0, 3).join(', ')}).`);
+  if (hasLinks) strengths.push('Professional portfolio / profile link (GitHub/LinkedIn) included.');
+  if (strengths.length === 0) strengths.push('Clean digital structure that parses smoothly without decoding errors.');
+
+  const weaknesses = [];
+  if (missingSkills.length > 0) weaknesses.push(`Missing key target competencies: ${missingSkills.slice(0, 5).join(', ')}.`);
+  if (quantifiedMetricsCount < 2) weaknesses.push('Lack of quantifiable outcomes: bullets describe responsibilities rather than measurable percentage improvements or business results.');
+  if (!hasSummary) weaknesses.push('Missing Professional Summary: opening 2-3 sentence overview missing at top of document.');
+  if (weakVerbsFound.length > 0) weaknesses.push(`Passive phrasing detected ('${weakVerbsFound[0].weak_phrase}'). Replace with assertive technical verbs.`);
+
+  const recommendations = [];
+  if (missingSkills.length > 0) {
+    recommendations.push({
+      priority: 'HIGH',
+      title: 'Integrate Missing Target Competencies',
+      issue: `Target role seeks competencies (${missingSkills.slice(0, 4).join(', ')}) not explicitly evidenced in your resume text.`,
+      impact: 'ATS boolean filters and recruiter keyword searches will penalize your ranking if core requirements are omitted.',
+      suggestion: `Where truthful to your background, naturally weave terms like '${missingSkills[0]}' into your project descriptions and skills section.`,
+      evidence: `Missing: ${missingSkills.slice(0, 5).join(', ')}`,
+    });
+  }
+
+  if (quantifiedMetricsCount < 2) {
+    recommendations.push({
+      priority: 'HIGH',
+      title: 'Quantify Achievements with the STAR Formula',
+      issue: 'Your bullet points describe tasks and duties rather than measurable results or scale metrics.',
+      impact: 'Top tech companies prioritize candidates who demonstrate concrete business impact (speed, revenue, users, latency).',
+      suggestion: 'Rewrite key bullets using: [Power Verb] + [What You Built] + [Result / % metric]. Example: "Optimized queries, reducing latency by 35% across 200k daily requests."',
+      evidence: 'Few numbers, percentages, or scale metrics detected.',
+    });
+  }
+
+  if (!hasSummary) {
+    recommendations.push({
+      priority: 'MEDIUM',
+      title: 'Add a 3-Sentence Professional Summary',
+      issue: 'No dedicated executive summary or candidate profile found at the beginning of the resume.',
+      impact: 'Recruiters spend ~6 seconds on initial screen; an opening summary anchors your seniority and tech stack immediately.',
+      suggestion: 'Add a 3-line summary: "[Target Role] with X years experience in [Tech Stack]. Proven track record in [Core Strength]."',
+      evidence: 'Opening jumps directly into experience/education without summary.',
+    });
+  }
+
+  if (weakVerbsFound.length > 0) {
+    recommendations.push({
+      priority: 'LOW',
+      title: 'Upgrade Passive Phrasing to Power Verbs',
+      issue: `Found passive phrases like "${weakVerbsFound[0].weak_phrase}".`,
+      impact: 'Assertive verbs project ownership and engineering maturity.',
+      suggestion: `Replace "${weakVerbsFound[0].weak_phrase}" with "${weakVerbsFound[0].suggested_replacement}".`,
+      evidence: `Passive phrase detected: "${weakVerbsFound[0].weak_phrase}"`,
+    });
+  }
+
+  let experienceLevel = 'Mid-Level (3-5 Years)';
+  if (overallScore >= 85 || wordCount > 600) experienceLevel = 'Senior / Staff (5+ Years)';
+  else if (wordCount < 300) experienceLevel = 'Entry-Level / Junior (0-2 Years)';
+
+  return {
+    overall_score: overallScore,
+    ats_score: overallScore,
+    is_job_specific: isJobSpecific,
+    target_role,
+    file_name,
+    verdict,
+    breakdown: {
+      technical_skills: { score: techScore, max: 30 },
+      experience_impact: { score: expScore, max: 25 },
+      structure_completeness: { score: structScore, max: 20 },
+      qualifications_education: { score: qualScore, max: 15 },
+      formatting_readability: { score: formatScore, max: 10 },
+    },
+    keywords: {
+      matched: matchedSkills,
+      missing: missingSkills,
+      match_percentage: matchPercentage,
+      total_job_keywords_count: totalJobKeywords || matchedSkills.length + missingSkills.length,
+    },
+    sections,
+    formatting: {
+      word_count: wordCount,
+      estimated_reading_time_minutes: Math.max(1, Math.round(wordCount / 200)),
+      power_verbs_count: powerVerbsFound.length,
+      power_verbs_sample: powerVerbsFound.slice(0, 5),
+      weak_verbs_found: weakVerbsFound,
+      quantified_metrics_count: quantifiedMetricsCount,
+      quantified_metrics_sample: metricMatches.slice(0, 5),
+    },
+    strengths,
+    weaknesses,
+    recommendations,
+    experience_level: experienceLevel,
+    ats_compatibility_summary: `${overallScore}/100 - ${verdict}`,
+    created_at: new Date().toISOString(),
+  };
+}
+
 /**
- * Extracts text in-memory from a PDF or DOCX file using backend pypdf/python-docx.
+ * Extracts text in-memory from a PDF or DOCX file using backend pypdf/python-docx with client fallback.
  * Returns parsed text, page count, word count, or scanned/encrypted status.
  */
 export async function apiParseResumeFile(file) {
-  const formData = new FormData();
-  formData.append('file', file);
+  const candidateBases = getCandidateBases();
+  let lastErr = null;
 
-  const res = await fetch(`${BASE_URL}/api/resume/parse-file`, {
-    method: 'POST',
-    headers: { ...authHeaders() },
-    body: formData,
-  });
+  for (let i = 0; i < candidateBases.length; i++) {
+    const base = candidateBases[i];
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
 
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    const errorMsg = data.detail || data.error || `Upload failed with status ${res.status}`;
-    throw new Error(errorMsg);
+      const res = await fetch(`${base}/api/resume/parse-file`, {
+        method: 'POST',
+        headers: { ...authHeaders() },
+        body: formData,
+      });
+
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        return data;
+      }
+      if ((res.status === 404 || res.status === 502 || res.status === 503) && i < candidateBases.length - 1) {
+        continue;
+      }
+      const errorMsg = data.detail || data.error || `Upload failed with status ${res.status}`;
+      throw new Error(errorMsg);
+    } catch (err) {
+      lastErr = err;
+      if (i < candidateBases.length - 1) continue;
+    }
   }
-  return data;
+
+  // Graceful client-side text extraction fallback (for plain text / readable layers)
+  try {
+    const text = await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = (e) => resolve(e.target?.result || '');
+      reader.onerror = reject;
+      reader.readAsText(file);
+    });
+
+    if (text && text.trim().length >= 20) {
+      const clean = text.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, ' ').replace(/\s+/g, ' ').trim();
+      const words = clean.split(/\s+/).filter(Boolean);
+      if (words.length >= 10) {
+        return {
+          success: true,
+          text: clean,
+          page_count: 1,
+          word_count: words.length,
+          file_type: (file.name || 'resume').split('.').pop().toLowerCase(),
+        };
+      }
+    }
+  } catch (_) {}
+
+  throw lastErr || new Error('Upload failed. Document parser service currently unreachable.');
 }
 
 /**
  * Calculates deterministic + Groq LLM ATS scores and diagnostics.
+ * Automatically falls back to client-side 100-point rubric if server is unavailable.
  */
 export async function apiCalculateATS({ resume_text, job_description = null, target_role = 'Software Engineer', file_name = 'Resume.pdf' }) {
-  return await request('POST', '/api/resume/ats-calculate', {
-    resume_text,
-    job_description: job_description && job_description.trim() ? job_description.trim() : null,
-    target_role,
-    file_name,
-  });
+  try {
+    const report = await request('POST', '/api/resume/ats-calculate', {
+      resume_text,
+      job_description: job_description && job_description.trim() ? job_description.trim() : null,
+      target_role,
+      file_name,
+    });
+    saveLocalATSReport(report);
+    return report;
+  } catch (err) {
+    console.warn('[apiCalculateATS] backend error, executing client-side ATS rubric fallback:', err.message);
+    const fallbackReport = computeClientSideATSReport({
+      resume_text,
+      job_description,
+      target_role,
+      file_name,
+    });
+    saveLocalATSReport(fallbackReport);
+    return fallbackReport;
+  }
 }
 
 /**
  * Single-step multipart upload & ATS calculation.
  */
 export async function apiUploadAndAnalyzeResume({ file, job_description = null, target_role = 'Software Engineer' }) {
-  const formData = new FormData();
-  formData.append('file', file);
-  if (job_description && job_description.trim()) {
-    formData.append('job_description', job_description.trim());
-  }
-  formData.append('target_role', target_role);
+  const candidateBases = getCandidateBases();
+  let lastErr = null;
 
-  const res = await fetch(`${BASE_URL}/api/resume/analyze-upload`, {
-    method: 'POST',
-    headers: { ...authHeaders() },
-    body: formData,
+  for (let i = 0; i < candidateBases.length; i++) {
+    const base = candidateBases[i];
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      if (job_description && job_description.trim()) {
+        formData.append('job_description', job_description.trim());
+      }
+      formData.append('target_role', target_role);
+
+      const res = await fetch(`${base}/api/resume/analyze-upload`, {
+        method: 'POST',
+        headers: { ...authHeaders() },
+        body: formData,
+      });
+
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        if (data.report) saveLocalATSReport(data.report);
+        return data;
+      }
+      if ((res.status === 404 || res.status === 502 || res.status === 503) && i < candidateBases.length - 1) {
+        continue;
+      }
+      const errorMsg = data.detail || data.error || `Analysis failed (${res.status})`;
+      throw new Error(errorMsg);
+    } catch (err) {
+      lastErr = err;
+      if (i < candidateBases.length - 1) continue;
+    }
+  }
+
+  // Graceful fallback: parse client-side and calculate ATS
+  const parsed = await apiParseResumeFile(file);
+  const calculated = await apiCalculateATS({
+    resume_text: parsed.text,
+    job_description,
+    target_role,
+    file_name: file.name,
   });
-
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    const errorMsg = data.detail || data.error || `Analysis failed (${res.status})`;
-    throw new Error(errorMsg);
-  }
-  return data;
+  return {
+    success: true,
+    parsed,
+    report: calculated,
+  };
 }
 
 /**
- * Retrieves past ATS scans for the authenticated user.
+ * Retrieves past ATS scans for the authenticated user (merging backend + local cache).
  */
 export async function apiGetATSHistory() {
-  return await request('GET', '/api/resume/ats-history');
+  try {
+    const res = await request('GET', '/api/resume/ats-history');
+    if (res && Array.isArray(res.history)) {
+      const local = getLocalATSHistory();
+      const mergedMap = new Map();
+      res.history.forEach(item => mergedMap.set(String(item.id), item));
+      local.forEach(item => {
+        if (!mergedMap.has(String(item.id))) mergedMap.set(String(item.id), item);
+      });
+      return { history: Array.from(mergedMap.values()) };
+    }
+  } catch (err) {
+    console.warn('[apiGetATSHistory] backend unreachable, using local history cache:', err.message);
+  }
+  return { history: getLocalATSHistory() };
 }
 
 /**

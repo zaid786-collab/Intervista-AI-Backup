@@ -189,6 +189,7 @@ export default function ImmersiveInterviewRoom({
   const interviewerFinishedSpeakingAtRef = useRef(Date.now());
   const isMicMutedRef = useRef(false);
   const sessionPhaseRef = useRef(sessionPhase);
+  const isInterviewerSpeakingRef = useRef(false);
   const textareaRef = useRef(null);
   const dragOffsetRef = useRef({ x: 0, y: 0 });
   const pipContainerRef = useRef(null);
@@ -196,12 +197,17 @@ export default function ImmersiveInterviewRoom({
   const proctorRef = useRef(null);
   const finalTranscriptRef = useRef('');
 
+  useEffect(() => {
+    isInterviewerSpeakingRef.current = isInterviewerSpeaking;
+  }, [isInterviewerSpeaking]);
+
   // ─── Production-Grade Speech Recognition & Microphone Hook ─────────────────
   const speech = useSpeechRecognition({
     initialLanguage: selectedSpeechLang,
     selectedMicId: config?.selectedMicId,
     sessionId: sessionId,
     questionId: questionIndex + 1,
+    isInterviewerSpeaking: isInterviewerSpeaking,
     onAudioData: (analyser) => {
       trackerRef.current?.startAudio(analyser);
     },
@@ -407,10 +413,10 @@ export default function ImmersiveInterviewRoom({
 
   // Live synchronization of candidate answer with real-time speech recognition
   useEffect(() => {
-    if (speech.transcript !== undefined) {
+    if (speech.transcript !== undefined && !isInterviewerSpeaking && !isInterviewerSpeakingRef.current) {
       setCandidateAnswer(speech.transcript);
     }
-  }, [speech.transcript]);
+  }, [speech.transcript, isInterviewerSpeaking]);
 
   // Sync micVolume & candidate speaking reactivity
   useEffect(() => {
@@ -556,10 +562,18 @@ export default function ImmersiveInterviewRoom({
     speech.stopRecording();
   }, [speech]);
 
-  // ─── Helper: Turn Microphone ON automatically ──────────────────────────────
+  // ─── Helper: Turn Microphone ON automatically (With Echo Shield) ───────────
   const activateMic = useCallback(() => {
+    // Only check the authoritative ref — do NOT check window.speechSynthesis.speaking
+    // because it can remain true for ~200ms after onend fires and block mic permanently.
+    if (isInterviewerSpeakingRef.current) {
+      console.log('[activateMic] Interviewer ref still set, deferring mic activation.');
+      return;
+    }
     isMicMutedRef.current = false;
     setIsMicMuted(false);
+    speech.clearTranscript();
+    setCandidateAnswer('');
     speech.startRecording();
   }, [speech]);
 
@@ -582,6 +596,13 @@ export default function ImmersiveInterviewRoom({
     }
     window.speechSynthesis.cancel();
 
+    // Immediately mute & pause candidate microphone BEFORE speech output starts
+    isInterviewerSpeakingRef.current = true;
+    setIsInterviewerSpeaking(true);
+    speech.pauseListening();
+    speech.clearTranscript();
+    setCandidateAnswer('');
+
     // Clean text of intro metadata for speech
     const cleanSpeech = text
       .replace(/Hello!.*?To begin: /s, "Hello! Welcome to your interview. Let's begin. ")
@@ -590,6 +611,9 @@ export default function ImmersiveInterviewRoom({
     const utterance = new SpeechSynthesisUtterance(cleanSpeech);
     utterance.rate = 0.98;
     utterance.pitch = isChen ? 0.92 : 1.05;
+
+    // Keep global reference to utterance to prevent garbage collection in Chrome/Safari
+    window.__interviewerUtterance = utterance;
 
     const voices = window.speechSynthesis.getVoices();
     if (isChen) {
@@ -606,50 +630,52 @@ export default function ImmersiveInterviewRoom({
       if (femaleVoice) utterance.voice = femaleVoice;
     }
 
-    // Pause candidate microphone while interviewer is speaking to isolate candidate's voice from computer echo
-    if (speech && typeof speech.pauseListening === 'function') {
-      speech.pauseListening();
-    }
-    setIsInterviewerSpeaking(true);
-
     let safetyTimer = null;
-    const estimatedDuration = Math.max(12000, cleanSpeech.length * 85);
+    let hasFinished = false; // Double-fire guard: finishSpeaking can be called by onend AND safetyTimer
+    const wordCount = cleanSpeech.split(/\s+/).filter(Boolean).length;
+    const estimatedDuration = Math.max(16000, Math.round((wordCount / 1.7) * 1000) + 4000);
 
-    // Fallback timer: ensure mic is activated even if browser speech ends unexpectedly, hangs, or is blocked
+    const finishSpeaking = () => {
+      if (hasFinished) return; // Already handled
+      hasFinished = true;
+      if (safetyTimer) { clearTimeout(safetyTimer); safetyTimer = null; }
+      // Extra 350ms buffer to ensure acoustic sound waves have completely left the room
+      setTimeout(() => {
+        setIsInterviewerSpeaking(false);
+        isInterviewerSpeakingRef.current = false;
+        interviewerFinishedSpeakingAtRef.current = Date.now();
+        speech.clearTranscript();
+        setCandidateAnswer('');
+        activateMic();
+      }, 350);
+    };
+
+    // Fallback timer: only trigger if speech synthesis is no longer actively speaking
     safetyTimer = setTimeout(() => {
-      setIsInterviewerSpeaking(false);
-      interviewerFinishedSpeakingAtRef.current = Date.now();
-      activateMic();
+      if (window.speechSynthesis && window.speechSynthesis.speaking) {
+        console.log('[speakText] Synthesis still active, waiting for natural onend.');
+        return;
+      }
+      finishSpeaking();
     }, estimatedDuration);
 
     utterance.onstart = () => {
       setIsInterviewerSpeaking(true);
-      if (speech && typeof speech.pauseListening === 'function') {
-        speech.pauseListening();
-      }
+      isInterviewerSpeakingRef.current = true;
     };
 
     utterance.onend = () => {
-      if (safetyTimer) clearTimeout(safetyTimer);
-      setIsInterviewerSpeaking(false);
-      interviewerFinishedSpeakingAtRef.current = Date.now();
-      // Auto-turn mic ON when interviewer finishes asking the question
-      activateMic();
+      finishSpeaking();
     };
 
     utterance.onerror = () => {
-      if (safetyTimer) clearTimeout(safetyTimer);
-      setIsInterviewerSpeaking(false);
-      interviewerFinishedSpeakingAtRef.current = Date.now();
-      activateMic();
+      finishSpeaking();
     };
 
     try {
       window.speechSynthesis.speak(utterance);
     } catch (e) {
-      if (safetyTimer) clearTimeout(safetyTimer);
-      setIsInterviewerSpeaking(false);
-      activateMic();
+      finishSpeaking();
     }
   };
 
@@ -903,7 +929,6 @@ export default function ImmersiveInterviewRoom({
             : announcement
         );
         setSessionPhase('active');
-        activateMic();
         speakText(announcement);
         return;
       }
@@ -947,10 +972,7 @@ export default function ImmersiveInterviewRoom({
 
       setSessionPhase('active');
 
-      // Ensure Candidate Mic & speech recognition run actively from session start
-      activateMic();
-
-      // Speak opening message out loud
+      // Speak opening message out loud (mic will automatically unmute when speaking completes)
       speakText(openingMsg);
     } catch (err) {
       console.warn('[interview room] API start error, utilizing direct simulation fallback:', err);
@@ -963,7 +985,6 @@ export default function ImmersiveInterviewRoom({
         setMessages([{ role: 'interviewer', text: codingGreeting, timestamp: Date.now() }]);
         setCurrentQuestionText('Two Sum: Given an array of integers and target, return indices of two numbers that add up to target.');
         setSessionPhase('active');
-        activateMic();
         speakText(codingGreeting);
         return;
       }
@@ -977,7 +998,6 @@ export default function ImmersiveInterviewRoom({
       setMessages([{ role: 'interviewer', text: fullText, timestamp: Date.now() }]);
       setCurrentQuestionText(firstQ);
       setSessionPhase('active');
-      activateMic();
       speakText(fullText);
     }
   };
@@ -1208,10 +1228,22 @@ export default function ImmersiveInterviewRoom({
         return;
       }
 
+      if (res?.isFollowUp) {
+        // Targeted Follow-up question on current topic (candidate gave partial/incomplete answer)
+        const followUpPrompt = res.nextQuestion || res.message;
+        setMessages([
+          ...updatedMessages,
+          { role: 'interviewer', text: res.message, timestamp: Date.now(), evaluatedAnswer: evaluatedItem },
+        ]);
+        setCurrentQuestionText(followUpPrompt);
+        speakText(res.message);
+        return;
+      }
+
       // ─── Advance to Next Question (1 -> 2 -> ... -> totalQuestions) ───
       const nextQIndex = questionIndex; // array index for next question: Q1 answered -> index 1 (Q2)
       const nextQObj = (interviewQuestions && interviewQuestions[nextQIndex]) || res?.nextQuestionData || null;
-      let nextQuestionPrompt = nextQObj?.question || nextQObj?.title || res?.nextQuestion;
+      let nextQuestionPrompt = res?.nextQuestion || nextQObj?.question || nextQObj?.title;
 
       if (!nextQuestionPrompt || nextQuestionPrompt === currentQuestionText) {
         const defaultTopics = [
@@ -1224,9 +1256,12 @@ export default function ImmersiveInterviewRoom({
         nextQuestionPrompt = defaultTopics[Math.min(nextQIndex - 1, defaultTopics.length - 1)];
       }
 
-      // Format spoken reply: constructive feedback on previous answer, followed by clearly asking Question X of Y
-      const evalAck = res?.aiFeedback || (evalData?.score >= 70 ? "Excellent points covered." : evalData?.score >= 40 ? "Good start on that technical explanation." : "Understood, thank you for your response.");
-      const replyToUse = `${evalAck} Let's proceed to Question ${nextQIndex + 1} of ${totalQuestions}:\n\n${nextQuestionPrompt}`;
+      // Spoken reply: Use the AI's natural response from LLM, or fallback with clear question introduction
+      let replyToUse = res?.message || res?.reply;
+      if (!replyToUse || replyToUse === nextQuestionPrompt) {
+        const evalAck = res?.aiFeedback || (evalData?.score >= 70 ? "Excellent points covered." : evalData?.score >= 40 ? "Good start on that technical explanation." : "Understood, thank you for your response.");
+        replyToUse = `${evalAck} Let's proceed to Question ${nextQIndex + 1} of ${totalQuestions}:\n\n${nextQuestionPrompt}`;
+      }
 
       setMessages([
         ...updatedMessages,
@@ -1246,7 +1281,7 @@ export default function ImmersiveInterviewRoom({
         });
       }
 
-      // Speak out response
+      // Speak out AI response
       speakText(replyToUse);
     } catch (err) {
       console.warn('[interview room] Send message error, providing realistic follow-up:', err);
@@ -2350,22 +2385,24 @@ export default function ImmersiveInterviewRoom({
       {/* 4D. Candidate POV Hands in Foreground */}
       <CandidatePOVHands isCandidateSpeaking={isCandidateSpeaking} />
 
-      {/* 4E. Live Coding Laptop on Right Desk */}
-      <DeskCodingLaptop
-        timer={formatTimer(secondsElapsed)}
-        isExpanded={laptopExpanded}
-        onToggleExpand={() => setLaptopExpanded(!laptopExpanded)}
-        currentQuestion={currentQuestionObj}
-        sessionId={sessionId}
-        targetLanguage={config?.language || 'python'}
-        onInterviewerMessage={(msg) => {
-          setMessages((prev) => [...prev, { role: 'interviewer', text: msg, timestamp: Date.now() }]);
-          speakText(msg);
-        }}
-        onSubmitSuccess={handleCodingSubmissionSuccess}
-        onNextQuestion={handleNextCodingQuestion}
-        isLastQuestion={questionIndex >= totalQuestions}
-      />
+      {/* 4E. Live Coding Laptop on Right Desk (Only visible & accessible during Coding Rounds) */}
+      {isCodingRound && (
+        <DeskCodingLaptop
+          timer={formatTimer(secondsElapsed)}
+          isExpanded={laptopExpanded}
+          onToggleExpand={() => setLaptopExpanded(!laptopExpanded)}
+          currentQuestion={currentQuestionObj}
+          sessionId={sessionId}
+          targetLanguage={config?.language || 'python'}
+          onInterviewerMessage={(msg) => {
+            setMessages((prev) => [...prev, { role: 'interviewer', text: msg, timestamp: Date.now() }]);
+            speakText(msg);
+          }}
+          onSubmitSuccess={handleCodingSubmissionSuccess}
+          onNextQuestion={handleNextCodingQuestion}
+          isLastQuestion={questionIndex >= totalQuestions}
+        />
+      )}
 
       {/* =========================================================================
           LAYER 5: CANDIDATE PIP WEBCAM FEED (FLOATING & DRAGGABLE)
