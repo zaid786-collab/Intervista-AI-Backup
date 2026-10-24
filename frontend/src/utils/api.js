@@ -273,7 +273,7 @@ export async function apiStartInterview(payload) {
   const durationMinutes = payload?.duration_minutes || (payload?.duration ? parseInt(payload.duration, 10) : 45);
   const interviewType = payload?.interview_type || payload?.interviewType || 'Technical Interview';
   const domain = payload?.domain || payload?.focusTopic || payload?.language || payload?.topic || 'General Software Engineering';
-  const questionCount = payload?.question_count || payload?.questionCount || 10;
+  const questionCount = payload?.question_count || payload?.questionCount || 5;
 
   try {
     const res = await request('POST', '/api/interviews/start', {

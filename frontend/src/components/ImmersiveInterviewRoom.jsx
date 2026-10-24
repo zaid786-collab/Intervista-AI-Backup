@@ -903,6 +903,7 @@ export default function ImmersiveInterviewRoom({
         duration: config?.duration ? parseInt(config.duration) : 30,
         focusTopic: config?.topic || config?.language || null,
         interviewerName,
+        questionCount: config?.totalQuestions || 5,
       });
 
       setSessionId(response.sessionId);
@@ -986,6 +987,7 @@ export default function ImmersiveInterviewRoom({
         duration: config?.duration ? parseInt(config.duration) : 30,
         focusTopic: config?.topic || config?.language || null,
         interviewerName,
+        questionCount: config?.totalQuestions || 5,
       });
 
       setSessionId(response.sessionId);
@@ -1155,7 +1157,8 @@ export default function ImmersiveInterviewRoom({
       ]);
 
       // ─── Check if all questions are completed ───
-      const isFinalQuestion = questionIndex >= totalQuestions || res?.completed === true;
+      // Interview strictly concludes only when the candidate has answered all totalQuestions
+      const isFinalQuestion = totalQuestions > 0 && questionIndex >= totalQuestions;
 
       if (isFinalQuestion) {
         const wrapUpText = res?.message || "Thank you for providing your final answer! That concludes all questions for this interview round. Compiling your performance evaluation and scorecard now...";
@@ -1172,17 +1175,39 @@ export default function ImmersiveInterviewRoom({
         return;
       }
 
-      const replyClean = (reply || '')
-        .replace(/^Thank you.*?\.\s*(Now,\s*let's explore this:\s*)?/i, '')
-        .replace(/^Understood.*?\.\s*(Now,\s*let's explore this:\s*)?/i, '')
-        .replace(/^That's a very clear.*?\.\s*(Now,\s*let's explore this:\s*)?/i, '')
-        .replace(/^Great insights.*?\.\s*(Now,\s*let's explore this:\s*)?/i, '')
-        .replace(/^Appreciate the concrete.*?\.\s*(Now,\s*let's explore this:\s*)?/i, '')
-        .trim();
-      setCurrentQuestionText(replyClean || reply);
+      // ─── Advance to Next Question (1 -> 2 -> ... -> totalQuestions) ───
+      const nextQIndex = questionIndex; // array index for next question (questionIndex is 1-based, so for Q1 index is 1, which is Q2)
+      const nextQObj = res?.nextQuestionData || (interviewQuestions && interviewQuestions[nextQIndex]) || null;
+      let nextQuestionPrompt = res?.nextQuestion || nextQObj?.question || nextQObj?.title || nextQObj?.description;
+
+      if (!nextQuestionPrompt) {
+        const defaultTopics = [
+          "Can you explain your strategy for managing concurrency, caching, and state synchronization at scale?",
+          "How would you approach automated testing, telemetry observability, and zero-downtime canary deployment?",
+          "Walk me through how you isolate and profile performance bottlenecks in production microservices.",
+          "How do you design database schema migrations and handle eventual consistency trade-offs?"
+        ];
+        nextQuestionPrompt = defaultTopics[Math.min(questionIndex - 1, defaultTopics.length - 1)];
+      }
+
+      // Ensure spoken reply does not mistakenly announce interview wrap-up if questions remain
+      let replyToUse = res?.message || res?.reply || 'Thank you for your response.';
+      if (/conclude|assessment report|interview questions today|completed all questions/i.test(replyToUse) || !replyToUse.trim()) {
+        replyToUse = `Great explanation. Let's move on to Question ${questionIndex + 1} of ${totalQuestions}:\n\n${nextQuestionPrompt}`;
+      }
+
+      setMessages([
+        ...updatedMessages,
+        { role: 'interviewer', text: replyToUse, timestamp: Date.now(), evaluatedAnswer: evaluatedItem },
+      ]);
+
+      setCurrentQuestionText(nextQuestionPrompt);
+      if (nextQObj) {
+        setCurrentQuestionObj(nextQObj);
+      }
       setQuestionIndex(prev => prev + 1);
 
-      if (res.adaptiveLevel) {
+      if (res?.adaptiveLevel) {
         setAdaptiveState({
           level: res.adaptiveLevel,
           levelName: res.adaptiveLevelName || `Level ${res.adaptiveLevel}`,
@@ -1191,14 +1216,8 @@ export default function ImmersiveInterviewRoom({
         });
       }
 
-      if (res.nextQuestionData) {
-        setCurrentQuestionObj(res.nextQuestionData);
-      } else if (interviewQuestions && interviewQuestions[questionIndex]) {
-        setCurrentQuestionObj(interviewQuestions[questionIndex]);
-      }
-
       // Speak out response
-      speakText(reply);
+      speakText(replyToUse);
     } catch (err) {
       console.warn('[interview room] Send message error, providing realistic follow-up:', err);
 
@@ -1239,7 +1258,7 @@ export default function ImmersiveInterviewRoom({
       setEvaluatedAnswers(prev => [...prev.filter(p => p.questionId !== currentQId), evaluatedItem]);
       setLastEvaluatedTurn(evaluatedItem);
 
-      if (questionIndex >= totalQuestions) {
+      if (totalQuestions > 0 && questionIndex >= totalQuestions) {
         const wrapUpText = "Thank you for completing this technical interview round! Finalizing your evaluation report now...";
         setMessages([
           ...updatedMessages,
@@ -1254,19 +1273,25 @@ export default function ImmersiveInterviewRoom({
       }
 
       // Local fallback follow-up
+      const nextQIndex = questionIndex;
+      const nextQObj = (interviewQuestions && interviewQuestions[nextQIndex]) || null;
       const followUps = [
         "How would you handle unexpected data spikes or high concurrent write throughput in that setup?",
         "When you reflect on that system design, what failure modes or edge cases required the most defensive engineering?",
         "How did you align the team and communicate trade-offs to non-technical stakeholders during delivery?",
-        "Thank you for that thorough explanation. That covers all our primary discussion topics for this round!"
+        "How do you maintain observability, distributed tracing, and fault-tolerance across microservices?"
       ];
-      const nextFollowUp = followUps[Math.min(questionIndex - 1, followUps.length - 1)];
+      const nextQText = nextQObj?.question || followUps[Math.min(questionIndex - 1, followUps.length - 1)];
+      const nextFollowUp = `Good analysis. Let's proceed to Question ${questionIndex + 1} of ${totalQuestions}:\n\n${nextQText}`;
 
       setMessages([
         ...updatedMessages,
         { role: 'interviewer', text: nextFollowUp, timestamp: Date.now(), evaluatedAnswer: evaluatedItem },
       ]);
-      setCurrentQuestionText(nextFollowUp);
+      setCurrentQuestionText(nextQText);
+      if (nextQObj) {
+        setCurrentQuestionObj(nextQObj);
+      }
       setQuestionIndex(prev => prev + 1);
       speakText(nextFollowUp);
     } finally {

@@ -373,7 +373,20 @@ def get_next_coding_question(
     """
     session = ACTIVE_CODING_SESSIONS.get(payload.session_id)
     if not session:
-        raise HTTPException(status_code=404, detail="Coding session not found.")
+        session = {
+            "session_id": payload.session_id,
+            "company": "Google",
+            "role": "Software Engineer",
+            "language": "javascript",
+            "difficulty": "Medium",
+            "experience": "Mid-level",
+            "topic": "Algorithms",
+            "total_questions": 3,
+            "current_index": 0,
+            "questions": [],
+            "answers": {},
+        }
+        ACTIVE_CODING_SESSIONS[payload.session_id] = session
 
     next_idx = session["current_index"] + 1
     if next_idx >= session["total_questions"]:

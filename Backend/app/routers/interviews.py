@@ -482,7 +482,7 @@ def start_mock_interview(
         "termination_reason": None,
         "interview_id": None,
         "answers": {},
-        "questions": [q.dict() for q in all_questions],
+        "questions": [q.model_dump() if hasattr(q, "model_dump") else q.dict() for q in all_questions],
         "adaptive_level": 2,
         "adaptive_level_name": "Level 2: Practical Scenario",
         "score_history": [],
@@ -1067,6 +1067,53 @@ def interview_turn_interaction(
     company = session.get("company", "Google")
     role = session.get("role", "Software Engineer")
     interviewer_name = session.get("interviewer_name", "Mr. J. Chen")
+
+    if not questions:
+        # Reconstruct session questions so active sessions never prematurely finish after backend restart
+        raw_reconstructed = generate_interview_session(
+            company=company,
+            role=role,
+            difficulty=session.get("difficulty", "Medium"),
+            interview_type="Technical Interview",
+            domain="General Software Engineering",
+            question_count=5,
+        )
+        questions = [
+            (q.model_dump() if hasattr(q, "model_dump") else q.dict()) if hasattr(q, "dict") or hasattr(q, "model_dump")
+            else {
+                "id": idx + 1,
+                "round_number": 1,
+                "round_title": "Technical Interview",
+                "category": q.get("category", "Core Technical"),
+                "question": q["question"],
+                "hint": q.get("hint"),
+                "domain": "General Software Engineering",
+                "expected_key_points": q.get("expected_key_points", []),
+            }
+            for idx, q in enumerate(raw_reconstructed)
+        ]
+        if payload.session_id not in ACTIVE_PROCTORING_SESSIONS:
+            ACTIVE_PROCTORING_SESSIONS[payload.session_id] = {
+                "session_id": payload.session_id,
+                "user_id": user_id,
+                "company": company,
+                "role": role,
+                "difficulty": "Medium",
+                "warning_count": 0,
+                "max_warnings": 3,
+                "status": "ACTIVE",
+                "violations": [],
+                "last_violation_time": 0.0,
+                "termination_reason": None,
+                "interview_id": None,
+                "answers": {},
+                "questions": questions,
+                "adaptive_level": 2,
+                "adaptive_level_name": "Level 2: Practical Scenario",
+                "score_history": [],
+            }
+        else:
+            ACTIVE_PROCTORING_SESSIONS[payload.session_id]["questions"] = questions
 
     # Normalize question id
     raw_qid = payload.question_id if payload.question_id is not None else (payload.question_index or 1)
