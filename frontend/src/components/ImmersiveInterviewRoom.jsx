@@ -35,6 +35,7 @@ import {
   Loader2,
   Radio,
   Smartphone,
+  Code,
 } from 'lucide-react';
 
 import { useSpeechRecognition } from '../hooks/useSpeechRecognition';
