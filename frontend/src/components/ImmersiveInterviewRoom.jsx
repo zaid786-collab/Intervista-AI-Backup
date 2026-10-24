@@ -2385,22 +2385,24 @@ export default function ImmersiveInterviewRoom({
       {/* 4D. Candidate POV Hands in Foreground */}
       <CandidatePOVHands isCandidateSpeaking={isCandidateSpeaking} />
 
-      {/* 4E. Live Coding Laptop on Right Desk */}
-      <DeskCodingLaptop
-        timer={formatTimer(secondsElapsed)}
-        isExpanded={laptopExpanded}
-        onToggleExpand={() => setLaptopExpanded(!laptopExpanded)}
-        currentQuestion={currentQuestionObj}
-        sessionId={sessionId}
-        targetLanguage={config?.language || 'python'}
-        onInterviewerMessage={(msg) => {
-          setMessages((prev) => [...prev, { role: 'interviewer', text: msg, timestamp: Date.now() }]);
-          speakText(msg);
-        }}
-        onSubmitSuccess={handleCodingSubmissionSuccess}
-        onNextQuestion={handleNextCodingQuestion}
-        isLastQuestion={questionIndex >= totalQuestions}
-      />
+      {/* 4E. Live Coding Laptop on Right Desk (Only visible & accessible during Coding Rounds) */}
+      {isCodingRound && (
+        <DeskCodingLaptop
+          timer={formatTimer(secondsElapsed)}
+          isExpanded={laptopExpanded}
+          onToggleExpand={() => setLaptopExpanded(!laptopExpanded)}
+          currentQuestion={currentQuestionObj}
+          sessionId={sessionId}
+          targetLanguage={config?.language || 'python'}
+          onInterviewerMessage={(msg) => {
+            setMessages((prev) => [...prev, { role: 'interviewer', text: msg, timestamp: Date.now() }]);
+            speakText(msg);
+          }}
+          onSubmitSuccess={handleCodingSubmissionSuccess}
+          onNextQuestion={handleNextCodingQuestion}
+          isLastQuestion={questionIndex >= totalQuestions}
+        />
+      )}
 
       {/* =========================================================================
           LAYER 5: CANDIDATE PIP WEBCAM FEED (FLOATING & DRAGGABLE)
