@@ -87,10 +87,18 @@ def seed_db():
                 is_admin=False,
                 is_active=True,
             )
+            fresh_demo_user = models.User(
+                name="Fresh Candidate",
+                email="fresh.demo@intervista.ai",
+                hashed_password=hash_password("demo123"),
+                is_admin=False,
+                is_active=True,
+            )
             db.add(admin_user)
             db.add(demo_user)
+            db.add(fresh_demo_user)
             db.commit()
-            print("Default users created: admin@intervista.ai / admin123, demo@intervista.ai / demo123")
+            print("Default users created: admin@intervista.ai / admin123, demo@intervista.ai / demo123, fresh.demo@intervista.ai / demo123")
 
         print("Database seed complete!")
 

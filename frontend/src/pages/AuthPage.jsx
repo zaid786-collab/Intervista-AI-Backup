@@ -277,7 +277,29 @@ export default function AuthPage({ mode = 'login' }) {
           </button>
 
           {currentMode === 'login' && (
-            <div style={{ marginTop: '0.25rem', textAlign: 'center' }}>
+            <div style={{ marginTop: '0.45rem', display: 'flex', flexDirection: 'column', gap: '0.35rem', alignItems: 'center' }}>
+              <button
+                type="button"
+                onClick={() => {
+                  setEmail('fresh.demo@intervista.ai');
+                  setPassword('demo123');
+                  setError('');
+                }}
+                style={{
+                  background: 'rgba(56, 189, 248, 0.12)',
+                  border: '1px solid rgba(56, 189, 248, 0.35)',
+                  borderRadius: '6px',
+                  color: '#38BDF8',
+                  fontSize: '0.78rem',
+                  fontWeight: 600,
+                  padding: '0.38rem 0.75rem',
+                  cursor: 'pointer',
+                  transition: 'all 0.2s ease',
+                  width: '100%',
+                }}
+              >
+                ✨ Fill Fresh Demo Account (fresh.demo@intervista.ai)
+              </button>
               <button
                 type="button"
                 onClick={() => {
@@ -294,9 +316,10 @@ export default function AuthPage({ mode = 'login' }) {
                   padding: '0.35rem 0.75rem',
                   cursor: 'pointer',
                   transition: 'all 0.2s ease',
+                  width: '100%',
                 }}
               >
-                ⚡ Fill Demo Account (demo@intervista.ai)
+                ⚡ Fill Standard Demo (demo@intervista.ai)
               </button>
             </div>
           )}
