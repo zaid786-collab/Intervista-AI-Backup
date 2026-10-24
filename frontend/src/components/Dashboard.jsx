@@ -1,12 +1,8 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import MockInterviewSetupPage from './MockInterviewSetupPage';
-import CareerPrepDSAPage from './CareerPrepDSAPage';
 import HistoryPage from './HistoryPage';
-import InterviewDNAView from './InterviewDNAView';
-import ResumeRealityCheckView from './ResumeRealityCheckView';
-import CareerReadinessMapView from './CareerReadinessMapView';
 import ProfilePage from './ProfilePage';
-import AICoachWidget from './AICoachWidget';
+import ResumeATS from '../pages/ResumeATS';
 import { useAuth } from '../context/useAuth';
 import { apiGetSessions, apiGetReport } from '../utils/api';
 import {
@@ -15,10 +11,7 @@ import {
   Mic,
   BarChart2,
   Calendar,
-  Briefcase,
   Settings,
-  Dna,
-  Compass,
 
   ChevronLeft,
   ChevronRight,
@@ -166,13 +159,10 @@ export default function Dashboard({
   const [activeNav, setActiveNav] = useState(() => {
     if (typeof window !== 'undefined') {
       const h = window.location.hash.toLowerCase();
+      if (h.includes('resume') || h.includes('ats')) return 'Resume ATS';
       if (h.includes('profile')) return 'My Profile';
-      if (h.includes('dna')) return 'Interview DNA';
-      if (h.includes('reality') || h.includes('check')) return 'Resume Reality Check';
-      if (h.includes('readiness') || h.includes('map')) return 'Career Readiness Map';
       if (h.includes('history')) return 'History';
       if (h.includes('mock')) return 'Mock Interview';
-      if (h.includes('prep') || h.includes('career')) return 'Career Prep';
     }
     return 'Overview';
   });
@@ -223,18 +213,12 @@ export default function Dashboard({
       const h = window.location.hash.toLowerCase();
       if (h.includes('profile')) {
         setActiveNav('My Profile');
-      } else if (h.includes('dna')) {
-        setActiveNav('Interview DNA');
-      } else if (h.includes('reality') || h.includes('check')) {
-        setActiveNav('Resume Reality Check');
-      } else if (h.includes('readiness') || h.includes('map')) {
-        setActiveNav('Career Readiness Map');
+      } else if (h.includes('resume') || h.includes('ats')) {
+        setActiveNav('Resume ATS');
       } else if (h.includes('history')) {
         setActiveNav('History');
       } else if (h.includes('mock')) {
         setActiveNav('Mock Interview');
-      } else if (h.includes('career') || h.includes('prep')) {
-        setActiveNav('Career Prep');
       } else if (h === '#dashboard') {
         setActiveNav('Overview');
       }
@@ -473,36 +457,6 @@ export default function Dashboard({
       },
     },
     {
-      label: 'Interview DNA',
-      icon: Dna,
-      id: 'interview-dna',
-      action: () => {
-        setActiveNav('Interview DNA');
-        window.location.hash = '#dashboard/dna';
-        window.scrollTo({ top: 0, behavior: 'smooth' });
-      },
-    },
-    {
-      label: 'Resume Reality Check',
-      icon: FileText,
-      id: 'resume-reality-check',
-      action: () => {
-        setActiveNav('Resume Reality Check');
-        window.location.hash = '#dashboard/reality-check';
-        window.scrollTo({ top: 0, behavior: 'smooth' });
-      },
-    },
-    {
-      label: 'Career Readiness Map',
-      icon: Compass,
-      id: 'career-readiness-map',
-      action: () => {
-        setActiveNav('Career Readiness Map');
-        window.location.hash = '#dashboard/readiness-map';
-        window.scrollTo({ top: 0, behavior: 'smooth' });
-      },
-    },
-    {
       label: 'Mock Interview',
       icon: Mic,
       id: 'mock-interview',
@@ -513,22 +467,22 @@ export default function Dashboard({
       },
     },
     {
+      label: 'Resume ATS',
+      icon: FileText,
+      id: 'resume-ats',
+      action: () => {
+        setActiveNav('Resume ATS');
+        window.location.hash = '#dashboard/resume-ats';
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      },
+    },
+    {
       label: 'History',
       icon: History,
       id: 'history',
       action: () => {
         setActiveNav('History');
         window.location.hash = '#dashboard/history';
-        window.scrollTo({ top: 0, behavior: 'smooth' });
-      },
-    },
-    {
-      label: 'Career Prep',
-      icon: Briefcase,
-      id: 'career-prep',
-      action: () => {
-        setActiveNav('Career Prep');
-        window.location.hash = '#dashboard/career-prep';
         window.scrollTo({ top: 0, behavior: 'smooth' });
       },
     },
@@ -780,54 +734,6 @@ export default function Dashboard({
               onViewReport={onViewReport}
               onNavigateToCompanies={onNavigateToCompanies}
             />
-          ) : activeNav === 'Interview DNA' ? (
-            <InterviewDNAView
-              onStartInterview={(role) => {
-                if (onLaunchSession) {
-                  onLaunchSession({
-                    role: role || 'Software Engineer',
-                    company: 'Google',
-                    level: 'Mid Level',
-                    interviewType: 'Interview DNA Diagnostic',
-                    duration: '30 min',
-                  });
-                } else if (onStartInterview) {
-                  onStartInterview(role || 'Software Engineer');
-                }
-              }}
-            />
-          ) : activeNav === 'Resume Reality Check' ? (
-            <ResumeRealityCheckView
-              onStartInterview={(role) => {
-                if (onLaunchSession) {
-                  onLaunchSession({
-                    role: role || 'Software Engineer',
-                    company: 'Tech Company',
-                    level: 'Mid Level',
-                    interviewType: 'Resume-to-Interview Reality Check',
-                    duration: '30 min',
-                  });
-                } else if (onStartInterview) {
-                  onStartInterview(role || 'Software Engineer');
-                }
-              }}
-            />
-          ) : activeNav === 'Career Readiness Map' ? (
-            <CareerReadinessMapView
-              onStartInterview={(role) => {
-                if (onLaunchSession) {
-                  onLaunchSession({
-                    role: role || 'Software Development Engineer',
-                    company: 'Target Company',
-                    level: 'Mid Level',
-                    interviewType: 'Career Readiness Verification',
-                    duration: '30 min',
-                  });
-                } else if (onStartInterview) {
-                  onStartInterview(role || 'Software Development Engineer');
-                }
-              }}
-            />
           ) : activeNav === 'Mock Interview' ? (
             <MockInterviewSetupPage
               onLaunchSession={(config) => {
@@ -839,17 +745,8 @@ export default function Dashboard({
                 window.scrollTo({ top: 0, behavior: 'smooth' });
               }}
             />
-          ) : activeNav === 'Career Prep' ? (
-            <CareerPrepDSAPage
-              onStartInterview={(title) => {
-                setActiveNav('Mock Interview');
-                window.scrollTo({ top: 0, behavior: 'smooth' });
-              }}
-              onBackToOverview={() => {
-                setActiveNav('Overview');
-                window.scrollTo({ top: 0, behavior: 'smooth' });
-              }}
-            />
+          ) : activeNav === 'Resume ATS' ? (
+            <ResumeATS onStartInterview={onStartInterview} />
           ) : activeNav === 'History' ? (
             <HistoryPage
               onViewReport={onViewReport}
@@ -932,15 +829,7 @@ export default function Dashboard({
                 </div>
               </div>
 
-              {/* Feature 1: AI Coach (Weakness Memory & Trajectory Tracker) */}
-              <div style={{ marginBottom: '2.5rem' }}>
-                <AICoachWidget
-                  onStartInterview={(role) => {
-                    setActiveNav('Mock Interview');
-                    window.scrollTo({ top: 0, behavior: 'smooth' });
-                  }}
-                />
-              </div>
+
 
           {/* =========================================================================
               C. YEARLY PRACTICE ACTIVITY HEATMAP

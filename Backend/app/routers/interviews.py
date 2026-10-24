@@ -2493,7 +2493,36 @@ async def transcribe_interview_audio(
         except Exception as e:
             print(f"[transcribe] Gemini audio error: {e}")
 
-    # 3. Try OpenAI Whisper if key is configured
+    # 3. Try Groq / Grok Whisper STT if key is configured
+    grok_key = os.getenv("GROQ_API_KEY") or os.getenv("GROK_API_KEY") or os.getenv("XAI_API_KEY")
+    if grok_key:
+        try:
+            import requests
+            headers = {"Authorization": f"Bearer {grok_key}"}
+            files_dict = {"file": (file.filename or "recording.webm", raw_content, file.content_type or "audio/webm")}
+            data = {"model": "whisper-large-v3", "language": (language or "en")[:2]}
+            whisper_res = requests.post(
+                "https://api.groq.com/openai/v1/audio/transcriptions",
+                headers=headers,
+                files=files_dict,
+                data=data,
+                timeout=25,
+            )
+            if whisper_res.ok:
+                res_data = whisper_res.json()
+                transcript_text = (res_data.get("text") or "").strip()
+                if transcript_text:
+                    return schemas.TranscribeAudioResponse(
+                        success=True,
+                        transcript=transcript_text,
+                        language=language,
+                        provider="grok_whisper",
+                        message="Transcribed successfully via Groq Whisper.",
+                    )
+        except Exception as e:
+            print(f"[transcribe] Groq/Grok Whisper error: {e}")
+
+    # 4. Try OpenAI Whisper fallback if configured
     openai_key = os.getenv("OPENAI_API_KEY")
     if openai_key:
         try:

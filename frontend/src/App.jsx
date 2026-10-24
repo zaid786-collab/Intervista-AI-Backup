@@ -15,6 +15,7 @@ import AdminPortal from './pages/AdminPortal';
 import FAQ from './pages/FAQ';
 import AuthPage from './pages/AuthPage';
 import OAuthCallback from './pages/OAuthCallback';
+import ResumeATS from './pages/ResumeATS';
 import Dashboard from './components/Dashboard';
 import CareerPrepDSAPage from './components/CareerPrepDSAPage';
 import ImmersiveInterviewRoom from './components/ImmersiveInterviewRoom';
@@ -307,6 +308,8 @@ function AppContent() {
           }
         />
         <Route path="/faq" element={<FAQ />} />
+        <Route path="/resume-ats" element={<ResumeATS onStartInterview={handleStartInterview} />} />
+        <Route path="/resume" element={<Navigate to="/resume-ats" replace />} />
         <Route path="/login" element={<AuthPage mode="login" />} />
         <Route path="/signup" element={<AuthPage mode="signup" />} />
         <Route path="/oauth/callback" element={<OAuthCallback />} />

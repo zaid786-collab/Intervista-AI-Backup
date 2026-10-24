@@ -179,6 +179,7 @@ export default function ImmersiveInterviewRoom({
   const pipContainerRef = useRef(null);
   const trackerRef = useRef(null);
   const proctorRef = useRef(null);
+  const finalTranscriptRef = useRef('');
 
   // ─── Production-Grade Speech Recognition & Microphone Hook ─────────────────
   const speech = useSpeechRecognition({

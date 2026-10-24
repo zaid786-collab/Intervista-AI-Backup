@@ -27,6 +27,7 @@ export default function Navbar({
   const activePage = currentView || currentPage || (
     currentPath === '/' ? 'home' :
     currentPath.startsWith('/dashboard') ? 'dashboard' :
+    currentPath.startsWith('/resume') ? 'resume-ats' :
     currentPath.startsWith('/companies') ? 'companies' :
     currentPath.startsWith('/resources') ? 'resources' :
     currentPath.startsWith('/plans') || currentPath.startsWith('/pricing') ? 'plans' :
@@ -53,10 +54,9 @@ export default function Navbar({
   const navItems = [
     { label: 'HOME', page: 'home', id: 'hero', path: '/' },
     { label: 'DASHBOARD', page: 'dashboard', id: 'dashboard', path: '/dashboard' },
+    { label: 'ATS SCAN', page: 'resume-ats', id: 'resume-ats', path: '/resume-ats' },
     { label: 'COMPANIES', page: 'companies', id: 'companies', path: '/companies' },
-    { label: 'RESOURCES', page: 'resources', id: 'resources', path: '/resources' },
     { label: 'PLANS', page: 'plans', id: 'plans', path: '/plans' },
-    ...(currentUser ? [{ label: 'MY PROFILE', page: 'profile', id: 'profile', path: '/profile' }] : []),
     ...(currentUser?.is_admin ? [{ label: 'ADMIN', page: 'admin', id: 'admin', path: '/admin' }] : []),
     { label: 'CONTACT', id: 'contact', isContact: true },
   ];
