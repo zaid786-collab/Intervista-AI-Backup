@@ -418,12 +418,6 @@ export default function ImmersiveInterviewRoom({
     setIsCandidateSpeaking(speech.isCandidateSpeaking || speech.volume > 15);
   }, [speech.volume, speech.isCandidateSpeaking]);
 
-  // Keep isMicMuted and isMicMutedRef synchronized with speech.isListening
-  useEffect(() => {
-    setIsMicMuted(!speech.isListening);
-    isMicMutedRef.current = !speech.isListening;
-  }, [speech.isListening]);
-
   // Auto-scroll textarea as transcript grows
   useEffect(() => {
     if (textareaRef.current) {
@@ -771,7 +765,7 @@ export default function ImmersiveInterviewRoom({
 
   // Handle Mute/Unmute toggle
   const toggleMicrophone = useCallback(() => {
-    if (speech.isListening) {
+    if (!isMicMutedRef.current) {
       speech.stopRecording();
       setIsMicMuted(true);
       isMicMutedRef.current = true;
@@ -1160,6 +1154,24 @@ export default function ImmersiveInterviewRoom({
         { role: 'interviewer', text: reply, timestamp: Date.now(), evaluatedAnswer: evaluatedItem },
       ]);
 
+      // ─── Check if all questions are completed ───
+      const isFinalQuestion = questionIndex >= totalQuestions || res?.completed === true;
+
+      if (isFinalQuestion) {
+        const wrapUpText = res?.message || "Thank you for providing your final answer! That concludes all questions for this interview round. Compiling your performance evaluation and scorecard now...";
+        setMessages([
+          ...updatedMessages,
+          { role: 'interviewer', text: wrapUpText, timestamp: Date.now(), evaluatedAnswer: evaluatedItem },
+        ]);
+        setCurrentQuestionText(wrapUpText);
+        speakText(wrapUpText);
+
+        setTimeout(() => {
+          handleEndInterview();
+        }, 3200);
+        return;
+      }
+
       const replyClean = (reply || '')
         .replace(/^Thank you.*?\.\s*(Now,\s*let's explore this:\s*)?/i, '')
         .replace(/^Understood.*?\.\s*(Now,\s*let's explore this:\s*)?/i, '')
@@ -1227,6 +1239,20 @@ export default function ImmersiveInterviewRoom({
       setEvaluatedAnswers(prev => [...prev.filter(p => p.questionId !== currentQId), evaluatedItem]);
       setLastEvaluatedTurn(evaluatedItem);
 
+      if (questionIndex >= totalQuestions) {
+        const wrapUpText = "Thank you for completing this technical interview round! Finalizing your evaluation report now...";
+        setMessages([
+          ...updatedMessages,
+          { role: 'interviewer', text: wrapUpText, timestamp: Date.now(), evaluatedAnswer: evaluatedItem },
+        ]);
+        setCurrentQuestionText(wrapUpText);
+        speakText(wrapUpText);
+        setTimeout(() => {
+          handleEndInterview();
+        }, 3000);
+        return;
+      }
+
       // Local fallback follow-up
       const followUps = [
         "How would you handle unexpected data spikes or high concurrent write throughput in that setup?",
@@ -1245,9 +1271,11 @@ export default function ImmersiveInterviewRoom({
       speakText(nextFollowUp);
     } finally {
       setIsSubmittingAnswer(false);
-      // If speech synthesis is not speaking, reactivate candidate mic
-      if (!window.speechSynthesis || !window.speechSynthesis.speaking) {
-        activateMic();
+      // Reactivate mic only if interview is still in progress
+      if (questionIndex < totalQuestions) {
+        if (!window.speechSynthesis || !window.speechSynthesis.speaking) {
+          activateMic();
+        }
       }
     }
   };
@@ -1279,6 +1307,10 @@ export default function ImmersiveInterviewRoom({
 
   const handleNextCodingQuestion = async () => {
     if (!sessionId) return;
+    if (questionIndex >= totalQuestions) {
+      handleEndInterview();
+      return;
+    }
     try {
       const res = await apiNextCodingQuestion({ sessionId });
       if (res?.hasMore && res?.question) {
@@ -1294,12 +1326,16 @@ export default function ImmersiveInterviewRoom({
         speakText(nextMsg);
       } else {
         const wrapMsg =
-          "You've completed all problems in this coding round! Click 'End Interview' to see your comprehensive scorecard.";
+          "You've completed all problems in this coding round! Finalizing your evaluation report now...";
         setMessages((prev) => [...prev, { role: 'interviewer', text: wrapMsg, timestamp: Date.now() }]);
         speakText(wrapMsg);
+        setTimeout(() => {
+          handleEndInterview();
+        }, 2500);
       }
     } catch (err) {
       console.warn('[handleNextCodingQuestion] error:', err);
+      handleEndInterview();
     }
   };
 
@@ -3283,6 +3319,11 @@ export default function ImmersiveInterviewRoom({
                   <Loader2 size={14} className="spin" />
                   <span>Evaluating...</span>
                 </>
+              ) : questionIndex >= totalQuestions ? (
+                <>
+                  <span>Submit Final Answer & Finish</span>
+                  <CheckCircle2 size={14} />
+                </>
               ) : (
                 <>
                   <span>Send Answer</span>
@@ -3829,10 +3870,10 @@ export default function ImmersiveInterviewRoom({
       )}
 
       {/* =========================================================================
-          MANDATORY CAMERA & MICROPHONE REQUIREMENT SHIELD
-          Interview cannot proceed or start while camera or microphone is off
+          MANDATORY CAMERA & MIC PERMISSION SHIELD
+          Only triggers if camera is turned off or microphone access is explicitly blocked by browser
           ========================================================================= */}
-      {(isCameraOff || isMicMuted) && sessionPhase !== 'ending' && sessionPhase !== 'ended' && !terminatedModalData && (
+      {(isCameraOff || speech.error === 'not-allowed') && sessionPhase === 'active' && !isSubmittingAnswer && !isInterviewerSpeaking && !terminatedModalData && (
         <div
           id="mandatory-hardware-shield"
           style={{
@@ -3885,11 +3926,13 @@ export default function ImmersiveInterviewRoom({
                 letterSpacing: '-0.01em',
               }}
             >
-              Camera & Microphone Required
+              {isCameraOff ? 'Camera Required for Proctoring' : 'Microphone Access Required'}
             </h2>
 
             <p style={{ fontSize: '0.9rem', color: '#CBD5E1', lineHeight: 1.6, margin: '0 0 1.75rem 0' }}>
-              Intervista AI proctoring and real-time speech evaluation require active video camera and microphone feeds. <strong>The interview is paused and cannot proceed</strong> until both devices are enabled.
+              {isCameraOff
+                ? 'Intervista AI proctoring requires your video camera to remain visible during the interview session.'
+                : 'Microphone access was blocked by your browser. Please allow microphone permission in your browser URL bar.'}
             </p>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem', marginBottom: '2rem' }}>
@@ -3925,7 +3968,7 @@ export default function ImmersiveInterviewRoom({
                 </div>
               )}
 
-              {isMicMuted && (
+              {speech.error === 'not-allowed' && (
                 <div style={{
                   display: 'flex',
                   alignItems: 'center',
@@ -3937,7 +3980,7 @@ export default function ImmersiveInterviewRoom({
                 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', color: '#FCA5A5', fontSize: '0.86rem', fontWeight: 600 }}>
                     <MicOff size={18} color="#EF4444" />
-                    <span>Microphone is currently MUTED / OFF</span>
+                    <span>Microphone blocked by browser</span>
                   </div>
                   <button
                     onClick={activateMic}
@@ -3952,7 +3995,7 @@ export default function ImmersiveInterviewRoom({
                       cursor: 'pointer',
                     }}
                   >
-                    Turn On Microphone
+                    Retry Permission
                   </button>
                 </div>
               )}
