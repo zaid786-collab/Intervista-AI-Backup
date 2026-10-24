@@ -1922,18 +1922,18 @@ export default function ImmersiveInterviewRoom({
       )}
 
       {/* =========================================================================
-          LAYER 3: TOP-LEFT FLOATING SPEECH BUBBLE (MATCHING REFERENCE IMAGE)
+          LAYER 3: TOP-RIGHT FLOATING DSA QUESTION TAB / SPEECH BUBBLE
           ========================================================================= */}
       <div
         id="interview-question-bubble"
         style={{
           position: 'absolute',
           top: 'clamp(4.8rem, 10vh, 6.2rem)',
-          left: 'clamp(1.5rem, 4.5vw, 4.5rem)',
+          right: 'clamp(1.5rem, 3.5vw, 3.5rem)',
           zIndex: 22,
-          maxWidth: isQuestionCollapsed ? '320px' : 'clamp(360px, 32vw, 480px)',
+          maxWidth: isQuestionCollapsed ? '320px' : 'clamp(360px, 34vw, 520px)',
           width: '90%',
-          backgroundColor: 'rgba(16, 26, 44, 0.82)',
+          backgroundColor: 'rgba(16, 26, 44, 0.88)',
           border: '1.5px solid rgba(56, 189, 248, 0.55)',
           borderRadius: '16px',
           padding: '0.9rem 1.35rem',
@@ -2241,7 +2241,7 @@ export default function ImmersiveInterviewRoom({
             top: `${pipPosition.y}px`,
           } : {
             top: 'clamp(4.8rem, 10vh, 6.2rem)',
-            right: 'clamp(1.5rem, 4vw, 4rem)',
+            left: 'clamp(1.5rem, 3.5vw, 3.5rem)',
           }),
           zIndex: 25,
           width: pipMinimized
@@ -2719,27 +2719,29 @@ export default function ImmersiveInterviewRoom({
       </div>
 
       {/* =========================================================================
-          LAYER 6: CANDIDATE ANSWERING FIELD & COMPACT CONTROL BAR (BOTTOM ANCHORED)
+          LAYER 6: CANDIDATE ANSWERING FIELD & COMPACT CONTROL BAR (LEFT ANCHORED)
           ========================================================================= */}
       <footer
+        id="interview-bottom-console"
         style={{
           position: 'absolute',
           bottom: 0,
           left: 0,
           right: 0,
           zIndex: 30,
-          padding: '0 2rem 1.15rem 2rem',
+          padding: '0 clamp(1.2rem, 3.2vw, 3.2rem) 1.15rem clamp(1.2rem, 3.2vw, 3.2rem)',
           display: 'flex',
           flexDirection: 'column',
-          alignItems: 'center',
+          alignItems: 'flex-start',
           gap: '0.65rem',
           pointerEvents: 'none',
         }}
       >
-        {/* Candidate Live Voice-to-Text & Response Input Console */}
+        {/* Candidate Live Voice-to-Text & Response Input Console - Shifted to Left */}
         <div
+          id="candidate-answer-box-container"
           style={{
-            maxWidth: '820px',
+            maxWidth: 'clamp(380px, 47vw, 640px)',
             width: '100%',
             backgroundColor: 'rgba(9, 12, 19, 0.95)',
             border: !isMicMuted
@@ -3241,8 +3243,9 @@ export default function ImmersiveInterviewRoom({
           </div>
         </div>
 
-        {/* Compact Bottom Control Bar */}
+        {/* Compact Bottom Control Bar - Left Aligned with Answer Console */}
         <div
+          id="interview-bottom-control-bar"
           style={{
             display: 'flex',
             alignItems: 'center',
@@ -3254,6 +3257,7 @@ export default function ImmersiveInterviewRoom({
             backdropFilter: 'blur(16px)',
             boxShadow: '0 10px 30px rgba(0, 0, 0, 0.5)',
             pointerEvents: 'auto',
+            alignSelf: 'flex-start',
           }}
         >
           {/* 1. Mic Mute / Unmute */}

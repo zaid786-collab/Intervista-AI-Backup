@@ -998,12 +998,13 @@ export default function DeskCodingLaptop({
   // ═══════════════════════════════════════════════════════════════════════════
   return (
     <div
+      id="desk-coding-laptop-container"
       style={{
         position: 'absolute',
-        right: 'clamp(1rem, 3.5vw, 3.8rem)',
+        right: 'clamp(1.2rem, 3.2vw, 3.5rem)',
         bottom: 'clamp(3.5rem, 7.5vh, 6.5rem)',
-        zIndex: 17,
-        width: 'clamp(320px, 34vw, 480px)',
+        zIndex: 22,
+        width: 'clamp(340px, 44vw, 540px)',
         height: 'clamp(210px, 22vw, 310px)',
         perspective: '1200px',
         ...style,
