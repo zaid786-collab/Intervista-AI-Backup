@@ -189,6 +189,7 @@ export default function ImmersiveInterviewRoom({
   const interviewerFinishedSpeakingAtRef = useRef(Date.now());
   const isMicMutedRef = useRef(false);
   const sessionPhaseRef = useRef(sessionPhase);
+  const isInterviewerSpeakingRef = useRef(false);
   const textareaRef = useRef(null);
   const dragOffsetRef = useRef({ x: 0, y: 0 });
   const pipContainerRef = useRef(null);
@@ -196,12 +197,17 @@ export default function ImmersiveInterviewRoom({
   const proctorRef = useRef(null);
   const finalTranscriptRef = useRef('');
 
+  useEffect(() => {
+    isInterviewerSpeakingRef.current = isInterviewerSpeaking;
+  }, [isInterviewerSpeaking]);
+
   // ─── Production-Grade Speech Recognition & Microphone Hook ─────────────────
   const speech = useSpeechRecognition({
     initialLanguage: selectedSpeechLang,
     selectedMicId: config?.selectedMicId,
     sessionId: sessionId,
     questionId: questionIndex + 1,
+    isInterviewerSpeaking: isInterviewerSpeaking,
     onAudioData: (analyser) => {
       trackerRef.current?.startAudio(analyser);
     },
@@ -557,9 +563,17 @@ export default function ImmersiveInterviewRoom({
   }, [speech]);
 
   // ─── Helper: Turn Microphone ON automatically ──────────────────────────────
+  // ─── Helper: Turn Microphone ON automatically (With Echo Shield) ───────────
   const activateMic = useCallback(() => {
+    // HARD ACOUSTIC SHIELD: Never turn on candidate mic if AI interviewer is actively speaking
+    if (isInterviewerSpeakingRef.current || (window.speechSynthesis && window.speechSynthesis.speaking)) {
+      console.log('[activateMic] Interviewer is actively speaking, deferring mic activation to prevent self-echo.');
+      return;
+    }
     isMicMutedRef.current = false;
     setIsMicMuted(false);
+    speech.clearTranscript();
+    setCandidateAnswer('');
     speech.startRecording();
   }, [speech]);
 
@@ -582,6 +596,13 @@ export default function ImmersiveInterviewRoom({
     }
     window.speechSynthesis.cancel();
 
+    // Immediately mute & pause candidate microphone BEFORE speech output starts
+    isInterviewerSpeakingRef.current = true;
+    setIsInterviewerSpeaking(true);
+    speech.pauseListening();
+    speech.clearTranscript();
+    setCandidateAnswer('');
+
     // Clean text of intro metadata for speech
     const cleanSpeech = text
       .replace(/Hello!.*?To begin: /s, "Hello! Welcome to your interview. Let's begin. ")
@@ -590,6 +611,9 @@ export default function ImmersiveInterviewRoom({
     const utterance = new SpeechSynthesisUtterance(cleanSpeech);
     utterance.rate = 0.98;
     utterance.pitch = isChen ? 0.92 : 1.05;
+
+    // Keep global reference to utterance to prevent garbage collection in Chrome/Safari
+    window.__interviewerUtterance = utterance;
 
     const voices = window.speechSynthesis.getVoices();
     if (isChen) {
@@ -606,50 +630,52 @@ export default function ImmersiveInterviewRoom({
       if (femaleVoice) utterance.voice = femaleVoice;
     }
 
-    // Pause candidate microphone while interviewer is speaking to isolate candidate's voice from computer echo
-    if (speech && typeof speech.pauseListening === 'function') {
-      speech.pauseListening();
-    }
-    setIsInterviewerSpeaking(true);
-
     let safetyTimer = null;
-    const estimatedDuration = Math.max(12000, cleanSpeech.length * 85);
+    const wordCount = cleanSpeech.split(/\s+/).filter(Boolean).length;
+    const estimatedDuration = Math.max(16000, Math.round((wordCount / 1.7) * 1000) + 4000);
 
-    // Fallback timer: ensure mic is activated even if browser speech ends unexpectedly, hangs, or is blocked
+    const finishSpeaking = () => {
+      if (safetyTimer) clearTimeout(safetyTimer);
+      // Extra 350ms buffer to ensure acoustic sound waves have completely left the room
+      setTimeout(() => {
+        setIsInterviewerSpeaking(false);
+        isInterviewerSpeakingRef.current = false;
+        interviewerFinishedSpeakingAtRef.current = Date.now();
+        speech.clearTranscript();
+        setCandidateAnswer('');
+        activateMic();
+      }, 350);
+    };
+
+    // Fallback timer: only trigger if speech synthesis is no longer actively speaking
     safetyTimer = setTimeout(() => {
-      setIsInterviewerSpeaking(false);
-      interviewerFinishedSpeakingAtRef.current = Date.now();
-      activateMic();
+      if (window.speechSynthesis && window.speechSynthesis.speaking) {
+        console.log('[speakText] Synthesis still active, waiting for natural onend.');
+        return;
+      }
+      finishSpeaking();
     }, estimatedDuration);
 
     utterance.onstart = () => {
       setIsInterviewerSpeaking(true);
-      if (speech && typeof speech.pauseListening === 'function') {
-        speech.pauseListening();
-      }
+      isInterviewerSpeakingRef.current = true;
+      speech.pauseListening();
+      speech.clearTranscript();
+      setCandidateAnswer('');
     };
 
     utterance.onend = () => {
-      if (safetyTimer) clearTimeout(safetyTimer);
-      setIsInterviewerSpeaking(false);
-      interviewerFinishedSpeakingAtRef.current = Date.now();
-      // Auto-turn mic ON when interviewer finishes asking the question
-      activateMic();
+      finishSpeaking();
     };
 
     utterance.onerror = () => {
-      if (safetyTimer) clearTimeout(safetyTimer);
-      setIsInterviewerSpeaking(false);
-      interviewerFinishedSpeakingAtRef.current = Date.now();
-      activateMic();
+      finishSpeaking();
     };
 
     try {
       window.speechSynthesis.speak(utterance);
     } catch (e) {
-      if (safetyTimer) clearTimeout(safetyTimer);
-      setIsInterviewerSpeaking(false);
-      activateMic();
+      finishSpeaking();
     }
   };
 
@@ -903,7 +929,6 @@ export default function ImmersiveInterviewRoom({
             : announcement
         );
         setSessionPhase('active');
-        activateMic();
         speakText(announcement);
         return;
       }
@@ -947,10 +972,7 @@ export default function ImmersiveInterviewRoom({
 
       setSessionPhase('active');
 
-      // Ensure Candidate Mic & speech recognition run actively from session start
-      activateMic();
-
-      // Speak opening message out loud
+      // Speak opening message out loud (mic will automatically unmute when speaking completes)
       speakText(openingMsg);
     } catch (err) {
       console.warn('[interview room] API start error, utilizing direct simulation fallback:', err);
@@ -963,7 +985,6 @@ export default function ImmersiveInterviewRoom({
         setMessages([{ role: 'interviewer', text: codingGreeting, timestamp: Date.now() }]);
         setCurrentQuestionText('Two Sum: Given an array of integers and target, return indices of two numbers that add up to target.');
         setSessionPhase('active');
-        activateMic();
         speakText(codingGreeting);
         return;
       }
@@ -977,7 +998,6 @@ export default function ImmersiveInterviewRoom({
       setMessages([{ role: 'interviewer', text: fullText, timestamp: Date.now() }]);
       setCurrentQuestionText(firstQ);
       setSessionPhase('active');
-      activateMic();
       speakText(fullText);
     }
   };
