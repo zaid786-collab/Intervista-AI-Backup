@@ -1,8 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { ArrowRight, Menu, X, LogOut, User, BarChart2, Shield, History, AlertOctagon } from 'lucide-react';
+import { ArrowRight, Menu, X, LogOut, User, BarChart2, Shield, History } from 'lucide-react';
 import { gsap } from 'gsap';
-import { hasTerminatedInterviewOnRecord } from '../utils/api';
 
 export default function Navbar({
   currentPage = 'home',
@@ -41,19 +40,6 @@ export default function Navbar({
   const [scrolled, setScrolled] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [userDropdownOpen, setUserDropdownOpen] = useState(false);
-  const [isDisqualified, setIsDisqualified] = useState(() => hasTerminatedInterviewOnRecord());
-
-  useEffect(() => {
-    const handleSync = () => {
-      setIsDisqualified(hasTerminatedInterviewOnRecord());
-    };
-    window.addEventListener('storage', handleSync);
-    window.addEventListener('focus', handleSync);
-    return () => {
-      window.removeEventListener('storage', handleSync);
-      window.removeEventListener('focus', handleSync);
-    };
-  }, []);
 
   // GSAP Animation Refs for PillNav
   const circleRefs = useRef([]);
@@ -604,31 +590,25 @@ export default function Navbar({
             <div style={{ position: 'relative' }}>
               <div
                 onClick={() => setUserDropdownOpen(!userDropdownOpen)}
-                title={isDisqualified ? 'Account Menu (Proctoring Disqualification Flagged)' : 'Account Menu'}
+                title="Account Menu"
                 style={{
                   display: 'flex',
                   alignItems: 'center',
                   gap: '0.5rem',
                   padding: '0.35rem 0.85rem',
-                  backgroundColor: isDisqualified
-                    ? 'rgba(239, 68, 68, 0.12)'
-                    : activePage === 'profile'
+                  backgroundColor: activePage === 'profile'
                     ? 'rgba(217, 183, 122, 0.22)'
                     : 'rgba(217, 183, 122, 0.1)',
-                  border: isDisqualified
-                    ? '1.5px solid rgba(239, 68, 68, 0.75)'
-                    : activePage === 'profile'
+                  border: activePage === 'profile'
                     ? '1px solid var(--accent-gold)'
                     : '1px solid rgba(217, 183, 122, 0.3)',
                   borderRadius: '9999px',
-                  color: isDisqualified ? '#F87171' : 'var(--accent-gold)',
+                  color: 'var(--accent-gold)',
                   fontSize: '0.84rem',
                   fontWeight: 600,
                   cursor: 'pointer',
                   transition: 'all 0.2s',
-                  boxShadow: isDisqualified
-                    ? '0 0 14px rgba(239, 68, 68, 0.4)'
-                    : activePage === 'profile'
+                  boxShadow: activePage === 'profile'
                     ? '0 0 12px rgba(217, 183, 122, 0.35)'
                     : 'none',
                 }}
@@ -638,7 +618,7 @@ export default function Navbar({
                     width: '24px',
                     height: '24px',
                     borderRadius: '50%',
-                    backgroundColor: isDisqualified ? '#EF4444' : 'var(--accent-gold)',
+                    backgroundColor: 'var(--accent-gold)',
                     color: '#0A0A0A',
                     display: 'flex',
                     alignItems: 'center',
@@ -664,17 +644,6 @@ export default function Navbar({
                 <span style={{ maxWidth: '120px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                   {currentUser.name || currentUser.email}
                 </span>
-                {isDisqualified && (
-                  <span
-                    style={{
-                      width: '8px',
-                      height: '8px',
-                      borderRadius: '50%',
-                      backgroundColor: '#EF4444',
-                      boxShadow: '0 0 6px #EF4444',
-                    }}
-                  />
-                )}
               </div>
 
               {/* User Dropdown */}
@@ -686,11 +655,9 @@ export default function Navbar({
                     right: 0,
                     width: '220px',
                     backgroundColor: '#141414',
-                    border: isDisqualified ? '1px solid rgba(239, 68, 68, 0.5)' : '1px solid rgba(217, 183, 122, 0.25)',
+                    border: '1px solid rgba(217, 183, 122, 0.25)',
                     borderRadius: '16px',
-                    boxShadow: isDisqualified
-                      ? '0 16px 36px rgba(0,0,0,0.8), 0 0 20px rgba(239, 68, 68, 0.2)'
-                      : '0 16px 36px rgba(0,0,0,0.8), 0 0 20px rgba(217, 183, 122, 0.1)',
+                    boxShadow: '0 16px 36px rgba(0,0,0,0.8), 0 0 20px rgba(217, 183, 122, 0.1)',
                     padding: '0.5rem',
                     zIndex: 1000,
                     display: 'flex',
@@ -711,7 +678,7 @@ export default function Navbar({
                       padding: '0.65rem 0.85rem',
                       background: 'none',
                       border: 'none',
-                      color: isDisqualified ? '#FFA4A4' : '#F6F0E7',
+                      color: '#F6F0E7',
                       fontSize: '0.86rem',
                       cursor: 'pointer',
                       borderRadius: '10px',
@@ -721,25 +688,8 @@ export default function Navbar({
                     onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.06)')}
                     onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
                   >
-                    <User size={15} color={isDisqualified ? '#EF4444' : '#D9B77A'} />
+                    <User size={15} color="#D9B77A" />
                     <span>My Profile</span>
-                    {isDisqualified && (
-                      <span
-                        style={{
-                          marginLeft: 'auto',
-                          fontSize: '0.62rem',
-                          backgroundColor: 'rgba(239, 68, 68, 0.25)',
-                          border: '1px solid rgba(239, 68, 68, 0.5)',
-                          color: '#EF4444',
-                          padding: '1px 5px',
-                          borderRadius: '4px',
-                          fontWeight: 700,
-                          letterSpacing: '0.04em',
-                        }}
-                      >
-                        FLAGGED
-                      </span>
-                    )}
                   </button>
 
                   <button

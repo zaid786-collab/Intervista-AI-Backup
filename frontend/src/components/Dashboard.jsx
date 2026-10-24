@@ -4,7 +4,7 @@ import HistoryPage from './HistoryPage';
 import ProfilePage from './ProfilePage';
 import ResumeATS from '../pages/ResumeATS';
 import { useAuth } from '../context/useAuth';
-import { apiGetSessions, apiGetReport, hasTerminatedInterviewOnRecord } from '../utils/api';
+import { apiGetSessions, apiGetReport } from '../utils/api';
 import {
   Home,
   User,
@@ -168,7 +168,6 @@ export default function Dashboard({
   });
   const [hoveredCell, setHoveredCell] = useState(null);
   const [dbSessions, setDbSessions] = useState([]);
-  const [isDisqualified, setIsDisqualified] = useState(() => hasTerminatedInterviewOnRecord());
 
   useEffect(() => {
     apiGetSessions()
@@ -180,16 +179,6 @@ export default function Dashboard({
       .catch((err) => {
         console.warn('Failed to load past sessions:', err);
       });
-
-    const handleSync = () => {
-      setIsDisqualified(hasTerminatedInterviewOnRecord());
-    };
-    window.addEventListener('storage', handleSync);
-    window.addEventListener('focus', handleSync);
-    return () => {
-      window.removeEventListener('storage', handleSync);
-      window.removeEventListener('focus', handleSync);
-    };
   }, []);
 
   const displayedInterviews = useMemo(() => {
@@ -630,37 +619,19 @@ export default function Dashboard({
                     width: '28px',
                     height: '28px',
                     borderRadius: '8px',
-                    backgroundColor: item.id === 'my-profile' && isDisqualified
-                      ? 'rgba(239, 68, 68, 0.2)'
-                      : isActive
+                    backgroundColor: isActive
                       ? 'rgba(217, 183, 122, 0.15)'
                       : 'transparent',
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
-                    color: item.id === 'my-profile' && isDisqualified
-                      ? '#EF4444'
-                      : isActive
+                    color: isActive
                       ? 'var(--accent-gold)'
                       : 'inherit',
                     position: 'relative',
                   }}
                 >
                   <Icon size={18} />
-                  {item.id === 'my-profile' && isDisqualified && (
-                    <span
-                      style={{
-                        position: 'absolute',
-                        top: '-2px',
-                        right: '-2px',
-                        width: '7px',
-                        height: '7px',
-                        borderRadius: '50%',
-                        backgroundColor: '#EF4444',
-                        boxShadow: '0 0 6px #EF4444',
-                      }}
-                    />
-                  )}
                 </div>
                 {!sidebarCollapsed && (
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
@@ -668,9 +639,7 @@ export default function Dashboard({
                       style={{
                         fontSize: '0.9rem',
                         fontWeight: isActive ? 600 : 500,
-                        color: item.id === 'my-profile' && isDisqualified && !isActive
-                          ? '#FCA5A5'
-                          : isActive
+                        color: isActive
                           ? 'var(--text-primary)'
                           : 'inherit',
                         whiteSpace: 'nowrap',
@@ -678,22 +647,6 @@ export default function Dashboard({
                     >
                       {item.label}
                     </span>
-                    {item.id === 'my-profile' && isDisqualified && (
-                      <span
-                        style={{
-                          fontSize: '0.62rem',
-                          backgroundColor: 'rgba(239, 68, 68, 0.22)',
-                          border: '1px solid rgba(239, 68, 68, 0.5)',
-                          color: '#EF4444',
-                          padding: '1px 5px',
-                          borderRadius: '4px',
-                          fontWeight: 700,
-                          letterSpacing: '0.04em',
-                        }}
-                      >
-                        ALERT
-                      </span>
-                    )}
                   </div>
                 )}
               </button>
