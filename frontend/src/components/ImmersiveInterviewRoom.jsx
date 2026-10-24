@@ -413,10 +413,10 @@ export default function ImmersiveInterviewRoom({
 
   // Live synchronization of candidate answer with real-time speech recognition
   useEffect(() => {
-    if (speech.transcript !== undefined) {
+    if (speech.transcript !== undefined && !isInterviewerSpeaking && !isInterviewerSpeakingRef.current) {
       setCandidateAnswer(speech.transcript);
     }
-  }, [speech.transcript]);
+  }, [speech.transcript, isInterviewerSpeaking]);
 
   // Sync micVolume & candidate speaking reactivity
   useEffect(() => {
