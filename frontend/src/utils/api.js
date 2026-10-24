@@ -772,6 +772,19 @@ export async function apiEndInterview(sessionId, metrics = null) {
   return report;
 }
 
+export async function apiVerifyPhone({ imageBase64, interviewId = null }) {
+  try {
+    const res = await request('POST', '/api/interviews/verify-phone', {
+      image_base64: imageBase64,
+      interview_id: interviewId,
+    });
+    return res;
+  } catch (err) {
+    console.warn('[api] apiVerifyPhone error:', err);
+    return { verified: false, phone_detected: false, confidence: 0.0, reason: 'AI Verification temporarily unavailable' };
+  }
+}
+
 // ─── REPORTS & SESSIONS ────────────────────────────────────────────────────────
 
 const REPORTS_KEY = 'intervista_saved_reports_v2';

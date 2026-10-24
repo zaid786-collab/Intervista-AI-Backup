@@ -1000,3 +1000,17 @@ CareerReadinessResponse.model_rebuild()
 InterviewHistoryResponse.model_rebuild()
 
 
+# 6. Computer Vision & Proctoring Phone Verification
+class VerifyPhoneRequest(BaseModel):
+    image_base64: str
+    interview_id: Optional[str] = None
+
+
+class VerifyPhoneResponse(BaseModel):
+    verified: bool
+    phone_detected: bool
+    confidence: float
+    reason: str
+
+
+

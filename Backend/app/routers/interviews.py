@@ -16,6 +16,7 @@ from app.services.pdf_generator import generate_interview_pdf_report
 from app.services.question_generator import generate_interview_session
 from app.services.coach_service import compute_adaptive_turn_transition
 from app.services.code_executor import run_code_against_test_suite
+from app.services.proctoring_service import verify_phone_with_llm
 
 router = APIRouter(prefix="/api/interviews", tags=["Mock Interviews & AI Evaluation"])
 
@@ -509,6 +510,24 @@ def start_mock_interview(
         total_questions=len(all_questions),
         current_question=first_q,
     )
+
+
+@router.post("/verify-phone", response_model=schemas.VerifyPhoneResponse)
+def verify_phone_endpoint(payload: schemas.VerifyPhoneRequest):
+    """
+    Multimodal AI Proctoring Phone Verifier:
+    Inspects candidate webcam frame using Vision LLM to strictly confirm or refute
+    the presence of an unauthorized mobile phone, eliminating false positives from
+    hands, faces, shadows, clothing, and audio gear.
+    """
+    res = verify_phone_with_llm(payload.image_base64)
+    return schemas.VerifyPhoneResponse(
+        verified=res.get("verified", False),
+        phone_detected=res.get("phone_detected", False),
+        confidence=res.get("confidence", 0.0),
+        reason=res.get("reason", "Verification complete."),
+    )
+
 
 @router.post("/violation", response_model=schemas.RecordViolationResponse)
 def record_proctoring_violation(

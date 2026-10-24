@@ -47,6 +47,7 @@ import {
   apiStartCodingInterview,
   apiNextCodingQuestion,
   apiFinishCodingInterview,
+  apiVerifyPhone,
 } from '../utils/api';
 import { evaluateSingleQuestion } from '../utils/evaluator';
 import { getCurrentUser } from '../utils/auth';
@@ -206,6 +207,29 @@ export default function ImmersiveInterviewRoom({
     },
   });
 
+  const isVerifyingPhoneRef = useRef(false);
+
+  // Helper to snapshot candidate video frame for LLM verification
+  const captureCandidateFrame = useCallback(() => {
+    try {
+      const video = candidateVideoRef.current;
+      if (!video || !video.videoWidth || !video.videoHeight) return null;
+      const canvas = document.createElement('canvas');
+      const targetWidth = Math.min(640, video.videoWidth);
+      const scale = targetWidth / video.videoWidth;
+      const targetHeight = Math.round(video.videoHeight * scale);
+      canvas.width = targetWidth;
+      canvas.height = targetHeight;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return null;
+      ctx.drawImage(video, 0, 0, targetWidth, targetHeight);
+      return canvas.toDataURL('image/jpeg', 0.85);
+    } catch (e) {
+      console.error('[ROOM] Failed to capture frame for verification:', e);
+      return null;
+    }
+  }, []);
+
   // Real-time Computer Vision analysis hook
   const visionCV = useComputerVision({
     isInterviewActive: sessionPhase === 'active',
@@ -216,25 +240,86 @@ export default function ImmersiveInterviewRoom({
         proctorRef.current.handleMultipleUsers(count);
       }
     },
-    onMobilePhoneDetected: (details) => {
-      console.warn('[ROOM] Mobile phone detected! Immediately terminating interview with Red Screen.');
-      stopAllMedia();
-      stopSpeechSynthesis();
-      if (speech && typeof speech.stopRecording === 'function') {
-        speech.stopRecording();
+    onMobilePhoneDetected: async (details) => {
+      // Manual test simulation via shortcut (Alt+P)
+      if (details?.isSimulation) {
+        console.warn('[ROOM] Simulation triggered mobile phone termination.');
+        stopAllMedia();
+        stopSpeechSynthesis();
+        if (speech && typeof speech.stopRecording === 'function') {
+          speech.stopRecording();
+        }
+        if (proctorRef.current) {
+          proctorRef.current.handleMobilePhoneDetected(details);
+        }
+        setTerminatedModalData({
+          reason: 'Unauthorized mobile phone detected in camera view.',
+          warningCount: 0,
+          maxWarnings: 3,
+          isPhoneViolation: true,
+          violations: [{ type: 'MOBILE_PHONE_DETECTED', message: 'Mobile phone detected in camera view (Manual Test).' }],
+        });
+        return;
       }
 
-      if (proctorRef.current) {
-        proctorRef.current.handleMobilePhoneDetected(details);
+      // Concurrency lock for AI verification request
+      if (isVerifyingPhoneRef.current) return;
+      isVerifyingPhoneRef.current = true;
+
+      console.warn('[ROOM] Sustained mobile phone suspected. Requesting AI Vision LLM verification before taking action...');
+
+      const frameData = captureCandidateFrame();
+      if (!frameData) {
+        console.warn('[ROOM] Could not snapshot candidate camera frame. Skipping termination to prevent false positive.');
+        if (typeof details?.resetSuspicion === 'function') details.resetSuspicion();
+        isVerifyingPhoneRef.current = false;
+        return;
       }
 
-      setTerminatedModalData({
-        reason: 'Unauthorized mobile phone detected in camera view.',
-        warningCount: 0,
-        maxWarnings: 3,
-        isPhoneViolation: true,
-        violations: [{ type: 'MOBILE_PHONE_DETECTED', message: 'Mobile phone detected in camera view.' }],
-      });
+      try {
+        const verifyRes = await apiVerifyPhone({
+          imageBase64: frameData,
+          interviewId: sessionState?.id || null,
+        });
+
+        console.log('[ROOM] AI Phone Verification response:', verifyRes);
+
+        // Terminate ONLY if LLM strictly confirms an actual phone with high confidence
+        if (verifyRes?.phone_detected === true && (verifyRes?.confidence == null || verifyRes.confidence >= 0.75)) {
+          console.error('[ROOM] AI LLM CONFIRMED MOBILE PHONE DETECTED! Terminating interview.', verifyRes.reason);
+          stopAllMedia();
+          stopSpeechSynthesis();
+          if (speech && typeof speech.stopRecording === 'function') {
+            speech.stopRecording();
+          }
+
+          const reasonMsg = verifyRes.reason || 'Unauthorized mobile phone was detected in view.';
+          if (proctorRef.current) {
+            proctorRef.current.handleMobilePhoneDetected({ ...details, message: reasonMsg });
+          }
+
+          setTerminatedModalData({
+            reason: reasonMsg,
+            warningCount: 0,
+            maxWarnings: 3,
+            isPhoneViolation: true,
+            violations: [{ type: 'MOBILE_PHONE_DETECTED', message: reasonMsg }],
+          });
+        } else {
+          // False alarm dismissed by LLM!
+          console.log('[ROOM] AI LLM cleared suspected phone (False alarm dismissed):', verifyRes?.reason);
+          if (typeof details?.resetSuspicion === 'function') {
+            details.resetSuspicion();
+          }
+        }
+      } catch (err) {
+        console.error('[ROOM] Failed to verify phone with AI:', err);
+        if (typeof details?.resetSuspicion === 'function') {
+          details.resetSuspicion();
+        }
+      } finally {
+        isVerifyingPhoneRef.current = false;
+      }
     },
   });
 

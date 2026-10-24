@@ -133,10 +133,10 @@ export class VisionAnalyzer {
               "https://storage.googleapis.com/mediapipe-models/object_detector/efficientdet_lite0/float16/1/efficientdet_lite0.tflite",
             delegate: "GPU",
           },
-          scoreThreshold: 0.18,
+          scoreThreshold: 0.65,
           runningMode: "VIDEO",
         });
-        console.log("[ComputerVision] MediaPipe ObjectDetector active with GPU delegate.");
+        console.log("[ComputerVision] MediaPipe ObjectDetector active with GPU delegate (Strict Mode >= 0.65).");
       } catch (objGpuErr) {
         try {
           this.objectDetector = await ObjectDetector.createFromOptions(filesetResolver, {
@@ -145,10 +145,10 @@ export class VisionAnalyzer {
                 "https://storage.googleapis.com/mediapipe-models/object_detector/efficientdet_lite0/float16/1/efficientdet_lite0.tflite",
               delegate: "CPU",
             },
-            scoreThreshold: 0.18,
+            scoreThreshold: 0.65,
             runningMode: "VIDEO",
           });
-          console.log("[ComputerVision] MediaPipe ObjectDetector active with CPU delegate.");
+          console.log("[ComputerVision] MediaPipe ObjectDetector active with CPU delegate (Strict Mode >= 0.65).");
         } catch (objCpuErr) {
           console.warn("[ComputerVision] ObjectDetector init failed:", objCpuErr.message);
         }
@@ -229,18 +229,11 @@ export class VisionAnalyzer {
         if (objResults && objResults.detections && objResults.detections.length > 0) {
           for (const d of objResults.detections) {
             for (const cat of d.categories) {
-              const name = (cat.categoryName || cat.displayName || "").toLowerCase();
-              if (
-                name.includes("cell phone") ||
-                name.includes("phone") ||
-                name.includes("mobile") ||
-                name.includes("telephone") ||
-                name.includes("remote") ||
-                name.includes("electronic") ||
-                name.includes("device") ||
-                name.includes("camera")
-              ) {
-                if (cat.score >= 0.18) {
+              const name = (cat.categoryName || cat.displayName || "").toLowerCase().trim();
+              // STRICT: Only match genuine cell phones / mobile phones with high confidence
+              // Never match generic "device", "remote", "camera", or "electronic"
+              if (name === "cell phone" || name === "mobile phone") {
+                if (cat.score >= 0.70) {
                   phoneDetected = true;
                   phoneConfidence = Math.max(phoneConfidence, cat.score);
                 }
@@ -250,19 +243,6 @@ export class VisionAnalyzer {
         }
       } catch (detErr) {
         // Continue without interrupting face analysis
-      }
-    }
-
-    // Secondary real-time check on canvas for handheld rectangular phone device
-    if (!phoneDetected && videoElement) {
-      if (this._detectPhoneCanvas(videoElement)) {
-        this.phoneCanvasSamples = (this.phoneCanvasSamples || 0) + 1;
-        if (this.phoneCanvasSamples >= 2) {
-          phoneDetected = true;
-          phoneConfidence = 0.84;
-        }
-      } else {
-        this.phoneCanvasSamples = 0;
       }
     }
 
@@ -428,20 +408,7 @@ export class VisionAnalyzer {
       informationalTip = this.config.messages.attentionAway;
     }
 
-    // Secondary check: phone-to-ear talking posture
-    if (!phoneDetected && results.faceLandmarks && results.faceLandmarks.length > 0) {
-      const rollDeg = Math.abs(roll);
-      const yawDeg = Math.abs(yaw);
-      if (rollDeg > 20 && yawDeg > 15) {
-        this.phonePosturalSamples = (this.phonePosturalSamples || 0) + 1;
-        if (this.phonePosturalSamples >= 2) {
-          phoneDetected = true;
-          phoneConfidence = 0.85;
-        }
-      } else {
-        this.phonePosturalSamples = 0;
-      }
-    }
+    // (Postural heuristics removed to prevent false positives when tilting head or reading code)
 
     if (phoneDetected) {
       this.phoneDetectedSamples++;
@@ -617,15 +584,7 @@ export class VisionAnalyzer {
       }
     }
 
-    if (!phoneDetected && approxYaw && Math.abs(approxYaw) > 34) {
-      this.phonePosturalSamples = (this.phonePosturalSamples || 0) + 1;
-      if (this.phonePosturalSamples >= 5) {
-        phoneDetected = true;
-        phoneConfidence = 0.72;
-      }
-    } else if (!phoneDetected) {
-      this.phonePosturalSamples = 0;
-    }
+    // (Approximate yaw postural heuristics removed to prevent false positives)
 
     if (phoneDetected) {
       this.phoneDetectedSamples++;
@@ -656,54 +615,9 @@ export class VisionAnalyzer {
   }
 
   /**
-   * Fast canvas-level handheld rectangular device detection fallback
+   * Fast canvas-level phone check disabled to avoid false positives on dark clothing / shadows
    */
   _detectPhoneCanvas(videoElement) {
-    if (!videoElement || !this.offscreenCanvas) return false;
-    try {
-      const ctx = this.offscreenCanvas.getContext("2d", { willReadFrequently: true });
-      if (!ctx) return false;
-      const w = this.offscreenCanvas.width;
-      const h = this.offscreenCanvas.height;
-      ctx.drawImage(videoElement, 0, 0, w, h);
-      const imgData = ctx.getImageData(0, 0, w, h);
-      const data = imgData.data;
-
-      // Scan for a prominent dark rectangular slab (smartphone body) or high-contrast handheld device
-      let darkPixels = 0;
-      let minX = w, maxX = 0, minY = h, maxY = 0;
-
-      for (let y = Math.floor(h * 0.15); y < h; y += 3) {
-        for (let x = Math.floor(w * 0.1); x < Math.floor(w * 0.9); x += 3) {
-          const idx = (y * w + x) * 4;
-          const r = data[idx];
-          const g = data[idx + 1];
-          const b = data[idx + 2];
-          const lum = 0.299 * r + 0.587 * g + 0.114 * b;
-
-          // Smartphone body/dark bezel has very low luminance
-          if (lum < 32) {
-            darkPixels++;
-            if (x < minX) minX = x;
-            if (x > maxX) maxX = x;
-            if (y < minY) minY = y;
-            if (y > maxY) maxY = y;
-          }
-        }
-      }
-
-      const boxW = maxX - minX;
-      const boxH = maxY - minY;
-      if (boxW >= 18 && boxH >= 32 && darkPixels >= 80) {
-        const aspect = boxH / Math.max(1, boxW);
-        // Portrait smartphone aspect ratio typically between 1.4 and 2.6
-        if (aspect >= 1.4 && aspect <= 2.6) {
-          return true;
-        }
-      }
-    } catch {
-      // Ignore canvas errors
-    }
     return false;
   }
 
