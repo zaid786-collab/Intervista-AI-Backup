@@ -130,11 +130,10 @@ def start_coding_interview(
     persona_name = "Mr. J. Chen" if payload.interviewer_persona == "chen" else "Sophia Sterling"
 
     announcement = (
-        f"Welcome to your coding interview at {payload.company}. I'm {persona_name}, {persona_title}. "
-        f"I will present programming problems based on your selected role and {payload.difficulty} difficulty level. "
-        f"You will have approximately {payload.duration_minutes} minutes to understand each problem, develop your solution, and submit your code. "
-        f"You can use the live code editor on your desk to write and test your solution. "
-        f"Please explain your approach as you code. Let's begin with your first coding question: '{first_question.get('title')}'."
+        f"Now we will begin the coding round. Read the problem carefully and solve it in the coding editor. "
+        f"I'm {persona_name}, {persona_title} at {payload.company}. "
+        f"You will have approximately {payload.duration_minutes} minutes to develop and test your solution. "
+        f"Please explain your algorithmic approach as you code. Let's begin with your first coding question: '{first_question.get('title')}'."
     )
 
     # Register in authoritative memory

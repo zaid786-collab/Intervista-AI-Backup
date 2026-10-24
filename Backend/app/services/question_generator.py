@@ -511,7 +511,7 @@ def generate_with_grok(
     is_groq = api_key.startswith("gsk_")
     if is_groq:
         url = "https://api.groq.com/openai/v1/chat/completions"
-        model_name = "llama-3.3-70b-versatile"
+        model_name = "qwen/qwen3.8-27b"
     else:
         url = "https://api.x.ai/v1/chat/completions"
         model_name = "grok-2-latest"
@@ -697,9 +697,9 @@ def generate_interview_session(
     domain = domain.strip() if domain else "C++"
     question_count = max(5, min(question_count, 20))
 
-    # 1. Try Grok LLM Generation if GROK_API_KEY / XAI_API_KEY / GROQ_API_KEY is configured
-    grok_key = os.getenv("GROK_API_KEY") or os.getenv("XAI_API_KEY") or os.getenv("GROQ_API_KEY")
-    if grok_key and len(grok_key) > 5:
+    # 1. Try Groq LLM Generation first if GROQ_API_KEY is configured
+    groq_key = os.getenv("GROQ_API_KEY")
+    if groq_key and groq_key.startswith("gsk_"):
         llm_questions = generate_with_grok(
             company=company,
             role=role,
@@ -707,7 +707,7 @@ def generate_interview_session(
             interview_type=interview_type,
             domain=domain,
             question_count=question_count,
-            api_key=grok_key,
+            api_key=groq_key,
         )
         if llm_questions and len(llm_questions) >= question_count:
             for idx, q in enumerate(llm_questions):

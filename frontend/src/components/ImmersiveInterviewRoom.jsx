@@ -1208,10 +1208,22 @@ export default function ImmersiveInterviewRoom({
         return;
       }
 
+      if (res?.isFollowUp) {
+        // Targeted Follow-up question on current topic (candidate gave partial/incomplete answer)
+        const followUpPrompt = res.nextQuestion || res.message;
+        setMessages([
+          ...updatedMessages,
+          { role: 'interviewer', text: res.message, timestamp: Date.now(), evaluatedAnswer: evaluatedItem },
+        ]);
+        setCurrentQuestionText(followUpPrompt);
+        speakText(res.message);
+        return;
+      }
+
       // ─── Advance to Next Question (1 -> 2 -> ... -> totalQuestions) ───
       const nextQIndex = questionIndex; // array index for next question: Q1 answered -> index 1 (Q2)
       const nextQObj = (interviewQuestions && interviewQuestions[nextQIndex]) || res?.nextQuestionData || null;
-      let nextQuestionPrompt = nextQObj?.question || nextQObj?.title || res?.nextQuestion;
+      let nextQuestionPrompt = res?.nextQuestion || nextQObj?.question || nextQObj?.title;
 
       if (!nextQuestionPrompt || nextQuestionPrompt === currentQuestionText) {
         const defaultTopics = [
@@ -1224,9 +1236,12 @@ export default function ImmersiveInterviewRoom({
         nextQuestionPrompt = defaultTopics[Math.min(nextQIndex - 1, defaultTopics.length - 1)];
       }
 
-      // Format spoken reply: constructive feedback on previous answer, followed by clearly asking Question X of Y
-      const evalAck = res?.aiFeedback || (evalData?.score >= 70 ? "Excellent points covered." : evalData?.score >= 40 ? "Good start on that technical explanation." : "Understood, thank you for your response.");
-      const replyToUse = `${evalAck} Let's proceed to Question ${nextQIndex + 1} of ${totalQuestions}:\n\n${nextQuestionPrompt}`;
+      // Spoken reply: Use the AI's natural response from LLM, or fallback with clear question introduction
+      let replyToUse = res?.message || res?.reply;
+      if (!replyToUse || replyToUse === nextQuestionPrompt) {
+        const evalAck = res?.aiFeedback || (evalData?.score >= 70 ? "Excellent points covered." : evalData?.score >= 40 ? "Good start on that technical explanation." : "Understood, thank you for your response.");
+        replyToUse = `${evalAck} Let's proceed to Question ${nextQIndex + 1} of ${totalQuestions}:\n\n${nextQuestionPrompt}`;
+      }
 
       setMessages([
         ...updatedMessages,
@@ -1246,7 +1261,7 @@ export default function ImmersiveInterviewRoom({
         });
       }
 
-      // Speak out response
+      // Speak out AI response
       speakText(replyToUse);
     } catch (err) {
       console.warn('[interview room] Send message error, providing realistic follow-up:', err);
